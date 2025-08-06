@@ -1,20 +1,35 @@
 import pytest
 import torch
-
+from collections.abc import Callable
 from max_torch_backend import my_compiler
 
 
-def test_basic_addition(device):
+def check_functions_are_equivalent(
+    fn: Callable, device: str, inputs: list[torch.Tensor]
+):
+    fn_compiled = torch.compile(backend=my_compiler)(fn)
+
+    inputs_on_device = [input_tensor.to(device) for input_tensor in inputs]
+
+    output_original = fn(*inputs_on_device)
+    output_compiled = fn_compiled(*inputs_on_device)
+
+    assert type(output_original) == type(output_compiled)
+
+    if isinstance(output_original, torch.Tensor):
+        output_original = [output_original]
+        output_compiled = [output_compiled]
+
+    for original, compiled in zip(output_original, output_compiled):
+        assert torch.allclose(original, compiled, rtol=1e-5)
+        assert original.device == compiled.device
+
+
+def test_basic_addition(device: str):
     def fn(x, y):
         return x + y
 
-    fn_compiled = torch.compile(backend=my_compiler)(fn)
+    a = torch.randn(3)
+    b = torch.randn(3)
 
-    a = torch.randn(3).to(device=device)
-    b = torch.randn(3).to(device=device)
-
-    output_original = fn(a, b)
-    output_compiled = fn_compiled(a, b)
-
-    assert torch.allclose(output_original[0], output_compiled[0], rtol=1e-5)
-    assert output_original[0].device == output_compiled[0].device
+    check_functions_are_equivalent(fn, device, [a, b])
