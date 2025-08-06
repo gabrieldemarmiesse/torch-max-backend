@@ -224,3 +224,22 @@ def test_broadcasting_compatible(device: str):
     b = torch.randn(1, 5)
 
     check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_multiple_shapes(device: str):
+    def fn(x, y, z):
+        return x + y * z
+
+    a = torch.randn(2, 3)
+    b = torch.randn(2, 1)
+    c = torch.randn(2, 3)
+    torch._dynamo.mark_dynamic(a, 1)
+    torch._dynamo.mark_dynamic(b, 1)
+    torch._dynamo.mark_dynamic(c, 1)
+
+    check_functions_are_equivalent(fn, device, [a, b, c])
+
+    a = torch.randn(2, 4)
+    b = torch.randn(2, 4)
+    c = torch.randn(2, 4)
+    check_functions_are_equivalent(fn, device, [a, b, c])

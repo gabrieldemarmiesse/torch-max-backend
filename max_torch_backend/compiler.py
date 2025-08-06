@@ -24,16 +24,37 @@ class TensorsBook:
         raise ValueError(f"Unsupported type: {type(something)}")
 
 
+def get_meta_ouputs(gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor]):
+    meta_inputs = []
+    for inp in example_inputs:
+        if isinstance(inp, torch.Tensor):
+            meta_inputs.append(torch.empty_like(inp, device="meta"))
+        else:
+            meta_inputs.append(inp)
+    with torch.no_grad():
+        meta_outputs = gm(*meta_inputs)
+        if isinstance(meta_outputs, torch.Tensor):
+            meta_outputs = [meta_outputs]
+    return meta_outputs
+
+
+def find_device_from_args(args: list[torch.Tensor]) -> str:
+    for arg in args:
+        if isinstance(arg, torch.Tensor):
+            return arg.device.type
+    raise ValueError("No tensor found in the arguments to determine the device.")
+
+
+def keep_only_tensors(args: list) -> list[torch.Tensor]:
+    return [arg for arg in args if isinstance(arg, torch.Tensor)]
+
+
 def modular_max_compiler(gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor]):
     gm.graph.print_tabular()
 
     # Use meta tensors (no memory allocation, no computation)
     # Meta tensors only track shape/dtype/device metadata
-    meta_inputs = [torch.empty_like(inp, device="meta") for inp in example_inputs]
-    with torch.no_grad():
-        meta_outputs = gm(*meta_inputs)
-        if isinstance(meta_outputs, torch.Tensor):
-            meta_outputs = [meta_outputs]
+    meta_outputs = get_meta_ouputs(gm, example_inputs)
 
     def create_max_graph(*args):
         tensor_book = TensorsBook()
@@ -41,6 +62,9 @@ def modular_max_compiler(gm: torch.fx.GraphModule, example_inputs: list[torch.Te
         args_index = 0
         for node in gm.graph.nodes:
             if node.op == "placeholder":
+                if node.name.startswith("s"):
+                    # Scalar placeholder
+                    continue
                 tensor_book[node.name] = args[args_index]
                 args_index += 1
             elif node.op == "call_function":
@@ -66,13 +90,17 @@ def modular_max_compiler(gm: torch.fx.GraphModule, example_inputs: list[torch.Te
         input_types=None,
         output_types=None,
         num_outputs=len(meta_outputs),
-        num_inputs=len(example_inputs),
+        num_inputs=len(keep_only_tensors(example_inputs)),
     )
     custom_op_def = op.custom_op_def()
 
     def equivalent_max_function(*args) -> torch.Tensor:
-        results = [torch.empty_like(x, device=args[0].device) for x in meta_outputs]
-        custom_op_def(*results, *args)
+        meta_outputs_for_those_args = get_meta_ouputs(gm, args)
+        results = [
+            torch.empty_like(x, device=find_device_from_args(args))
+            for x in meta_outputs_for_those_args
+        ]
+        custom_op_def(*results, *keep_only_tensors(args))
         return results
 
     return equivalent_max_function
