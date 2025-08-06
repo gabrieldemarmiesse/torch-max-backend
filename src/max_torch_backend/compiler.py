@@ -5,7 +5,6 @@ from max.torch.torch import CustomOpLibrary
 
 from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 from .ops import MyMaxOp
-from .utils import get_the_number_of_outputs
 
 
 def my_compiler(gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor]):
@@ -53,7 +52,7 @@ def my_compiler(gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor]):
         CustomOpLibrary(KernelLibrary(mlir.Context())),
         input_types=None,
         output_types=None,
-        num_outputs=get_the_number_of_outputs(gm),
+        num_outputs=len(meta_outputs),
         num_inputs=len(example_inputs),
     )
     custom_op_def = op.custom_op_def()

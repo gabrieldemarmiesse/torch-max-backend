@@ -15,7 +15,6 @@ url = "https://dl.modular.com/public/nightly/python/simple/"
 default = true
 
 [tool.ruff]
-line-length = 88
 target-version = "py312"
 
 [tool.ruff.lint]
@@ -31,17 +30,7 @@ select = [
 ignore = []
 
 [tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
+skip-magic-trailing-comma = true
 
 [dependency-groups]
 dev = [
