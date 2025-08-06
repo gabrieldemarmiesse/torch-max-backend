@@ -33,3 +33,336 @@ def test_basic_addition(device: str):
     b = torch.randn(3)
 
     check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_operator_add(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return x + y
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_torch_add(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return torch.add(x, y)
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_subtraction(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return x - y
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_torch_sub(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return torch.sub(x, y)
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_multiplication(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return x * y
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_torch_mul(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return torch.mul(x, y)
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_division(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return x / y
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes) + 1.0  # Avoid division by zero
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_torch_div(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return torch.div(x, y)
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes) + 1.0  # Avoid division by zero
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_floor_division(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return x // y
+
+    a = torch.randn(tensor_shapes) * 10
+    b = torch.randn(tensor_shapes).abs() + 1.0  # Avoid division by zero
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_torch_floor_divide(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return torch.floor_divide(x, y)
+
+    a = torch.randn(tensor_shapes) * 10
+    b = torch.randn(tensor_shapes).abs() + 1.0  # Avoid division by zero
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_power(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return x**y
+
+    a = torch.randn(tensor_shapes).abs() + 0.1  # Avoid negative base
+    b = torch.randn(tensor_shapes) * 2  # Keep exponent reasonable
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_torch_pow(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return torch.pow(x, y)
+
+    a = torch.randn(tensor_shapes).abs() + 0.1  # Avoid negative base
+    b = torch.randn(tensor_shapes) * 2  # Keep exponent reasonable
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_modulo(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return x % y
+
+    a = torch.randn(tensor_shapes) * 10
+    b = torch.randn(tensor_shapes).abs() + 1.0  # Avoid division by zero
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_torch_remainder(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return torch.remainder(x, y)
+
+    a = torch.randn(tensor_shapes) * 10
+    b = torch.randn(tensor_shapes).abs() + 1.0  # Avoid division by zero
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_abs(device: str, tensor_shapes: tuple):
+    def fn(x):
+        return torch.abs(x)
+
+    a = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_cos(device: str, tensor_shapes: tuple):
+    def fn(x):
+        return torch.cos(x)
+
+    a = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_sin(device: str, tensor_shapes: tuple):
+    def fn(x):
+        return torch.sin(x)
+
+    a = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_combination_add_mul(device: str, tensor_shapes: tuple):
+    def fn(x, y, z):
+        return (x + y) * z
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+    c = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b, c])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_combination_sub_div(device: str, tensor_shapes: tuple):
+    def fn(x, y, z):
+        return (x - y) / z
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+    c = torch.randn(tensor_shapes) + 1.0  # Avoid division by zero
+
+    check_functions_are_equivalent(fn, device, [a, b, c])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_combination_trig_arithmetic(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return torch.sin(x) + torch.cos(y)
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_combination_abs_mul_add(device: str, tensor_shapes: tuple):
+    def fn(x, y, z):
+        return torch.abs(x) * y + z
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+    c = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b, c])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_combination_pow_mod(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return (x**2) % y
+
+    a = torch.randn(tensor_shapes).abs() + 0.1
+    b = torch.randn(tensor_shapes).abs() + 1.0
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Compiler has issues with multi-dimensional tensors and dynamic shapes"
+)
+def test_complex_combination(device: str, tensor_shapes: tuple):
+    def fn(x, y, z):
+        return torch.abs(torch.sin(x) * y + torch.cos(z))
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+    c = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b, c])
+
+
+def test_scalar_shapes(device: str):
+    def fn(x, y):
+        return x + y * 2
+
+    a = torch.randn(())  # Scalar tensor
+    b = torch.randn(())
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.xfail(
+    reason="Large tensor shapes cause TensorValue/Tensor compatibility issues"
+)
+def test_large_shapes(device: str):
+    def fn(x, y):
+        return torch.add(x, y)
+
+    a = torch.randn(20, 20)
+    b = torch.randn(20, 20)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_broadcasting_compatible(device: str):
+    def fn(x, y):
+        return x + y
+
+    a = torch.randn(5, 1)
+    b = torch.randn(1, 5)
+
+    check_functions_are_equivalent(fn, device, [a, b])

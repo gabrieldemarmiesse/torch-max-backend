@@ -9,3 +9,9 @@ def device(request):
     if device_name == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA not available")
     return device_name
+
+
+@pytest.fixture(params=[(3,), (2, 3), (2, 3, 4)])
+def tensor_shapes(request):
+    """Fixture that provides various tensor shapes for testing."""
+    return request.param
