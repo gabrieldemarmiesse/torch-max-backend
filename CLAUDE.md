@@ -13,19 +13,44 @@ This is a PyTorch backend implementation using Modular's MAX framework. The proj
   - `modular>=25.4.0` (from Modular's nightly index)
   - `torch>=2.7.0`
   - `tabulate>=0.9.0`
+- **Development Dependencies**:
+  - `pytest>=8.4.1` (for testing)
+  - `ruff>=0.12.7` (for linting/formatting)
 - **Package Manager**: Uses `uv` for dependency management
+- **Package Index**: Configured to use Modular's nightly Python index at `https://dl.modular.com/public/nightly/python/simple/`
 
 ## Common Commands
 
 ```bash
-# Install dependencies
-uv install
+# Run tests
+uv run pytest
 
-# Run the main script
-python main.py
+# Run specific test file
+uv run pytest tests/test_compiler.py
 
-# Install in development mode (if needed)
-uv pip install -e .
+
+# Run linter/formatter
+uv run ruff check .
+uv run ruff format .
+```
+
+## Project Structure
+
+```
+max-torch-backend/
+├── max_torch_backend/       # Main package
+│   ├── __init__.py         # Package exports
+│   ├── compiler.py         # Core compiler implementation
+│   ├── mappings.py         # PyTorch to MAX/Mojo operation mappings
+│   └── ops.py              # Custom MAX operation wrapper
+├── tests/                  # Test suite
+│   ├── conftest.py        # Pytest fixtures
+│   ├── test_compiler.py   # Basic compilation tests
+│   └── test_unsupported_ops.py  # Tests for unsupported operations
+├── pyproject.toml         # Project configuration
+├── uv.lock               # Dependency lock file
+├── CLAUDE.md            # This file
+└── README.md           # Project documentation
 ```
 
 ## Architecture
@@ -39,18 +64,67 @@ The project implements a custom PyTorch compiler backend (`my_compiler`) that:
 
 ### Key Components
 
-- **`MyMaxOp`**: Custom MAX operation class that defines torch signatures dynamically based on input/output counts
-- **`my_compiler`**: Main compiler function that processes FX graphs and returns compiled functions
-- **Function Mapping**: Dictionary mapping PyTorch operations (like `operator.add`) to Mojo implementations
+#### `max_torch_backend/compiler.py`
+- **`my_compiler`**: Main compiler function that:
+  - Accepts FX GraphModule and example inputs
+  - Prints graph structure for debugging
+  - Uses meta tensors to track shapes without memory allocation
+  - Creates runtime function `max_add_i_want_to_use` that executes graph nodes
+  - Returns wrapped function compatible with PyTorch
+
+#### `max_torch_backend/ops.py`
+- **`MyMaxOp`**: Custom MAX operation class that:
+  - Extends `MaxOp` from `max.torch.torch`
+  - Dynamically generates torch signatures based on input/output counts
+  - Uses inspect.Signature to define parameter structure
+
+#### `max_torch_backend/mappings.py`
+- **`MAPPING_TORCH_TO_MOJO_FUNCTIONS`**: Dictionary mapping PyTorch ops to MAX/Mojo equivalents
+- **Supported Operations**:
+  - Arithmetic: `add`, `sub`, `mul`, `truediv`, `floordiv`, `pow`, `mod`
+  - Math functions: `abs`, `cos`, `sin`
+  - Both `operator` module and `torch` module variants supported
 
 ### Compilation Flow
 
 1. PyTorch function decorated with `@torch.compile(backend=my_compiler)`
 2. FX graph generated and passed to `my_compiler`
-3. Graph nodes processed to create runtime function (`max_add_i_want_to_use`)
-4. Custom MAX operation created and wrapped for PyTorch compatibility
-5. Compiled function returns multiple outputs as tuples
+3. Graph nodes processed sequentially:
+   - `placeholder` nodes map to function arguments
+   - `call_function` nodes execute mapped operations
+   - `output` nodes return results as tuple
+4. Custom MAX operation created via `MyMaxOp` with:
+   - Runtime function
+   - CustomOpLibrary with KernelLibrary and MLIR context
+   - Input/output type information
+5. Compiled function allocates output tensors and executes custom op
 
-## Current Implementation
+## Testing
 
-The example implements addition operations, demonstrating compilation of functions that return multiple outputs (e.g., `x + y + z, x + z`).
+### Test Coverage
+- **Basic Operations**: Addition on CPU and CUDA devices
+- **Unsupported Operations**: 
+  - Mathematical: `exp`, `log`, `sqrt`, `tanh`
+  - Matrix operations: `matmul`
+  - Tensor operations: `cat`, `mean`, `max`
+  - Shape operations: `reshape` (marked as xfail)
+
+### Test Fixtures
+- `tensor_shapes`: Common tensor shapes for testing
+- `devices`: Available devices (CPU, CUDA if available)
+
+## Current Limitations
+
+1. **Limited Operation Support**: Only basic arithmetic and trigonometric functions
+2. **No Complex Operations**: Matrix multiplication, reductions, reshaping not yet supported
+3. **Debug Output**: Compiler prints tabular graph representation (should be configurable)
+4. **Error Handling**: Raises ValueError for unsupported operations
+
+## Development Notes
+
+- Uses Ruff for code formatting with:
+  - Target Python 3.12
+  - pyupgrade rules enabled
+  - Magic trailing comma skipped in formatting
+- Project configured for Modular's nightly builds
+- Tests parametrized for multiple devices when available
