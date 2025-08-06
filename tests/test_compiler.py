@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from src.max_torch_backend import my_compiler
+from max_torch_backend import my_compiler
 
 
 @pytest.mark.parametrize(
