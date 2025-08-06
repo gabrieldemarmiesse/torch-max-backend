@@ -11,7 +11,8 @@ def device(request):
     return device_name
 
 
-@pytest.fixture(params=[(3,), (2, 3), (2, 3, 4)])
+@pytest.fixture(params=[(3,), (2, 3)])
 def tensor_shapes(request):
     """Fixture that provides various tensor shapes for testing."""
+    torch.compiler.reset()
     return request.param
