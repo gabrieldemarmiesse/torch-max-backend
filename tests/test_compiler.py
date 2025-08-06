@@ -4,18 +4,6 @@ import torch
 from max_torch_backend import my_compiler
 
 
-@pytest.mark.parametrize(
-    "device",
-    [
-        "cpu",
-        pytest.param(
-            "cuda",
-            marks=pytest.mark.skipif(
-                not torch.cuda.is_available(), reason="CUDA not available"
-            ),
-        ),
-    ],
-)
 def test_basic_addition(device):
     def fn(x, y):
         return x + y
