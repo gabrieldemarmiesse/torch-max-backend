@@ -1,12 +1,13 @@
 import torch
 from max import mlir
-from max.graph import KernelLibrary
-from max.torch.torch import CustomOpLibrary
+from max.graph import KernelLibrary, Graph
+from max.torch.torch import CustomOpLibrary, max_device_ref
 import max.graph.value
+from max import engine
 
 from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 from .ops import CompiledFunctionMaxOp
-
+import uuid
 
 class TensorsBook:
     def __init__(self):
@@ -25,7 +26,7 @@ class TensorsBook:
         raise ValueError(f"Unsupported type: {type(something)}")
 
 
-class CustomOpFunction:
+class GraphFunction:
     def __init__(self, gm: torch.fx.GraphModule):
         self.gm = gm
 
@@ -53,6 +54,27 @@ class CustomOpFunction:
                 return tuple(tensor_book.convert_to_max(x) for x in node.args[0])
 
 
+def generate_input_types(example_inputs: list[torch.Tensor]) -> list[max.graph.value.TensorType]:
+    result = []
+    for inp in example_inputs:
+        if not isinstance(inp, torch.Tensor):
+            continue
+        shape = []
+        for dim_idx, dim in enumerate(inp.shape):
+            if dim_idx in getattr(inp, "_dynamo_dynamic_indices", {}):
+                shape.append(str(uuid.uuid4()))
+            else:
+                shape.append(dim)
+        result.append(
+            max.graph.value.TensorType(
+                dtype=inp.dtype,
+                shape=shape,
+                device=max_device_ref(inp.device),
+            )
+        )
+    return result
+
+
 class MaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor]):
         self.gm = gm
@@ -67,20 +89,17 @@ class MaxCompiler:
             if isinstance(self.meta_outputs, torch.Tensor):
                 self.meta_outputs = [self.meta_outputs]
 
-        op = CompiledFunctionMaxOp(
-            CustomOpFunction(gm),
-            "CustomOpFromTheCompiler",
-            CustomOpLibrary(KernelLibrary(mlir.Context())),
-            input_types=None,
-            output_types=None,
-            num_outputs=len(self.meta_outputs),
-            num_inputs=len(example_inputs),
-        )
-        self.custom_op_def = op.custom_op_def()
+        max_input_specs = generate_input_types(example_inputs)
+        with Graph(
+            "some_graph",
+            input_types=max_input_specs
+        ) as graph:
+            outputs = GraphFunction(self.gm)(*graph.inputs)
+            graph.output(*outputs)
+
+        session = engine.InferenceSession()
+        self.model = session.load(graph)
 
     def __call__(self, *args) -> list[torch.Tensor]:
-        results = [
-            torch.empty_like(x, device=args[0].device) for x in self.meta_outputs
-        ]
-        self.custom_op_def(*results, *args)
-        return results
+        outputs = self.model.execute(*args)
+        return [torch.Tensor(x.to_numpy()) for x in outputs]
