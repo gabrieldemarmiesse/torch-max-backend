@@ -123,16 +123,6 @@ def torch_float_equivalent(tensor):
 
 
 def torch_expand_equivalent(tensor, *size):
-    """
-    Equivalent function for torch.Tensor.expand(*size).
-
-    Args:
-        tensor: Input tensor to expand
-        *size: Target size. -1 means don't change that dimension
-
-    Returns:
-        Expanded tensor using max.graph.ops.broadcast_to
-    """
     # Convert size tuple to list and handle -1 values
     target_shape = []
 
