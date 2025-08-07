@@ -623,6 +623,15 @@ def test_tensor_slice_negative_index(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_to_float(device: str):
+    def fn(x):
+        return x.float()
+
+    x = torch.randint(0, 10, (5,))
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 class MaxCompilerCallCount:
     def __init__(self):
         self.call_count = 0
