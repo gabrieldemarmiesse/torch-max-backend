@@ -1,6 +1,6 @@
 import pytest
 import torch
-
+from torch._dynamo.exc import BackendCompilerFailed
 from max_torch_backend import MaxCompiler
 
 
@@ -13,7 +13,7 @@ def test_unsupported_function_error_message():
     a = torch.randn(3)
 
     with pytest.raises(
-        ValueError, match="Function .* not supported by the Max backend yet"
+        BackendCompilerFailed, match="Function .* not supported by the Max backend yet"
     ):
         fn_compiled(a)
 
@@ -28,7 +28,7 @@ def test_unsupported_matmul_error():
     b = torch.randn(4, 5)
 
     with pytest.raises(
-        ValueError, match="Function .* not supported by the Max backend yet"
+        BackendCompilerFailed, match="Function .* not supported by the Max backend yet"
     ):
         fn_compiled(a, b)
 
@@ -42,7 +42,7 @@ def test_unsupported_reshape_error():
 
     a = torch.randn(2, 3)
 
-    with pytest.raises(ValueError, match="not supported by the Max backend yet"):
+    with pytest.raises(BackendCompilerFailed, match="not supported by the Max backend yet"):
         fn_compiled(a)
 
 
@@ -55,7 +55,7 @@ def test_unsupported_log_error():
     a = torch.randn(3).abs()  # Ensure positive values for log
 
     with pytest.raises(
-        ValueError, match="Function .* not supported by the Max backend yet"
+        BackendCompilerFailed, match="Function .* not supported by the Max backend yet"
     ):
         fn_compiled(a)
 
@@ -69,7 +69,7 @@ def test_unsupported_sqrt_error():
     a = torch.randn(3).abs()  # Ensure positive values for sqrt
 
     with pytest.raises(
-        ValueError, match="Function .* not supported by the Max backend yet"
+        BackendCompilerFailed, match="Function .* not supported by the Max backend yet"
     ):
         fn_compiled(a)
 
@@ -83,7 +83,7 @@ def test_unsupported_mean_error():
     a = torch.randn(3, 4)
 
     with pytest.raises(
-        ValueError, match="Function .* not supported by the Max backend yet"
+        BackendCompilerFailed, match="Function .* not supported by the Max backend yet"
     ):
         fn_compiled(a)
 
@@ -97,7 +97,7 @@ def test_unsupported_max_error():
     a = torch.randn(3, 4)
 
     with pytest.raises(
-        ValueError, match="Function .* not supported by the Max backend yet"
+        BackendCompilerFailed, match="Function .* not supported by the Max backend yet"
     ):
         fn_compiled(a)
 
@@ -110,7 +110,7 @@ def test_error_message_includes_function_name():
 
     a = torch.randn(3)
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(BackendCompilerFailed) as exc_info:
         fn_compiled(a)
 
     error_message = str(exc_info.value)

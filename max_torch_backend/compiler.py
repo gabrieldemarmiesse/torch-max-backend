@@ -104,4 +104,4 @@ class MaxCompiler:
 
     def __call__(self, *args) -> list[torch.Tensor]:
         outputs = self.model.execute(*args)
-        return [torch.Tensor(x.to_numpy()) for x in outputs]
+        return [torch.Tensor(x) for x in outputs]
