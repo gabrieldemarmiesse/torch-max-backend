@@ -5,7 +5,6 @@ import torch
 import torch.nn.functional as F
 
 
-
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -33,10 +32,10 @@ def torch_conv2d_equivalent(
 ):
     if groups != 1:
         raise NotImplementedError("Grouped convolution is not supported yet.")
-    
+
     if dilation != 1:
         raise NotImplementedError("Dilation is not supported yet.")
-    
+
     if isinstance(stride, int):
         stride = (stride, stride)
     if isinstance(padding, int):
@@ -52,21 +51,25 @@ def torch_conv2d_equivalent(
     # Convert input from NCHW (PyTorch default) to NHWC (MAX requirement)
     # NCHW: [batch, channels, height, width] -> NHWC: [batch, height, width, channels]
     input_nhwc = input.permute([0, 2, 3, 1])
-    
-    # Convert weight from PyTorch OIHW: [out_channels, in_channels, kernel_h, kernel_w] 
+
+    # Convert weight from PyTorch OIHW: [out_channels, in_channels, kernel_h, kernel_w]
     # to MAX RSCF: [kernel_h, kernel_w, in_channels, out_channels]
     weight_rscf = weight.permute([2, 3, 1, 0])
 
     result = max.graph.ops.conv2d(
-        input_nhwc, weight_rscf, bias=bias, stride=stride, padding=padding, dilation=dilation,
-        input_layout=max.graph.type.ConvInputLayout.NHWC, 
+        input_nhwc,
+        weight_rscf,
+        bias=bias,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        input_layout=max.graph.type.ConvInputLayout.NHWC,
         filter_layout=max.graph.type.FilterLayout.RSCF,
     )
-    
+
     # Convert result back from NHWC to NCHW for PyTorch compatibility
     # NHWC: [batch, height, width, channels] -> NCHW: [batch, channels, height, width]
     return result.permute([0, 3, 1, 2])
-
 
 
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {

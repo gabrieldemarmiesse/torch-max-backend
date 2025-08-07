@@ -2,17 +2,17 @@ from max_torch_backend import MaxCompiler
 from transformers import ViTImageProcessor, ViTForImageClassification
 from PIL import Image
 import requests
-import torch 
+import torch
 import pytest
 
 
 @pytest.mark.xfail(reason="Doesn't work for the whole model yet")
 def test_whole_model(device: str):
-    url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+    url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     image = Image.open(requests.get(url, stream=True).raw)
 
-    processor = ViTImageProcessor.from_pretrained('google/vit-base-patch16-224')
-    model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
+    processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
+    model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
 
     inputs = processor(images=image, return_tensors="pt")
 
