@@ -723,7 +723,7 @@ def test_expand_complex_pattern(device: str):
 
 
 def test_change_device_to_cpu(device: str):
-    """Test expand with complex dimension pattern"""
+    """Test changing device to CPU"""
 
     def fn(x):
         return x.to("cpu")
@@ -734,7 +734,7 @@ def test_change_device_to_cpu(device: str):
 
 
 def test_change_device_to_cuda(device: str):
-    """Test expand with complex dimension pattern"""
+    """Test changing device to CUDA"""
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
 
