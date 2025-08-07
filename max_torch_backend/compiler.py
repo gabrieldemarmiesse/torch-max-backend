@@ -30,11 +30,15 @@ class TensorsBook:
             return self.tensors[something.name]
         elif isinstance(something, int):
             return something
+        elif isinstance(something, float):
+            return something
         elif isinstance(something, torch.fx.immutable_collections.immutable_list):
             return [self.convert_to_max(x) for x in something]
         elif isinstance(something, tuple):
             return tuple(self.convert_to_max(x) for x in something)
-        raise ValueError(f"Unsupported type: {type(something)}")
+        elif something is None:
+            return None
+        raise ValueError(f"Unsupported type when reading the graph: {type(something)}")
 
 
 class GraphFunction:
@@ -94,7 +98,10 @@ def generate_input_types(
 
 
 class MaxCompiler:
-    def __init__(self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor]):
+    def __init__(
+        self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode
+    ):
+        print(mode)
         self.gm = gm
         self.example_inputs = example_inputs
         # gm.graph.print_tabular()
