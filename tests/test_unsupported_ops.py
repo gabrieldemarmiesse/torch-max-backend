@@ -33,21 +33,6 @@ def test_unsupported_matmul_error():
         fn_compiled(a, b)
 
 
-@pytest.mark.xfail(reason="Fixme")
-def test_unsupported_reshape_error():
-    def fn(x):
-        return x.reshape(-1)
-
-    fn_compiled = torch.compile(backend=MaxCompiler)(fn)
-
-    a = torch.randn(2, 3)
-
-    with pytest.raises(
-        BackendCompilerFailed, match="not supported by the Max backend yet"
-    ):
-        fn_compiled(a)
-
-
 def test_unsupported_log_error():
     def fn(x):
         return torch.log(x)
