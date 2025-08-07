@@ -850,6 +850,100 @@ def test_transpose_scalar_like(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_tensor_cos_method(device: str):
+    """Test tensor.cos() method"""
+
+    def fn(x):
+        return x.cos()
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_sin_method(device: str):
+    """Test tensor.sin() method"""
+
+    def fn(x):
+        return x.sin()
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_cos_sin_combined(device: str):
+    """Test combining tensor.cos() and tensor.sin() methods"""
+
+    def fn(x):
+        return x.cos() + x.sin()
+
+    x = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_cos_with_arithmetic(device: str):
+    """Test tensor.cos() combined with arithmetic operations"""
+
+    def fn(x, y):
+        return x.cos() * y
+
+    x = torch.randn(3, 4)
+    y = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_tensor_sin_with_arithmetic(device: str):
+    """Test tensor.sin() combined with arithmetic operations"""
+
+    def fn(x, y):
+        return x.sin() - y
+
+    x = torch.randn(3, 4)
+    y = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_tensor_cos_sin_chained(device: str):
+    """Test chained tensor.cos().sin() operations"""
+
+    def fn(x):
+        return x.cos().sin()
+
+    x = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_trig_with_transpose(device: str):
+    """Test tensor trigonometric methods with transpose"""
+
+    def fn(x):
+        return x.transpose(0, 1).cos()
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_cos_sin_different_shapes(device: str, tensor_shapes: tuple):
+    """Test tensor.cos() and tensor.sin() with different tensor shapes"""
+
+    def fn_cos(x):
+        return x.cos()
+
+    def fn_sin(x):
+        return x.sin()
+
+    x = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn_cos, device, [x])
+    check_functions_are_equivalent(fn_sin, device, [x])
+
+
 def test_change_device_to_cpu(device: str):
     """Test changing device to CPU"""
 
