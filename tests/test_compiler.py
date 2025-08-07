@@ -483,3 +483,18 @@ def test_dynamic_shapes(device: str):
     b = torch.randn(2)
 
     check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_recompilation(device: str):
+    def fn(x, y):
+        return x + y
+
+    a = torch.randn(5, 2)
+    b = torch.randn(2)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+    a = torch.randn(3, 2)
+    b = torch.randn(2)
+
+    check_functions_are_equivalent(fn, device, [a, b])
