@@ -992,6 +992,161 @@ def test_change_device_to_cuda_by_device(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_to_with_dtype_keyword(device: str):
+    """Test tensor.to() with dtype keyword argument"""
+
+    def fn(x):
+        return x.to(dtype=torch.float32)
+
+    x = torch.randint(0, 10, (2, 3))
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_to_with_device_keyword(device: str):
+    """Test tensor.to() with device keyword argument"""
+
+    def fn(x):
+        return x.to(device="cpu")
+
+    x = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_to_with_device_dtype_keywords(device: str):
+    """Test tensor.to() with both device and dtype keyword arguments"""
+
+    def fn(x):
+        return x.to(device="cpu", dtype=torch.float32)
+
+    x = torch.randint(0, 10, (2, 3))
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_to_with_torch_device_object(device: str):
+    """Test tensor.to() with torch.device object"""
+
+    def fn(x):
+        return x.to(torch.device("cpu"))
+
+    x = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_to_with_torch_device_object_cuda(device: str):
+    """Test tensor.to() with torch.device object for CUDA"""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+    def fn(x):
+        return x.to(torch.device("cuda:0"))
+
+    x = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_to_with_dtype_positional(device: str):
+    """Test tensor.to() with dtype as positional argument"""
+
+    def fn(x):
+        return x.to(torch.float32)
+
+    x = torch.randint(0, 10, (2, 3))
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_to_dtype_conversion_int_to_float(device: str):
+    """Test converting integer tensor to float"""
+
+    def fn(x):
+        return x.to(dtype=torch.float32)
+
+    x = torch.randint(-5, 5, (3, 4))
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.xfail(reason="dtype casting not working correctly in MAX backend")
+def test_to_dtype_conversion_float_to_int(device: str):
+    """Test converting float tensor to int"""
+
+    def fn(x):
+        return x.to(dtype=torch.int32)
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_to_dtype_conversion_double_to_float(device: str):
+    """Test converting double tensor to float"""
+
+    def fn(x):
+        return x.to(dtype=torch.float32)
+
+    x = torch.randn(3, 4, dtype=torch.float64)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_to_combined_with_operations(device: str):
+    """Test tensor.to() combined with other operations"""
+
+    def fn(x, y):
+        x_converted = x.to(dtype=torch.float32)
+        return x_converted + y
+
+    x = torch.randint(0, 10, (3, 4))
+    y = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_to_device_transfer_with_computation(device: str):
+    """Test device transfer followed by computation"""
+
+    def fn(x):
+        x_cpu = x.to("cpu")
+        return x_cpu * 2
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_autocast_enter_exit():
+    """Test autocast enter and exit functionality"""
+
+    def fn(x):
+        with torch.amp.autocast("cuda", enabled=True):
+            return x + 1.0
+
+    x = torch.randn(2, 3)
+
+    # Test on CPU device only as autocast behavior may vary
+    check_functions_are_equivalent(fn, "cpu", [x])
+
+
+@pytest.mark.xfail(reason="dtype casting not working correctly in MAX backend")
+def test_complex_to_operations(device: str):
+    """Test complex combinations of .to() operations"""
+
+    def fn(x):
+        # Convert to float first, then back to int
+        x_float = x.to(dtype=torch.float32)
+        result = x_float * 2.5
+        return result.to(dtype=torch.int32)
+
+    x = torch.randint(1, 5, (2, 3))
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 class MaxCompilerCallCount:
     def __init__(self):
         self.call_count = 0

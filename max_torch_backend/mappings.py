@@ -171,6 +171,17 @@ def torch_to_equivalent(tensor, *args, **kwargs):
     if dtype is not None:
         dtype = DType.from_torch(dtype)
 
+    # Handle device string conversion
+    if isinstance(device, str):
+        if device == "cpu":
+            device = DeviceRef.CPU()
+        elif device == "cuda":
+            device = DeviceRef.GPU()
+        else:
+            raise ValueError(f"Unsupported device string: {device}")
+    elif isinstance(device, torch.device):
+        device = max_device_ref(device)
+
     if kwargs:
         raise ValueError(
             f"Unsupported arguments for torch.to equivalent: {kwargs}. Only 'device' and 'dtype' are supported."
@@ -184,16 +195,14 @@ def torch_to_equivalent(tensor, *args, **kwargs):
         elif isinstance(first_arg, torch.device):
             device = max_device_ref(first_arg)
         elif isinstance(first_arg, torch.dtype):
-            device = DType.from_torch(first_arg)
-        elif isinstance(first_arg, torch.dtype):
             dtype = DType.from_torch(first_arg)
 
-    result = None
+    result = tensor
     if device is not None:
-        result = max.graph.ops.transfer_to(tensor, device=device)
+        result = max.graph.ops.transfer_to(result, device=device)
     if dtype is not None:
-        result = max.graph.ops.cast(tensor, dtype=dtype)
-    if result is None:
+        result = max.graph.ops.cast(result, dtype=dtype)
+    if device is None and dtype is None:
         raise ValueError(
             "Either 'device' or 'dtype' must be specified for torch.to equivalent."
         )
