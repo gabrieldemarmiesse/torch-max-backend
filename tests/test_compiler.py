@@ -7,9 +7,12 @@ from torch._dynamo import mark_dynamic
 
 
 def check_functions_are_equivalent(
-    fn: Callable, device: str, inputs: list[torch.Tensor]
+    fn: Callable,
+    device: str,
+    inputs: list[torch.Tensor],
+    fn_compiled: Callable | None = None,
 ):
-    fn_compiled = torch.compile(backend=MaxCompiler)(fn)
+    fn_compiled = fn_compiled or torch.compile(backend=MaxCompiler)(fn)
 
     inputs_on_device = [input_tensor.to(device) for input_tensor in inputs]
 
@@ -472,17 +475,19 @@ def test_dynamic_shapes(device: str):
     def fn(x, y):
         return x + y
 
+    fn_compiled = torch.compile(backend=MaxCompiler)(fn)
+
     a = torch.randn(5, 2)
     b = torch.randn(2)
 
     mark_dynamic(a, 0)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], fn_compiled)
 
     a = torch.randn(3, 2)
     b = torch.randn(2)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], fn_compiled)
 
 
 def test_recompilation(device: str):
