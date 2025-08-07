@@ -41,15 +41,28 @@ def torch_conv2d_equivalent(
     elif isinstance(padding, str):
         raise ValueError("Padding must be an int or a tuple of ints.")
     elif isinstance(padding, tuple):
-        padding = (padding[0], padding[1], padding[0], padding[1])
+        # PyTorch padding=(pad_h, pad_w) -> MAX padding=(pad_h_before, pad_h_after, pad_w_before, pad_w_after)
+        padding = (padding[0], padding[0], padding[1], padding[1])
     if isinstance(dilation, int):
         dilation = (dilation, dilation)
 
-    return max.graph.ops.conv2d(
-        input, weight, bias=bias, stride=stride, padding=padding, dilation=dilation,
-        input_layout=max.graph.type.ConvInputLayout.NCHW, 
-        filter_layout=max.graph.type.FilterLayout.FCRS,
+    # Convert input from NCHW (PyTorch default) to NHWC (MAX requirement)
+    # NCHW: [batch, channels, height, width] -> NHWC: [batch, height, width, channels]
+    input_nhwc = input.permute([0, 2, 3, 1])
+    
+    # Convert weight from PyTorch OIHW: [out_channels, in_channels, kernel_h, kernel_w] 
+    # to MAX RSCF: [kernel_h, kernel_w, in_channels, out_channels]
+    weight_rscf = weight.permute([2, 3, 1, 0])
+
+    result = max.graph.ops.conv2d(
+        input_nhwc, weight_rscf, bias=bias, stride=stride, padding=padding, dilation=dilation,
+        input_layout=max.graph.type.ConvInputLayout.NHWC, 
+        filter_layout=max.graph.type.FilterLayout.RSCF,
     )
+    
+    # Convert result back from NHWC to NCHW for PyTorch compatibility
+    # NHWC: [batch, height, width, channels] -> NCHW: [batch, channels, height, width]
+    return result.permute([0, 3, 1, 2])
 
 
 

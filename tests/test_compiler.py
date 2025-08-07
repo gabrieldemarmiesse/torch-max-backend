@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from collections.abc import Callable
 from max_torch_backend import MaxCompiler
 
@@ -225,3 +226,241 @@ def test_broadcasting_compatible(device: str):
     b = torch.randn(1, 5)
 
     check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_conv2d_basic(device: str):
+    """Test basic conv2d with default parameters"""
+    def fn(x, w):
+        return F.conv2d(x, w)
+    
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_with_bias(device: str):
+    """Test conv2d with bias"""
+    def fn(x, w, b):
+        return F.conv2d(x, w, b)
+    
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    b = torch.randn(out_channels)
+    
+    check_functions_are_equivalent(fn, device, [x, w, b])
+
+
+def test_conv2d_stride_int(device: str):
+    """Test conv2d with integer stride"""
+    def fn(x, w):
+        return F.conv2d(x, w, stride=2)
+    
+    batch_size, in_channels, height, width = 2, 3, 16, 16
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_stride_tuple(device: str):
+    """Test conv2d with tuple stride"""
+    def fn(x, w):
+        return F.conv2d(x, w, stride=(2, 3))
+    
+    batch_size, in_channels, height, width = 2, 3, 16, 16
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_padding_int(device: str):
+    """Test conv2d with integer padding"""
+    def fn(x, w):
+        return F.conv2d(x, w, padding=1)
+    
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_padding_tuple(device: str):
+    """Test conv2d with tuple padding"""
+    def fn(x, w):
+        return F.conv2d(x, w, padding=(1, 2))
+    
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_dilation_int(device: str):
+    """Test conv2d with integer dilation"""
+    def fn(x, w):
+        return F.conv2d(x, w, dilation=2)
+    
+    batch_size, in_channels, height, width = 2, 3, 16, 16
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_dilation_tuple(device: str):
+    """Test conv2d with tuple dilation"""
+    def fn(x, w):
+        return F.conv2d(x, w, dilation=(2, 3))
+    
+    batch_size, in_channels, height, width = 2, 3, 16, 16
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_all_params(device: str):
+    """Test conv2d with all parameters specified"""
+    def fn(x, w, b):
+        return F.conv2d(x, w, b, stride=2, padding=1, dilation=1)
+    
+    batch_size, in_channels, height, width = 2, 3, 16, 16
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    b = torch.randn(out_channels)
+    
+    check_functions_are_equivalent(fn, device, [x, w, b])
+
+
+def test_conv2d_1x1_kernel(device: str):
+    """Test conv2d with 1x1 kernel (pointwise convolution)"""
+    def fn(x, w):
+        return F.conv2d(x, w)
+    
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels = 4
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, 1, 1)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_large_kernel(device: str):
+    """Test conv2d with larger kernel"""
+    def fn(x, w):
+        return F.conv2d(x, w, padding=2)
+    
+    batch_size, in_channels, height, width = 2, 3, 16, 16
+    out_channels, kernel_size = 4, 5
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_asymmetric_kernel(device: str):
+    """Test conv2d with asymmetric kernel"""
+    def fn(x, w):
+        return F.conv2d(x, w, padding=(1, 2))
+    
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels = 4
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, 3, 5)  # 3x5 kernel
+    
+    check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_different_input_sizes(device: str):
+    """Test conv2d with different input tensor sizes"""
+    def fn(x, w):
+        return F.conv2d(x, w, padding=1)
+    
+    # Test various input sizes
+    sizes = [(1, 1, 4, 4), (3, 8, 32, 32), (2, 16, 64, 64)]
+    
+    for batch_size, in_channels, height, width in sizes:
+        out_channels, kernel_size = 4, 3
+        
+        x = torch.randn(batch_size, in_channels, height, width)
+        w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+        
+        check_functions_are_equivalent(fn, device, [x, w])
+
+
+def test_conv2d_edge_cases(device: str):
+    """Test conv2d edge cases"""
+    # Single pixel output
+    def fn1(x, w):
+        return F.conv2d(x, w)
+    
+    batch_size, in_channels = 1, 2
+    out_channels, kernel_size = 3, 3
+    
+    x = torch.randn(batch_size, in_channels, 3, 3)  # Exactly kernel size
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn1, device, [x, w])
+
+
+def test_conv2d_combined_with_other_ops(device: str):
+    """Test conv2d combined with other operations"""
+    def fn(x, w, b, y):
+        conv_out = F.conv2d(x, w, b, padding=1)
+        return conv_out + y
+    
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    b = torch.randn(out_channels)
+    # y should have same shape as conv output: (2, 4, 8, 8)
+    y = torch.randn(batch_size, out_channels, height, width)
+    
+    check_functions_are_equivalent(fn, device, [x, w, b, y])
+
+
+def test_conv2d_sequential_ops(device: str):
+    """Test sequential conv2d operations"""
+    def fn(x, w1, w2):
+        out1 = F.conv2d(x, w1, padding=1)
+        out2 = F.conv2d(out1, w2, padding=1)
+        return out2
+    
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    mid_channels, out_channels = 4, 2
+    kernel_size = 3
+    
+    x = torch.randn(batch_size, in_channels, height, width)
+    w1 = torch.randn(mid_channels, in_channels, kernel_size, kernel_size)
+    w2 = torch.randn(out_channels, mid_channels, kernel_size, kernel_size)
+    
+    check_functions_are_equivalent(fn, device, [x, w1, w2])
