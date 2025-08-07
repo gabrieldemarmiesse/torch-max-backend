@@ -122,6 +122,15 @@ def torch_autocast_equivalent(*args, **kwargs):
     pass
 
 
+def torch_log_api_usage_once_equivalent(*args, **kwargs):
+    """
+    No-op function for torch._C.PyCapsule._log_api_usage_once.
+    This is an internal PyTorch function used for API usage logging
+    that we can safely ignore in the MAX backend.
+    """
+    pass
+
+
 def torch_float_equivalent(tensor):
     return max.graph.ops.cast(tensor, dtype=max.graph.type.DType.float32)
 
@@ -209,6 +218,54 @@ def torch_to_equivalent(tensor, *args, **kwargs):
     return result
 
 
+def torch_mean_equivalent(tensor, *args, **kwargs):
+    """
+    Equivalent function for torch.Tensor.mean().
+
+    PyTorch's tensor.mean() without arguments reduces all dimensions,
+    while MAX's mean requires axis specification and only accepts single axis.
+    """
+    # If no arguments provided, reduce all dimensions
+    if not args and not kwargs:
+        # Get all dimensions to reduce sequentially
+        ndim = len(tensor.shape)
+        if ndim == 0:
+            return tensor  # Already a scalar
+
+        # Reduce dimensions sequentially from the last to first
+        result = tensor
+        for _ in range(ndim):
+            result = max.graph.ops.mean(result, axis=-1)
+        return result
+
+    # If dim is specified, use it
+    dim = kwargs.get("dim", None)
+
+    if args:
+        dim = args[0]
+
+    if dim is None:
+        # No dimension specified, reduce all
+        ndim = len(tensor.shape)
+        result = tensor
+        for _ in range(ndim):
+            result = max.graph.ops.mean(result, axis=-1)
+        return result
+    else:
+        # Use specified dimension(s)
+        if isinstance(dim, list | tuple):
+            # Multiple dimensions - reduce sequentially
+            # Sort dimensions in descending order to avoid index shifting
+            dims_sorted = sorted(dim, reverse=True)
+            result = tensor
+            for d in dims_sorted:
+                result = max.graph.ops.mean(result, axis=d)
+            return result
+        else:
+            # Single dimension
+            return max.graph.ops.mean(tensor, axis=dim)
+
+
 def torch_transpose_equivalent(tensor, dim0, dim1):
     # Get the current tensor dimensions
     ndim = len(tensor.shape)
@@ -249,6 +306,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.embedding: torch_embedding_equivalent,
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
+    torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -256,6 +314,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "transpose": torch_transpose_equivalent,
     "cos": max.graph.ops.cos,
     "sin": max.graph.ops.sin,
+    "pow": operator.pow,
+    "mean": torch_mean_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
