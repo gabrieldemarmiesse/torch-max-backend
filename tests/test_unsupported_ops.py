@@ -42,7 +42,9 @@ def test_unsupported_reshape_error():
 
     a = torch.randn(2, 3)
 
-    with pytest.raises(BackendCompilerFailed, match="not supported by the Max backend yet"):
+    with pytest.raises(
+        BackendCompilerFailed, match="not supported by the Max backend yet"
+    ):
         fn_compiled(a)
 
 

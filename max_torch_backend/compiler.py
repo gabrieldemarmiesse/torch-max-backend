@@ -1,15 +1,14 @@
 import torch
 from max.dtype import DType
 
-from max import mlir
-from max.graph import KernelLibrary, Graph
-from max.torch.torch import CustomOpLibrary, max_device_ref, max_tensor_type
+from max.graph import Graph
+from max.torch.torch import max_device_ref
 import max.graph.value
 from max import engine
 from max.driver import Accelerator, accelerator_count, CPU
 from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
-from .ops import CompiledFunctionMaxOp
 import uuid
+
 
 class TensorsBook:
     def __init__(self):
@@ -32,7 +31,9 @@ class GraphFunction:
     def __init__(self, gm: torch.fx.GraphModule):
         self.gm = gm
 
-    def __call__(self, *args: max.graph.value.TensorValue) -> tuple[max.graph.value.TensorValue, ...]:
+    def __call__(
+        self, *args: max.graph.value.TensorValue
+    ) -> tuple[max.graph.value.TensorValue, ...]:
         tensor_book = TensorsBook()
         args_index = 0
         for node in self.gm.graph.nodes:
@@ -56,7 +57,9 @@ class GraphFunction:
                 return tuple(tensor_book.convert_to_max(x) for x in node.args[0])
 
 
-def generate_input_types(example_inputs: list[torch.Tensor]) -> list[max.graph.value.TensorType]:
+def generate_input_types(
+    example_inputs: list[torch.Tensor],
+) -> list[max.graph.value.TensorType]:
     result = []
     for inp in example_inputs:
         if not isinstance(inp, torch.Tensor):
@@ -92,14 +95,13 @@ class MaxCompiler:
                 self.meta_outputs = [self.meta_outputs]
 
         max_input_specs = generate_input_types(example_inputs)
-        with Graph(
-            "some_graph",
-            input_types=max_input_specs
-        ) as graph:
+        with Graph("some_graph", input_types=max_input_specs) as graph:
             outputs = GraphFunction(self.gm)(*graph.inputs)
             graph.output(*outputs)
 
-        session = engine.InferenceSession(devices=[Accelerator(i) for i in range(accelerator_count())] + [CPU()])
+        session = engine.InferenceSession(
+            devices=[Accelerator(i) for i in range(accelerator_count())] + [CPU()]
+        )
         self.model = session.load(graph)
 
     def __call__(self, *args) -> list[torch.Tensor]:

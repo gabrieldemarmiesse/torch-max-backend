@@ -19,6 +19,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = [
+    "F",  # pyflakes (includes unused imports)
     "UP", # pyupgrade
 ]
 

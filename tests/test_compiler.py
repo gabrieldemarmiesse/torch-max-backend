@@ -1,4 +1,3 @@
-import pytest
 import torch
 from collections.abc import Callable
 from max_torch_backend import MaxCompiler
