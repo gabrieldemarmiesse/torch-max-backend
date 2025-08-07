@@ -596,6 +596,33 @@ def test_embedding_padding_idx_scalar(device: str):
     check_functions_are_equivalent(fn, device, [indices, weight])
 
 
+def test_tensor_slice_basic(device: str):
+    def fn(x):
+        return x[1:3]  # Basic slice along first dimension
+
+    x = torch.randn(5, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_slice_2d(device: str):
+    def fn(x):
+        return x[1:3, 0:2]  # Slice along both dimensions
+
+    x = torch.randn(5, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_slice_negative_index(device: str):
+    def fn(x):
+        return x[-2:]  # Negative slice
+
+    x = torch.randn(5, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 class MaxCompilerCallCount:
     def __init__(self):
         self.call_count = 0

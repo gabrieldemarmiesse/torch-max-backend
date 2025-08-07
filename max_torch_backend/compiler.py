@@ -32,6 +32,8 @@ class TensorsBook:
             return something
         elif isinstance(something, float):
             return something
+        elif isinstance(something, slice):
+            return something
         elif isinstance(something, torch.fx.immutable_collections.immutable_list):
             return [self.convert_to_max(x) for x in something]
         elif isinstance(something, tuple):

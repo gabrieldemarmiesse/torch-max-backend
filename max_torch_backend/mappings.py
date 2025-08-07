@@ -13,6 +13,7 @@ IDENTICAL_FUNCTIONS = [
     operator.floordiv,
     operator.pow,
     operator.mod,
+    operator.getitem,
     torch.add,
     torch.sub,
     torch.mul,
