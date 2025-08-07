@@ -722,6 +722,134 @@ def test_expand_complex_pattern(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_transpose_2d(device: str):
+    """Test basic transpose on 2D tensor"""
+
+    def fn(x):
+        return x.transpose(0, 1)
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_3d_first_last(device: str):
+    """Test transpose swapping first and last dimensions on 3D tensor"""
+
+    def fn(x):
+        return x.transpose(0, 2)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_3d_middle_dims(device: str):
+    """Test transpose swapping middle dimensions on 3D tensor"""
+
+    def fn(x):
+        return x.transpose(1, 2)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_negative_dims(device: str):
+    """Test transpose with negative dimension indices"""
+
+    def fn(x):
+        return x.transpose(-2, -1)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_same_dim(device: str):
+    """Test transpose with same dimension (should be no-op)"""
+
+    def fn(x):
+        return x.transpose(1, 1)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_4d(device: str):
+    """Test transpose on 4D tensor"""
+
+    def fn(x):
+        return x.transpose(1, 3)
+
+    x = torch.randn(2, 3, 4, 5)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_batch_dimension(device: str):
+    """Test transpose involving batch dimension"""
+
+    def fn(x):
+        return x.transpose(0, 1)
+
+    x = torch.randn(8, 16, 32)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_with_arithmetic(device: str):
+    """Test transpose combined with arithmetic operations"""
+
+    def fn(x, y):
+        x_t = x.transpose(0, 1)
+        return x_t + y
+
+    x = torch.randn(3, 4)
+    y = torch.randn(4, 3)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_transpose_multiple_ops(device: str):
+    """Test multiple transpose operations"""
+
+    def fn(x):
+        # First transpose: (2, 3, 4) -> (2, 4, 3)
+        x1 = x.transpose(1, 2)
+        # Second transpose: (2, 4, 3) -> (4, 2, 3)
+        x2 = x1.transpose(0, 1)
+        return x2
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_with_other_methods(device: str):
+    """Test transpose combined with other tensor methods"""
+
+    def fn(x):
+        x_t = x.transpose(0, 1)
+        return x_t.expand(-1, 5, -1)
+
+    x = torch.randn(1, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_transpose_scalar_like(device: str):
+    """Test transpose on tensor with singleton dimensions"""
+
+    def fn(x):
+        return x.transpose(0, 2)
+
+    x = torch.randn(1, 3, 1)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_change_device_to_cpu(device: str):
     """Test changing device to CPU"""
 

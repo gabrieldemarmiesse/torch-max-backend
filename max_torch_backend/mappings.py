@@ -176,6 +176,48 @@ def torch_to_equivalent(tensor, *args, **kwargs):
     return max.graph.ops.transfer_to(tensor, device=device)
 
 
+def torch_transpose_equivalent(tensor, dim0, dim1):
+    """
+    Transpose tensor by swapping two dimensions.
+
+    Args:
+        tensor: Input tensor
+        dim0: First dimension to swap
+        dim1: Second dimension to swap
+
+    Returns:
+        Tensor with dimensions dim0 and dim1 swapped
+    """
+    # Get the current tensor dimensions
+    ndim = len(tensor.shape)
+
+    # Handle negative dimensions
+    if dim0 < 0:
+        dim0 = ndim + dim0
+    if dim1 < 0:
+        dim1 = ndim + dim1
+
+    # Validate dimensions
+    if dim0 < 0 or dim0 >= ndim:
+        raise ValueError(
+            f"Dimension {dim0} out of range for tensor with {ndim} dimensions"
+        )
+    if dim1 < 0 or dim1 >= ndim:
+        raise ValueError(
+            f"Dimension {dim1} out of range for tensor with {ndim} dimensions"
+        )
+
+    # If dimensions are the same, no change needed
+    if dim0 == dim1:
+        return tensor
+
+    # Create permutation list - swap dim0 and dim1
+    perm = list(range(ndim))
+    perm[dim0], perm[dim1] = perm[dim1], perm[dim0]
+
+    return max.graph.ops.permute(tensor, perm)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -188,6 +230,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
     "to": torch_to_equivalent,
+    "transpose": torch_transpose_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
