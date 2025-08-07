@@ -122,6 +122,46 @@ def torch_float_equivalent(tensor):
     return max.graph.ops.cast(tensor, dtype=max.graph.type.DType.float32)
 
 
+def torch_expand_equivalent(tensor, *size):
+    """
+    Equivalent function for torch.Tensor.expand(*size).
+
+    Args:
+        tensor: Input tensor to expand
+        *size: Target size. -1 means don't change that dimension
+
+    Returns:
+        Expanded tensor using max.graph.ops.broadcast_to
+    """
+    # Convert size tuple to list and handle -1 values
+    target_shape = []
+
+    # Get current tensor shape - we need this to handle -1 values
+    current_shape = tensor.shape
+
+    # Pad the current shape with 1s if target has more dimensions
+    if len(size) > len(current_shape):
+        padded_current_shape = [1] * (len(size) - len(current_shape)) + list(
+            current_shape
+        )
+    else:
+        padded_current_shape = list(current_shape)
+
+    # Process each dimension in the target size
+    for i, dim_size in enumerate(size):
+        if dim_size == -1:
+            # Keep current dimension size
+            if i < len(padded_current_shape):
+                target_shape.append(padded_current_shape[i])
+            else:
+                # This shouldn't happen in well-formed expand calls
+                target_shape.append(1)
+        else:
+            target_shape.append(dim_size)
+
+    return max.graph.ops.broadcast_to(tensor, target_shape)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -132,6 +172,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
+    "expand": torch_expand_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:

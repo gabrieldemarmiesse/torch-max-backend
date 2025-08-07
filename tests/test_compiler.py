@@ -632,6 +632,96 @@ def test_to_float(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_expand_basic(device: str):
+    """Test basic expand operation"""
+
+    def fn(x):
+        return x.expand(3, 4)
+
+    x = torch.randn(1, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_expand_with_negative_one(device: str):
+    """Test expand with -1 (keep dimension unchanged)"""
+
+    def fn(x):
+        return x.expand(-1, 5)
+
+    x = torch.randn(3, 1)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_expand_multiple_dims(device: str):
+    """Test expand on tensor with multiple dimensions"""
+
+    def fn(x):
+        return x.expand(2, 3, 4)
+
+    x = torch.randn(1, 1, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_expand_same_size(device: str):
+    """Test expand to same size (should be no-op)"""
+
+    def fn(x):
+        return x.expand(2, 3)
+
+    x = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_expand_add_dimensions(device: str):
+    """Test expand adding new leading dimensions"""
+
+    def fn(x):
+        return x.expand(2, 3, 4)
+
+    x = torch.randn(4)  # 1D tensor
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_expand_mixed_operations(device: str):
+    """Test expand combined with arithmetic operations"""
+
+    def fn(x, y):
+        expanded_x = x.expand(2, 3)
+        return expanded_x + y
+
+    x = torch.randn(1, 3)
+    y = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_expand_with_scalar_broadcast(device: str):
+    """Test expand from scalar dimension"""
+
+    def fn(x):
+        return x.expand(5, 5)
+
+    x = torch.randn(1, 1)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_expand_complex_pattern(device: str):
+    """Test expand with complex dimension pattern"""
+
+    def fn(x):
+        return x.expand(2, -1, 4, -1)
+
+    x = torch.randn(1, 3, 1, 5)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 class MaxCompilerCallCount:
     def __init__(self):
         self.call_count = 0
