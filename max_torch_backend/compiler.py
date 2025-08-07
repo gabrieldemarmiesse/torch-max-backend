@@ -6,7 +6,7 @@ from max.graph import KernelLibrary, Graph
 from max.torch.torch import CustomOpLibrary, max_device_ref, max_tensor_type
 import max.graph.value
 from max import engine
-
+from max.driver import Accelerator, accelerator_count, CPU
 from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 from .ops import CompiledFunctionMaxOp
 import uuid
@@ -99,7 +99,7 @@ class MaxCompiler:
             outputs = GraphFunction(self.gm)(*graph.inputs)
             graph.output(*outputs)
 
-        session = engine.InferenceSession()
+        session = engine.InferenceSession(devices=[Accelerator(i) for i in range(accelerator_count())] + [CPU()])
         self.model = session.load(graph)
 
     def __call__(self, *args) -> list[torch.Tensor]:
