@@ -177,17 +177,6 @@ def torch_to_equivalent(tensor, *args, **kwargs):
 
 
 def torch_transpose_equivalent(tensor, dim0, dim1):
-    """
-    Transpose tensor by swapping two dimensions.
-
-    Args:
-        tensor: Input tensor
-        dim0: First dimension to swap
-        dim1: Second dimension to swap
-
-    Returns:
-        Tensor with dimensions dim0 and dim1 swapped
-    """
     # Get the current tensor dimensions
     ndim = len(tensor.shape)
 
