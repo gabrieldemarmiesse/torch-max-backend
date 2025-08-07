@@ -1,13 +1,13 @@
 import pytest
 import torch
 from collections.abc import Callable
-from max_torch_backend import modular_max_compiler
+from max_torch_backend import MaxCompiler
 
 
 def check_functions_are_equivalent(
     fn: Callable, device: str, inputs: list[torch.Tensor]
 ):
-    fn_compiled = torch.compile(backend=modular_max_compiler)(fn)
+    fn_compiled = torch.compile(backend=MaxCompiler)(fn)
 
     inputs_on_device = [input_tensor.to(device) for input_tensor in inputs]
 
@@ -21,8 +21,10 @@ def check_functions_are_equivalent(
         output_compiled = [output_compiled]
 
     for original, compiled in zip(output_original, output_compiled):
-        assert torch.allclose(original, compiled, rtol=1e-5)
+        assert original.shape == compiled.shape
         assert original.device == compiled.device
+        assert original.dtype == compiled.dtype
+        assert torch.allclose(original, compiled, rtol=1e-5)
 
 
 def test_basic_addition(device: str):

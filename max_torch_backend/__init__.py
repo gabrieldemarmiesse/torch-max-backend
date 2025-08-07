@@ -1,3 +1,3 @@
-from .compiler import modular_max_compiler
+from .compiler import MaxCompiler
 
-__all__ = ["modular_max_compiler"]
+__all__ = ["MaxCompiler"]
