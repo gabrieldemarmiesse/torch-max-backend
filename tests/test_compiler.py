@@ -471,6 +471,83 @@ def test_conv2d_combined_with_other_ops(device: str):
     check_functions_are_equivalent(fn, device, [x, w, b, y])
 
 
+def test_embedding_basic(device: str):
+    """Test basic embedding lookup"""
+
+    def fn(indices, weight):
+        return F.embedding(indices, weight)
+
+    vocab_size, embedding_dim = 10, 5
+    seq_length = 4
+
+    # Create indices tensor (LongTensor)
+    indices = torch.randint(0, vocab_size, (seq_length,))
+    weight = torch.randn(vocab_size, embedding_dim)
+
+    check_functions_are_equivalent(fn, device, [indices, weight])
+
+
+def test_embedding_2d_indices(device: str):
+    """Test embedding with 2D indices (batch processing)"""
+
+    def fn(indices, weight):
+        return F.embedding(indices, weight)
+
+    vocab_size, embedding_dim = 20, 8
+    batch_size, seq_length = 3, 6
+
+    indices = torch.randint(0, vocab_size, (batch_size, seq_length))
+    weight = torch.randn(vocab_size, embedding_dim)
+
+    check_functions_are_equivalent(fn, device, [indices, weight])
+
+
+def test_embedding_3d_indices(device: str):
+    """Test embedding with 3D indices"""
+
+    def fn(indices, weight):
+        return F.embedding(indices, weight)
+
+    vocab_size, embedding_dim = 15, 4
+    batch_size, seq_length, depth = 2, 3, 4
+
+    indices = torch.randint(0, vocab_size, (batch_size, seq_length, depth))
+    weight = torch.randn(vocab_size, embedding_dim)
+
+    check_functions_are_equivalent(fn, device, [indices, weight])
+
+
+def test_embedding_single_index(device: str):
+    """Test embedding with single index (scalar)"""
+
+    def fn(indices, weight):
+        return F.embedding(indices, weight)
+
+    vocab_size, embedding_dim = 10, 3
+
+    indices = torch.tensor(5)  # Scalar tensor
+    weight = torch.randn(vocab_size, embedding_dim)
+
+    check_functions_are_equivalent(fn, device, [indices, weight])
+
+
+def test_embedding_combined_with_other_ops(device: str):
+    """Test embedding combined with other operations"""
+
+    def fn(indices, weight, bias):
+        embedded = F.embedding(indices, weight)
+        return embedded + bias
+
+    vocab_size, embedding_dim = 10, 5
+    seq_length = 4
+
+    indices = torch.randint(0, vocab_size, (seq_length,))
+    weight = torch.randn(vocab_size, embedding_dim)
+    bias = torch.randn(embedding_dim)
+
+    check_functions_are_equivalent(fn, device, [indices, weight, bias])
+
+
 class MaxCompilerCallCount:
     def __init__(self):
         self.call_count = 0

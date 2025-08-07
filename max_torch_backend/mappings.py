@@ -72,12 +72,54 @@ def torch_conv2d_equivalent(
     return result.permute([0, 3, 1, 2])
 
 
+def torch_embedding_equivalent(
+    input,
+    weight,
+    padding_idx=None,
+    max_norm=None,
+    norm_type=2.0,
+    scale_grad_by_freq=False,
+    sparse=False,
+):
+    if padding_idx is not None:
+        raise NotImplementedError(
+            "padding_idx is not supported yet in this embedding implementation"
+        )
+    if max_norm is not None:
+        raise NotImplementedError(
+            "max_norm is not supported yet in this embedding implementation"
+        )
+    if scale_grad_by_freq:
+        raise NotImplementedError(
+            "scale_grad_by_freq is not supported yet in this embedding implementation"
+        )
+    if sparse:
+        raise NotImplementedError(
+            "sparse gradients are not supported yet in this embedding implementation"
+        )
+
+    # Handle scalar indices by reshaping to have at least one dimension
+    # PyTorch embedding returns the selected row directly for scalar input
+    # but MAX gather may need proper shape handling
+    original_shape = input.shape
+    if len(original_shape) == 0:  # Scalar tensor
+        input_reshaped = max.graph.ops.unsqueeze(input, axis=0)
+        result = max.graph.ops.gather(weight, input_reshaped, axis=0)
+        # Remove the added dimension: [1, embedding_dim] -> [embedding_dim]
+        return max.graph.ops.squeeze(result, axis=0)
+    else:
+        # Use gather to select rows from weight matrix based on input indices
+        # axis=0 means we're gathering along the first dimension (vocab dimension)
+        return max.graph.ops.gather(weight, input, axis=0)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
     torch.sin: max.graph.ops.sin,
     torch.cat: torch_cat_equivalent,
     F.conv2d: torch_conv2d_equivalent,
+    F.embedding: torch_embedding_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
