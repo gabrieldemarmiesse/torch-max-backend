@@ -228,7 +228,7 @@ def test_broadcasting_compatible(device: str):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_multiple_shapes(device: str):
+def test_dynamic_shapes(device: str):
     def fn(x, y):
         return x + y
 
