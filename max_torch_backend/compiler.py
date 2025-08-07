@@ -11,7 +11,15 @@ import uuid
 
 
 def get_fully_qualified_name(func):
-    return f"{func.__module__}.{func.__qualname__}"
+    result = ""
+    if hasattr(func, "__module__"):
+        result += func.__module__ + "."
+
+    if hasattr(func, "__qualname__"):
+        result += func.__qualname__
+
+    result += " of type " + str(type(func)) + " "
+    return result
 
 
 def keep_only_tensors(inputs: list) -> list[torch.Tensor]:
@@ -61,21 +69,28 @@ class GraphFunction:
                     continue
                 tensor_book[node.name] = args[args_index]
                 args_index += 1
-            elif node.op == "call_function":
+            elif node.op in ("call_function", "call_method"):
                 func_args = [tensor_book.convert_to_max(x) for x in node.args]
                 func_kwags = {
                     k: tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
                 }
                 if node.target not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
-                    raise ValueError(
-                        f"Function {get_fully_qualified_name(node.target)} not supported by the Max backend yet."
-                    )
+                    if isinstance(node.target, str):
+                        raise ValueError(
+                            f"Method torch.Tensor.{node.target} not supported by the Max backend yet."
+                        )
+                    else:
+                        raise ValueError(
+                            f"Function {get_fully_qualified_name(node.target)} not supported by the Max backend yet."
+                        )
                 tensor = MAPPING_TORCH_TO_MOJO_FUNCTIONS[node.target](
                     *func_args, **func_kwags
                 )
                 tensor_book[node.name] = tensor
             elif node.op == "output":
                 return tuple(tensor_book.convert_to_max(x) for x in node.args[0])
+            else:
+                raise ValueError(f"Unsupported node type: {node.op}")
 
 
 def generate_input_types(
@@ -107,7 +122,8 @@ class MaxCompiler:
     ):
         self.gm = gm
         self.example_inputs = example_inputs
-        # gm.graph.print_tabular()
+        gm.graph.print_tabular()
+        print(f"number of nodes: {len(gm.graph.nodes)}")
 
         max_input_specs = generate_input_types(keep_only_tensors(example_inputs))
         with Graph("some_graph", input_types=max_input_specs) as graph:

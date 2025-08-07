@@ -3,7 +3,7 @@ import operator
 import max.graph.ops
 import torch
 import torch.nn.functional as F
-
+import torch.amp.autocast_mode
 
 IDENTICAL_FUNCTIONS = [
     operator.add,
@@ -21,6 +21,7 @@ IDENTICAL_FUNCTIONS = [
     torch.floor_divide,
     torch.pow,
     torch.remainder,
+    str,
 ]
 
 
@@ -113,6 +114,14 @@ def torch_embedding_equivalent(
         return max.graph.ops.gather(weight, input, axis=0)
 
 
+def torch_autocast_equivalent(*args, **kwargs):
+    pass
+
+
+def torch_float_equivalent(tensor):
+    return max.graph.ops.cast(tensor, dtype=max.graph.type.DType.float32)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -120,6 +129,9 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.cat: torch_cat_equivalent,
     F.conv2d: torch_conv2d_equivalent,
     F.embedding: torch_embedding_equivalent,
+    torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
+    # methods are given as strings in the graph
+    "float": torch_float_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:

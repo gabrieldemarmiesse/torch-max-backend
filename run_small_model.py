@@ -1,8 +1,8 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer, CompileConfig
+from transformers import CompileConfig, LlamaForCausalLM, LlamaTokenizer
 from max_torch_backend import MaxCompiler
 
-tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b")
-model = AutoModelForCausalLM.from_pretrained("google/gemma-2-2b").cuda()
+model = LlamaForCausalLM.from_pretrained("PY007/TinyLlama-1.1B-step-50K-105b").cuda()
+tokenizer = LlamaTokenizer.from_pretrained("PY007/TinyLlama-1.1B-step-50K-105b")
 
 # Automatic compile configuration, used with static cache
 compile_config = CompileConfig(backend=MaxCompiler)
