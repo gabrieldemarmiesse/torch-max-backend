@@ -513,9 +513,12 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-xdist" },
+    { name = "requests" },
     { name = "ruff" },
+    { name = "transformers" },
 ]
 
 [package.metadata]
@@ -527,9 +530,12 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pillow", specifier = ">=11.3.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "requests", specifier = ">=2.32.4" },
     { name = "ruff", specifier = ">=0.12.7" },
+    { name = "transformers", specifier = ">=4.54.1" },
 ]
 
 [[package]]
