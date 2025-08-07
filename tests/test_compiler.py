@@ -548,6 +548,54 @@ def test_embedding_combined_with_other_ops(device: str):
     check_functions_are_equivalent(fn, device, [indices, weight, bias])
 
 
+def test_embedding_with_padding_idx(device: str):
+    """Test embedding with padding_idx parameter"""
+
+    def fn(indices, weight):
+        return F.embedding(indices, weight, padding_idx=0)
+
+    vocab_size, embedding_dim = 8, 4
+
+    # Include padding index (0) in the indices
+    indices = torch.tensor([[0, 1, 2, 0, 3], [4, 0, 5, 6, 0]])
+    weight = torch.randn(vocab_size, embedding_dim)
+
+    check_functions_are_equivalent(fn, device, [indices, weight])
+
+
+def test_embedding_padding_idx_different_values(device: str):
+    """Test embedding with different padding_idx values"""
+
+    def fn_pad_0(indices, weight):
+        return F.embedding(indices, weight, padding_idx=0)
+
+    def fn_pad_2(indices, weight):
+        return F.embedding(indices, weight, padding_idx=2)
+
+    vocab_size, embedding_dim = 6, 3
+
+    indices_0 = torch.tensor([0, 1, 3, 0])  # Using 0 as padding
+    indices_2 = torch.tensor([1, 2, 4, 2])  # Using 2 as padding
+    weight = torch.randn(vocab_size, embedding_dim)
+
+    check_functions_are_equivalent(fn_pad_0, device, [indices_0, weight])
+    check_functions_are_equivalent(fn_pad_2, device, [indices_2, weight])
+
+
+def test_embedding_padding_idx_scalar(device: str):
+    """Test embedding with padding_idx on scalar indices"""
+
+    def fn(indices, weight):
+        return F.embedding(indices, weight, padding_idx=0)
+
+    vocab_size, embedding_dim = 5, 3
+
+    indices = torch.tensor(0)  # Scalar padding index
+    weight = torch.randn(vocab_size, embedding_dim)
+
+    check_functions_are_equivalent(fn, device, [indices, weight])
+
+
 class MaxCompilerCallCount:
     def __init__(self):
         self.call_count = 0
