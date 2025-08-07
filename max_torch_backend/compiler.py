@@ -101,7 +101,6 @@ class MaxCompiler:
     def __init__(
         self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode
     ):
-        print(mode)
         self.gm = gm
         self.example_inputs = example_inputs
         # gm.graph.print_tabular()
