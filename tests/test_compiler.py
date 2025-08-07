@@ -3,6 +3,7 @@ from collections.abc import Callable
 from max_torch_backend import MaxCompiler
 from torch._dynamo import mark_dynamic
 
+
 def check_functions_are_equivalent(
     fn: Callable, device: str, inputs: list[torch.Tensor]
 ):
@@ -225,7 +226,6 @@ def test_broadcasting_compatible(device: str):
     b = torch.randn(1, 5)
 
     check_functions_are_equivalent(fn, device, [a, b])
-
 
 
 def test_multiple_shapes(device: str):
