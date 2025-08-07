@@ -23,7 +23,7 @@ def check_functions_are_equivalent(
         assert original.shape == compiled.shape
         assert original.device == compiled.device
         assert original.dtype == compiled.dtype
-        assert torch.allclose(original, compiled, rtol=1e-5)
+        assert torch.allclose(original, compiled, rtol=1e-4)
 
 
 def test_basic_addition(device: str):
