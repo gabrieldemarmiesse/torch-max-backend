@@ -10,6 +10,10 @@ from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 import uuid
 
 
+def keep_only_tensors(inputs: list) -> list[torch.Tensor]:
+    return [x for x in inputs if isinstance(x, torch.Tensor)]
+
+
 class TensorsBook:
     def __init__(self):
         self.tensors = {}
@@ -38,6 +42,9 @@ class GraphFunction:
         args_index = 0
         for node in self.gm.graph.nodes:
             if node.op == "placeholder":
+                if node.name.startswith("s"):
+                    # shape input
+                    continue
                 tensor_book[node.name] = args[args_index]
                 args_index += 1
             elif node.op == "call_function":
@@ -67,7 +74,7 @@ def generate_input_types(
         shape = []
         for dim_idx, dim in enumerate(inp.shape):
             if dim_idx in getattr(inp, "_dynamo_dynamic_indices", {}):
-                shape.append(str(uuid.uuid4()))
+                shape.append("a" + str(uuid.uuid4()).replace("-", "_"))
             else:
                 shape.append(int(dim))
         result.append(
@@ -86,15 +93,7 @@ class MaxCompiler:
         self.example_inputs = example_inputs
         gm.graph.print_tabular()
 
-        # Use meta tensors (no memory allocation, no computation)
-        # Meta tensors only track shape/dtype/device metadata
-        meta_inputs = [torch.empty_like(inp, device="meta") for inp in example_inputs]
-        with torch.no_grad():
-            self.meta_outputs = gm(*meta_inputs)
-            if isinstance(self.meta_outputs, torch.Tensor):
-                self.meta_outputs = [self.meta_outputs]
-
-        max_input_specs = generate_input_types(example_inputs)
+        max_input_specs = generate_input_types(keep_only_tensors(example_inputs))
         with Graph("some_graph", input_types=max_input_specs) as graph:
             outputs = GraphFunction(self.gm)(*graph.inputs)
             graph.output(*outputs)
@@ -105,5 +104,5 @@ class MaxCompiler:
         self.model = session.load(graph)
 
     def __call__(self, *args) -> list[torch.Tensor]:
-        outputs = self.model.execute(*args)
+        outputs = self.model.execute(*keep_only_tensors(args))
         return [torch.Tensor(x) for x in outputs]

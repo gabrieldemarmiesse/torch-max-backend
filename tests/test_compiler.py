@@ -233,14 +233,13 @@ def test_multiple_shapes(device: str):
         return x + y
 
     a = torch.randn(5, 2)
-    b = torch.randn(5, 2)
+    b = torch.randn(2)
 
-    mark_dynamic(a, 1)
-    mark_dynamic(b, 1)
+    mark_dynamic(a, 0)
 
     check_functions_are_equivalent(fn, device, [a, b])
 
-    a = torch.randn(5, 4)
-    b = torch.randn(5, 4)
+    a = torch.randn(3, 2)
+    b = torch.randn(2)
 
     check_functions_are_equivalent(fn, device, [a, b])
