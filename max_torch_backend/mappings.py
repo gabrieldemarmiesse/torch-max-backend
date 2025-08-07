@@ -5,6 +5,8 @@ import torch
 import torch.nn.functional as F
 import torch.amp.autocast_mode
 from max.graph.type import DeviceRef
+from max.torch.torch import max_device_ref
+from max.dtype import DType
 
 IDENTICAL_FUNCTIONS = [
     operator.add,
@@ -156,24 +158,46 @@ def torch_expand_equivalent(tensor, *size):
 
 def torch_to_equivalent(tensor, *args, **kwargs):
     # Let's support simple stuff for now.
-    if len(args) != 1:
+    # TODO: refactor this, this is so ugly
+    kwargs = kwargs.copy()
+    device = None
+    dtype = None
+    if len(args) > 1:
         raise ValueError(
-            "Only one argument is supported for torch.to equivalent for now."
+            f"Only one argument is supported for torch.to equivalent for now. got {args}"
         )
-    if len(kwargs) != 0:
+    device = kwargs.pop("device", None)
+    dtype = kwargs.pop("dtype", None)
+    if dtype is not None:
+        dtype = DType.from_torch(dtype)
+
+    if kwargs:
         raise ValueError(
-            "No keyword arguments are supported for torch.to equivalent for now."
+            f"Unsupported arguments for torch.to equivalent: {kwargs}. Only 'device' and 'dtype' are supported."
         )
-    device = args[0]
-    if device == "cpu":
-        device = DeviceRef.CPU()
-    elif device == "cuda":
-        device = DeviceRef.GPU()
-    if not isinstance(device, DeviceRef):
+    if args:
+        first_arg = args[0]
+        if first_arg == "cpu":
+            device = DeviceRef.CPU()
+        elif first_arg == "cuda":
+            device = DeviceRef.GPU()
+        elif isinstance(first_arg, torch.device):
+            device = max_device_ref(first_arg)
+        elif isinstance(first_arg, torch.dtype):
+            device = DType.from_torch(first_arg)
+        elif isinstance(first_arg, torch.dtype):
+            dtype = DType.from_torch(first_arg)
+
+    result = None
+    if device is not None:
+        result = max.graph.ops.transfer_to(tensor, device=device)
+    if dtype is not None:
+        result = max.graph.ops.cast(tensor, dtype=dtype)
+    if result is None:
         raise ValueError(
-            f"Unsupported device type: {type(device)}. Expected DeviceRef."
+            "Either 'device' or 'dtype' must be specified for torch.to equivalent."
         )
-    return max.graph.ops.transfer_to(tensor, device=device)
+    return result
 
 
 def torch_transpose_equivalent(tensor, dim0, dim1):
@@ -215,6 +239,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.conv2d: torch_conv2d_equivalent,
     F.embedding: torch_embedding_equivalent,
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
+    torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
