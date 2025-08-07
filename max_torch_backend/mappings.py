@@ -4,6 +4,7 @@ import max.graph.ops
 import torch
 import torch.nn.functional as F
 import torch.amp.autocast_mode
+from max.graph.type import DeviceRef
 
 IDENTICAL_FUNCTIONS = [
     operator.add,
@@ -152,6 +153,28 @@ def torch_expand_equivalent(tensor, *size):
     return max.graph.ops.broadcast_to(tensor, target_shape)
 
 
+def torch_to_equivalent(tensor, *args, **kwargs):
+    # Let's support simple stuff for now.
+    if len(args) != 1:
+        raise ValueError(
+            "Only one argument is supported for torch.to equivalent for now."
+        )
+    if len(kwargs) != 0:
+        raise ValueError(
+            "No keyword arguments are supported for torch.to equivalent for now."
+        )
+    device = args[0]
+    if device == "cpu":
+        device = DeviceRef.CPU()
+    elif device == "cuda":
+        device = DeviceRef.GPU()
+    if not isinstance(device, DeviceRef):
+        raise ValueError(
+            f"Unsupported device type: {type(device)}. Expected DeviceRef."
+        )
+    return max.graph.ops.transfer_to(tensor, device=device)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -163,6 +186,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
+    "to": torch_to_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:

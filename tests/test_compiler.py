@@ -722,6 +722,30 @@ def test_expand_complex_pattern(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_change_device_to_cpu(device: str):
+    """Test expand with complex dimension pattern"""
+
+    def fn(x):
+        return x.to("cpu")
+
+    x = torch.randn(1, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_change_device_to_cuda(device: str):
+    """Test expand with complex dimension pattern"""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+    def fn(x):
+        return x.to("cuda")
+
+    x = torch.randn(1, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 class MaxCompilerCallCount:
     def __init__(self):
         self.call_count = 0

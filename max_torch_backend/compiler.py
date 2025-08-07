@@ -48,6 +48,8 @@ class TensorsBook:
             return [self.convert_to_max(x) for x in something]
         elif isinstance(something, tuple):
             return tuple(self.convert_to_max(x) for x in something)
+        elif isinstance(something, torch.device):
+            return max_device_ref(something)
         elif something is None:
             return None
         raise ValueError(f"Unsupported type when reading the graph: {type(something)}")
