@@ -24,6 +24,34 @@ class TensorsBook:
         raise ValueError(f"Unsupported type: {type(something)}")
 
 
+class CustomOpFunction:
+    def __init__(self, gm: torch.fx.GraphModule):
+        self.gm = gm
+
+    def __call__(self, *args):
+        tensor_book = TensorsBook()
+        args_index = 0
+        for node in self.gm.graph.nodes:
+            if node.op == "placeholder":
+                tensor_book[node.name] = args[args_index]
+                args_index += 1
+            elif node.op == "call_function":
+                func_args = [tensor_book.convert_to_max(x) for x in node.args]
+                func_kwags = {
+                    k: tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
+                }
+                if node.target not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
+                    raise ValueError(
+                        f"Function {node.target} not supported by the Max backend yet."
+                    )
+                tensor = MAPPING_TORCH_TO_MOJO_FUNCTIONS[node.target](
+                    *func_args, **func_kwags
+                )
+                tensor_book[node.name] = tensor
+            elif node.op == "output":
+                return tuple(tensor_book.convert_to_max(x) for x in node.args[0])
+
+
 class MaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor]):
         self.gm = gm
@@ -38,33 +66,9 @@ class MaxCompiler:
             if isinstance(self.meta_outputs, torch.Tensor):
                 self.meta_outputs = [self.meta_outputs]
 
-        def create_max_graph(*args):
-            tensor_book = TensorsBook()
-
-            args_index = 0
-            for node in gm.graph.nodes:
-                if node.op == "placeholder":
-                    tensor_book[node.name] = args[args_index]
-                    args_index += 1
-                elif node.op == "call_function":
-                    func_args = [tensor_book.convert_to_max(x) for x in node.args]
-                    func_kwags = {
-                        k: tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
-                    }
-                    if node.target not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
-                        raise ValueError(
-                            f"Function {node.target} not supported by the Max backend yet."
-                        )
-                    tensor = MAPPING_TORCH_TO_MOJO_FUNCTIONS[node.target](
-                        *func_args, **func_kwags
-                    )
-                    tensor_book[node.name] = tensor
-                elif node.op == "output":
-                    return tuple(tensor_book.convert_to_max(x) for x in node.args[0])
-
         op = CompiledFunctionMaxOp(
-            create_max_graph,
-            create_max_graph.__name__,
+            CustomOpFunction(gm),
+            "CustomOpFromTheCompiler",
             CustomOpLibrary(KernelLibrary(mlir.Context())),
             input_types=None,
             output_types=None,
