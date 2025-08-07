@@ -1,7 +1,9 @@
 import torch
+from max.dtype import DType
+
 from max import mlir
 from max.graph import KernelLibrary, Graph
-from max.torch.torch import CustomOpLibrary, max_device_ref
+from max.torch.torch import CustomOpLibrary, max_device_ref, max_tensor_type
 import max.graph.value
 from max import engine
 
@@ -64,10 +66,10 @@ def generate_input_types(example_inputs: list[torch.Tensor]) -> list[max.graph.v
             if dim_idx in getattr(inp, "_dynamo_dynamic_indices", {}):
                 shape.append(str(uuid.uuid4()))
             else:
-                shape.append(dim)
+                shape.append(int(dim))
         result.append(
             max.graph.value.TensorType(
-                dtype=inp.dtype,
+                dtype=DType.from_torch(inp.dtype),
                 shape=shape,
                 device=max_device_ref(inp.device),
             )
