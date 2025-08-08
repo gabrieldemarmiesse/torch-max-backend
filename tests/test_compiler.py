@@ -2497,3 +2497,302 @@ def test_get_attr_torch_tensor(device: str):
     assert "constant" in targets
 
     check_functions_are_equivalent(module, device, [x])
+
+
+def test_max_pool2d_basic(device: str):
+    """Test basic max_pool2d operation"""
+
+    def fn(x):
+        return F.max_pool2d(x, kernel_size=2)
+
+    batch_size, channels, height, width = 2, 3, 8, 8
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_max_pool2d_with_stride(device: str):
+    """Test max_pool2d with custom stride"""
+
+    def fn(x):
+        return F.max_pool2d(x, kernel_size=3, stride=2)
+
+    batch_size, channels, height, width = 2, 4, 12, 12
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_max_pool2d_with_padding(device: str):
+    """Test max_pool2d with padding"""
+
+    def fn(x):
+        return F.max_pool2d(x, kernel_size=2, padding=1)
+
+    batch_size, channels, height, width = 2, 3, 6, 6
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_max_pool2d_asymmetric_kernel(device: str):
+    """Test max_pool2d with asymmetric kernel"""
+
+    def fn(x):
+        return F.max_pool2d(x, kernel_size=(2, 3), stride=(1, 2), padding=(1, 0))
+
+    batch_size, channels, height, width = 2, 3, 8, 9
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_max_pool2d_various_sizes(device: str):
+    """Test max_pool2d with various input sizes"""
+
+    def fn(x):
+        return F.max_pool2d(x, kernel_size=2, stride=2)
+
+    # Test different sizes
+    for height, width in [(16, 16), (32, 24), (7, 11)]:
+        batch_size, channels = 1, 2
+        x = torch.randn(batch_size, channels, height, width)
+
+        check_functions_are_equivalent(fn, device, [x])
+
+
+def test_adaptive_avg_pool2d_global(device: str):
+    """Test adaptive_avg_pool2d with (1, 1) output (global pooling)"""
+
+    def fn(x):
+        return F.adaptive_avg_pool2d(x, (1, 1))
+
+    batch_size, channels, height, width = 2, 3, 8, 8
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_adaptive_avg_pool2d_7x7(device: str):
+    """Test adaptive_avg_pool2d with (7, 7) output like in VGG"""
+
+    def fn(x):
+        return F.adaptive_avg_pool2d(x, (7, 7))
+
+    batch_size, channels, height, width = 2, 512, 14, 14
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_adaptive_avg_pool2d_various_outputs(device: str):
+    """Test adaptive_avg_pool2d with various output sizes"""
+
+    def fn_2x2(x):
+        return F.adaptive_avg_pool2d(x, (2, 2))
+
+    def fn_4x4(x):
+        return F.adaptive_avg_pool2d(x, (4, 4))
+
+    batch_size, channels, height, width = 2, 64, 16, 16
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn_2x2, device, [x])
+    check_functions_are_equivalent(fn_4x4, device, [x])
+
+
+def test_flatten_basic(device: str):
+    """Test basic flatten operation"""
+
+    def fn(x):
+        return torch.flatten(x, start_dim=1)
+
+    batch_size, channels, height, width = 2, 3, 4, 5
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_flatten_different_start_dims(device: str):
+    """Test flatten with different start dimensions"""
+
+    def fn_start_0(x):
+        return torch.flatten(x, start_dim=0)
+
+    def fn_start_2(x):
+        return torch.flatten(x, start_dim=2)
+
+    x = torch.randn(2, 3, 4, 5)
+
+    check_functions_are_equivalent(fn_start_0, device, [x])
+    check_functions_are_equivalent(fn_start_2, device, [x])
+
+
+def test_flatten_with_end_dim(device: str):
+    """Test flatten with specific end dimension"""
+
+    def fn(x):
+        return torch.flatten(x, start_dim=1, end_dim=2)
+
+    x = torch.randn(2, 3, 4, 5)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_flatten_negative_dims(device: str):
+    """Test flatten with negative dimensions"""
+
+    def fn(x):
+        return torch.flatten(x, start_dim=-2, end_dim=-1)
+
+    x = torch.randn(2, 3, 4, 5)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_dropout_inference(device: str):
+    """Test dropout in inference mode (should be no-op)"""
+
+    def fn(x):
+        return F.dropout(x, p=0.5, training=False)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_dropout_different_probabilities(device: str):
+    """Test dropout with different dropout probabilities in inference"""
+
+    def fn_p01(x):
+        return F.dropout(x, p=0.1, training=False)
+
+    def fn_p05(x):
+        return F.dropout(x, p=0.5, training=False)
+
+    def fn_p09(x):
+        return F.dropout(x, p=0.9, training=False)
+
+    x = torch.randn(3, 4, 5)
+
+    check_functions_are_equivalent(fn_p01, device, [x])
+    check_functions_are_equivalent(fn_p05, device, [x])
+    check_functions_are_equivalent(fn_p09, device, [x])
+
+
+def test_combined_vgg_like_ops(device: str):
+    """Test combining VGG-like operations together"""
+
+    def fn(x, weight, bias):
+        # Simulate a VGG-like block
+        conv_out = F.conv2d(x, weight, bias, padding=1)
+        relu_out = F.relu(conv_out)
+        pool_out = F.max_pool2d(relu_out, kernel_size=2, stride=2)
+        return pool_out
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 64, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    weight = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
+    bias = torch.randn(out_channels)
+
+    check_functions_are_equivalent(fn, device, [x, weight, bias])
+
+
+def test_vgg_classifier_like_ops(device: str):
+    """Test VGG classifier-like operations"""
+
+    def fn(x, weight, bias):
+        # Adaptive pooling -> flatten -> linear
+        pooled = F.adaptive_avg_pool2d(x, (7, 7))
+        flattened = torch.flatten(pooled, 1)
+        linear_out = F.linear(flattened, weight, bias)
+        dropout_out = F.dropout(linear_out, p=0.5, training=False)
+        return dropout_out
+
+    batch_size, channels = 2, 512
+    spatial_size = 14
+    classifier_in = 512 * 7 * 7
+    classifier_out = 4096
+
+    x = torch.randn(batch_size, channels, spatial_size, spatial_size)
+    weight = torch.randn(classifier_out, classifier_in)
+    bias = torch.randn(classifier_out)
+
+    check_functions_are_equivalent(fn, device, [x, weight, bias])
+
+
+def test_max_pool2d_ceil_mode(device: str):
+    """Test max_pool2d with ceil_mode=True"""
+
+    def fn(x):
+        return F.max_pool2d(x, kernel_size=2, stride=2, ceil_mode=True)
+
+    # Use odd spatial dimensions to test ceil_mode effect
+    batch_size, channels, height, width = 2, 3, 7, 7
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_max_pool2d_with_conv2d_chain(device: str):
+    """Test max_pool2d chained with conv2d operations"""
+
+    def fn(x, weight1, bias1, weight2, bias2):
+        conv1 = F.conv2d(x, weight1, bias1)
+        pool1 = F.max_pool2d(conv1, kernel_size=2)
+        conv2 = F.conv2d(pool1, weight2, bias2)
+        pool2 = F.max_pool2d(conv2, kernel_size=2)
+        return pool2
+
+    batch_size, in_channels = 2, 3
+    hidden_channels, out_channels = 16, 32
+    height, width = 16, 16
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    weight1 = torch.randn(hidden_channels, in_channels, 3, 3)
+    bias1 = torch.randn(hidden_channels)
+    weight2 = torch.randn(out_channels, hidden_channels, 3, 3)
+    bias2 = torch.randn(out_channels)
+
+    check_functions_are_equivalent(fn, device, [x, weight1, bias1, weight2, bias2])
+
+
+def test_flatten_after_pooling(device: str):
+    """Test flatten operation after pooling (common CNN pattern)"""
+
+    def fn(x):
+        pooled = F.adaptive_avg_pool2d(x, (4, 4))
+        flattened = torch.flatten(pooled, 1)
+        return flattened
+
+    batch_size, channels, height, width = 3, 64, 12, 12
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.xfail(reason="Dropout training mode not implemented yet")
+def test_dropout_training_mode(device: str):
+    """Test dropout in training mode (should raise NotImplementedError)"""
+
+    def fn(x):
+        return F.dropout(x, p=0.5, training=True)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.xfail(reason="max_pool2d with return_indices not implemented yet")
+def test_max_pool2d_return_indices(device: str):
+    """Test max_pool2d with return_indices=True (should raise NotImplementedError)"""
+
+    def fn(x):
+        return F.max_pool2d(x, kernel_size=2, return_indices=True)
+
+    batch_size, channels, height, width = 2, 3, 4, 4
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
