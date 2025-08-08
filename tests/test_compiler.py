@@ -1895,3 +1895,209 @@ def test_linear_zero_bias(device: str):
     bias = torch.zeros(out_features)  # Zero bias
 
     check_functions_are_equivalent(fn, device, [input, weight, bias])
+
+
+def test_tensor_view_basic(device: str):
+    """Test basic tensor.view() operation"""
+
+    def fn(x):
+        return x.view(6, 4)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_with_negative_one(device: str):
+    """Test tensor.view() with -1 (infer dimension)"""
+
+    def fn(x):
+        return x.view(-1, 4)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_flatten(device: str):
+    """Test tensor.view() to flatten tensor"""
+
+    def fn(x):
+        return x.view(-1)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_2d_to_3d(device: str):
+    """Test tensor.view() from 2D to 3D"""
+
+    def fn(x):
+        return x.view(2, 3, 4)
+
+    x = torch.randn(6, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_3d_to_2d(device: str):
+    """Test tensor.view() from 3D to 2D"""
+
+    def fn(x):
+        return x.view(6, -1)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_same_shape(device: str):
+    """Test tensor.view() with same shape (no-op)"""
+
+    def fn(x):
+        return x.view(2, 3, 4)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_single_dimension(device: str):
+    """Test tensor.view() creating single dimension"""
+
+    def fn(x):
+        return x.view(24, 1)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_multiple_negative_one_dimensions(device: str):
+    """Test tensor.view() with multiple inferred dimensions"""
+
+    def fn(x):
+        return x.view(2, -1, 2)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_with_arithmetic(device: str):
+    """Test tensor.view() combined with arithmetic operations"""
+
+    def fn(x, y):
+        x_reshaped = x.view(-1, 4)
+        return x_reshaped + y
+
+    x = torch.randn(3, 2, 4)
+    y = torch.randn(6, 4)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_tensor_view_chained_operations(device: str):
+    """Test chained tensor.view() operations"""
+
+    def fn(x):
+        return x.view(6, 4).view(2, 12).view(-1)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_with_transpose(device: str):
+    """Test tensor.view() combined with transpose"""
+
+    def fn(x):
+        # This should work since we're not changing the transpose result's shape
+        x_t = x.transpose(0, 1)
+        return x_t.view(3, 2, 4)  # Same total shape, just explicit dimensions
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_scalar_like(device: str):
+    """Test tensor.view() with scalar-like tensors"""
+
+    def fn(x):
+        return x.view(1, 1, 1)
+
+    x = torch.randn(1)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_large_dimensions(device: str):
+    """Test tensor.view() with larger dimensions"""
+
+    def fn(x):
+        return x.view(8, -1)
+
+    x = torch.randn(2, 4, 16)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_with_other_methods(device: str):
+    """Test tensor.view() combined with other tensor methods"""
+
+    def fn(x):
+        return x.abs().view(-1, 4).cos()
+
+    x = torch.randn(3, 2, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_view_broadcasting_prep(device: str):
+    """Test tensor.view() for broadcasting preparation"""
+
+    def fn(x, y):
+        x_reshaped = x.view(2, 3, 1)
+        return x_reshaped + y
+
+    x = torch.randn(6)
+    y = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_tensor_contiguous_basic(device: str):
+    """Test basic tensor.contiguous() operation"""
+
+    def fn(x):
+        return x.contiguous()
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_contiguous_with_transpose(device: str):
+    """Test tensor.contiguous() after transpose"""
+
+    def fn(x):
+        x_t = x.transpose(0, 1)
+        return x_t.contiguous()
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_contiguous_view_chain(device: str):
+    """Test tensor.contiguous().view() chain"""
+
+    def fn(x):
+        x_t = x.transpose(0, 1)
+        return x_t.contiguous().view(-1, 4)
+
+    x = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])

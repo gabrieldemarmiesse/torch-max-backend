@@ -280,6 +280,74 @@ def torch_linear_equivalent(input, weight, bias=None):
     return result
 
 
+def torch_contiguous_equivalent(tensor):
+    """
+    PyTorch contiguous equivalent using MAX operations.
+
+    The contiguous operation returns a tensor with the same data and shape
+    but with contiguous memory layout. In MAX, tensors are generally assumed
+    to be contiguous, so this is typically a no-op.
+
+    Args:
+        tensor: Input tensor
+
+    Returns:
+        Tensor with contiguous memory layout (no-op in MAX)
+    """
+    # In MAX backend, we assume tensors are contiguous by default
+    # So this is effectively a no-op operation
+    return tensor
+
+
+def torch_view_equivalent(tensor, *shape):
+    """
+    PyTorch view equivalent using MAX operations.
+
+    The view operation returns a tensor with the same data but different shape.
+    In MAX, this is equivalent to reshape operation.
+
+    Args:
+        tensor: Input tensor to reshape
+        *shape: New shape as individual arguments or tuple
+
+    Returns:
+        Tensor with the new shape
+    """
+    # Handle different calling patterns:
+    # tensor.view(2, 3, 4) -> shape = (2, 3, 4)
+    # tensor.view((2, 3, 4)) -> shape = ((2, 3, 4),)
+    if len(shape) == 1 and isinstance(shape[0], tuple | list):
+        target_shape = list(shape[0])
+    else:
+        target_shape = list(shape)
+
+    # Handle -1 in shape (infer dimension)
+    if -1 in target_shape:
+        # Calculate total number of elements
+        total_elements = 1
+        current_shape = tensor.shape
+        for dim in current_shape:
+            total_elements *= dim
+
+        # Calculate known dimensions
+        known_elements = 1
+        unknown_idx = -1
+        for i, dim in enumerate(target_shape):
+            if dim == -1:
+                if unknown_idx != -1:
+                    raise ValueError("Only one dimension can be -1")
+                unknown_idx = i
+            else:
+                known_elements *= dim
+
+        # Infer the unknown dimension
+        if unknown_idx != -1:
+            inferred_dim = total_elements // known_elements
+            target_shape[unknown_idx] = inferred_dim
+
+    return max.graph.ops.reshape(tensor, target_shape)
+
+
 def torch_log_api_usage_once_equivalent(*args, **kwargs):
     """
     No-op function for torch._C.PyCapsule._log_api_usage_once.
@@ -310,6 +378,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "expand": torch_expand_equivalent,
     "to": torch_to_equivalent,
     "transpose": torch_transpose_equivalent,
+    "view": torch_view_equivalent,
+    "contiguous": torch_contiguous_equivalent,
     "abs": max.graph.ops.abs,
     "cos": max.graph.ops.cos,
     "sin": max.graph.ops.sin,
