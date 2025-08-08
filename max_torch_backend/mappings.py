@@ -283,6 +283,16 @@ def torch_mean_equivalent(input, dim=None, keepdim=False, *, dtype=None):
     return result
 
 
+def torch_linear_equivalent(input, weight, bias=None):
+    weight_t = max.graph.ops.permute(weight, [1, 0])  # Transpose weight
+    result = max.graph.ops.matmul(input, weight_t)
+
+    if bias is not None:
+        result = result + bias
+
+    return result
+
+
 def torch_log_api_usage_once_equivalent(*args, **kwargs):
     """
     No-op function for torch._C.PyCapsule._log_api_usage_once.
@@ -300,10 +310,12 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.cat: torch_cat_equivalent,
     F.conv2d: torch_conv2d_equivalent,
     F.embedding: torch_embedding_equivalent,
+    F.linear: torch_linear_equivalent,
     # TODO: Use noop function
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
     torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,
+    torch._C._nn.linear: torch_linear_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
