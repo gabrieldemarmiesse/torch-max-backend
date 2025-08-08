@@ -297,6 +297,15 @@ def torch_transpose_equivalent(tensor, dim0, dim1):
     return max.graph.ops.permute(tensor, perm)
 
 
+def torch_log_api_usage_once_equivalent(*args, **kwargs):
+    """
+    No-op function for torch._C.PyCapsule._log_api_usage_once.
+    This is an internal PyTorch function used for API usage logging
+    that we can safely ignore in the MAX backend.
+    """
+    pass
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -304,6 +313,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.cat: torch_cat_equivalent,
     F.conv2d: torch_conv2d_equivalent,
     F.embedding: torch_embedding_equivalent,
+    # TODO: Use noop function
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
     torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,

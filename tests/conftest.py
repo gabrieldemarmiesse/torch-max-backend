@@ -1,13 +1,19 @@
 import pytest
 import torch
+from max_torch_backend import get_accelerators
 
 
 @pytest.fixture(params=["cpu", "cuda"])
-def device(request):
+def device(request, gpu_available: bool):
     device_name = request.param
-    if device_name == "cuda" and not torch.cuda.is_available():
+    if not gpu_available and device_name == "cuda":
         pytest.skip("CUDA not available")
     return device_name
+
+
+@pytest.fixture
+def gpu_available() -> bool:
+    return len(list(get_accelerators())) > 1
 
 
 @pytest.fixture(params=[(3,), (2, 3)])

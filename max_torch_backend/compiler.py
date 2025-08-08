@@ -8,6 +8,7 @@ from max import engine
 from max.driver import Accelerator, accelerator_count, CPU
 from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 import uuid
+import warnings
 
 
 def get_fully_qualified_name(func):
@@ -120,6 +121,16 @@ def generate_input_types(
     return result
 
 
+def get_accelerators():
+    yield CPU()
+    if accelerator_count() > 0:
+        for i in range(accelerator_count()):
+            try:
+                yield Accelerator(i)
+            except ValueError as e:
+                warnings.warn(f"Failed to create accelerator {i}. {e}")
+
+
 class MaxCompiler:
     def __init__(
         self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
@@ -134,9 +145,7 @@ class MaxCompiler:
             outputs = GraphFunction(self.gm)(*graph.inputs)
             graph.output(*outputs)
 
-        session = engine.InferenceSession(
-            devices=[Accelerator(i) for i in range(accelerator_count())] + [CPU()]
-        )
+        session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
 
     def __call__(self, *args) -> list[torch.Tensor]:

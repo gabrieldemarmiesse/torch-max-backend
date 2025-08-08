@@ -1174,9 +1174,9 @@ def test_change_device_to_cpu_by_device(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_change_device_to_cuda(device: str):
+def test_change_device_to_cuda(device: str, gpu_available: bool):
     """Test changing device to CUDA"""
-    if not torch.cuda.is_available():
+    if not gpu_available:
         pytest.skip("CUDA not available")
 
     def fn(x):
@@ -1187,9 +1187,9 @@ def test_change_device_to_cuda(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_change_device_to_cuda_by_device(device: str):
+def test_change_device_to_cuda_by_device(device: str, gpu_available: bool):
     """Test changing device to CUDA"""
-    if not torch.cuda.is_available():
+    if not gpu_available:
         pytest.skip("CUDA not available")
 
     def fn(x):
@@ -1244,9 +1244,9 @@ def test_to_with_torch_device_object(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_to_with_torch_device_object_cuda(device: str):
+def test_to_with_torch_device_object_cuda(device: str, gpu_available: bool):
     """Test tensor.to() with torch.device object for CUDA"""
-    if not torch.cuda.is_available():
+    if not gpu_available:
         pytest.skip("CUDA not available")
 
     def fn(x):
