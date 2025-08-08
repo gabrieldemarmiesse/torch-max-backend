@@ -1434,3 +1434,223 @@ def test_mean_combined_with_arithmetic(device: str, tensor_shapes: tuple):
         y = torch.randn(y_shape)
 
     check_functions_are_equivalent(fn, device, [a, y])
+
+
+def test_rsqrt_function(device: str):
+    """Test torch.rsqrt() function"""
+
+    def fn(x):
+        return torch.rsqrt(x)
+
+    x = torch.randn(3, 4).abs() + 0.1  # Ensure positive values for rsqrt
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_sqrt_function(device: str):
+    """Test torch.sqrt() function"""
+
+    def fn(x):
+        return torch.sqrt(x)
+
+    x = torch.randn(3, 4).abs() + 0.01  # Ensure positive values for sqrt
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_rsqrt_method(device: str):
+    """Test tensor.rsqrt() method"""
+
+    def fn(x):
+        return x.rsqrt()
+
+    x = torch.randn(3, 4).abs() + 0.1  # Ensure positive values
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_sqrt_method(device: str):
+    """Test tensor.sqrt() method"""
+
+    def fn(x):
+        return x.sqrt()
+
+    x = torch.randn(3, 4).abs() + 0.01  # Ensure positive values
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_rsqrt_different_shapes(device: str, tensor_shapes: tuple):
+    """Test rsqrt with different tensor shapes"""
+
+    def fn(x):
+        return torch.rsqrt(x)
+
+    x = torch.randn(tensor_shapes).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_sqrt_different_shapes(device: str, tensor_shapes: tuple):
+    """Test sqrt with different tensor shapes"""
+
+    def fn(x):
+        return torch.sqrt(x)
+
+    x = torch.randn(tensor_shapes).abs() + 0.01
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_rsqrt_with_ones(device: str):
+    """Test rsqrt with tensor of ones (should return ones)"""
+
+    def fn(x):
+        return torch.rsqrt(x)
+
+    x = torch.ones(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_sqrt_with_ones(device: str):
+    """Test sqrt with tensor of ones (should return ones)"""
+
+    def fn(x):
+        return torch.sqrt(x)
+
+    x = torch.ones(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_rsqrt_with_powers_of_two(device: str):
+    """Test rsqrt with powers of 2 for exact mathematical results"""
+
+    def fn(x):
+        return torch.rsqrt(x)
+
+    x = torch.tensor([1.0, 4.0, 16.0, 64.0])  # Powers of 2
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_sqrt_with_perfect_squares(device: str):
+    """Test sqrt with perfect squares for exact mathematical results"""
+
+    def fn(x):
+        return torch.sqrt(x)
+
+    x = torch.tensor([1.0, 4.0, 9.0, 16.0, 25.0])  # Perfect squares
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_rsqrt_sqrt_relationship(device: str):
+    """Test mathematical relationship: rsqrt(x) * sqrt(x) should equal 1"""
+
+    def fn(x):
+        return torch.rsqrt(x) * torch.sqrt(x)
+
+    x = torch.randn(3, 4).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_rsqrt_combined_with_arithmetic(device: str):
+    """Test rsqrt combined with arithmetic operations"""
+
+    def fn(x, y):
+        rsqrt_x = torch.rsqrt(x)
+        return rsqrt_x + y
+
+    x = torch.randn(3, 4).abs() + 0.1
+    y = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_sqrt_combined_with_arithmetic(device: str):
+    """Test sqrt combined with arithmetic operations"""
+
+    def fn(x, y):
+        sqrt_x = torch.sqrt(x)
+        return sqrt_x * y
+
+    x = torch.randn(3, 4).abs() + 0.01
+    y = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_chained_sqrt_rsqrt_operations(device: str):
+    """Test chained sqrt and rsqrt operations"""
+
+    def fn(x):
+        # This should approximately equal x (with small numerical errors)
+        return torch.sqrt(torch.rsqrt(x)).pow(2)
+
+    x = torch.randn(3, 4).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_rsqrt_with_trigonometric_functions(device: str):
+    """Test rsqrt combined with trigonometric functions"""
+
+    def fn(x):
+        rsqrt_x = torch.rsqrt(x)
+        return torch.sin(rsqrt_x)
+
+    x = torch.randn(3, 4).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_sqrt_with_trigonometric_functions(device: str):
+    """Test sqrt combined with trigonometric functions"""
+
+    def fn(x):
+        sqrt_x = torch.sqrt(x)
+        return torch.cos(sqrt_x)
+
+    x = torch.randn(3, 4).abs() + 0.01
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_methods_chain_sqrt_rsqrt(device: str):
+    """Test chaining tensor methods with sqrt and rsqrt"""
+
+    def fn(x):
+        return x.abs().sqrt().rsqrt()
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_sqrt_rsqrt_with_transpose(device: str):
+    """Test sqrt and rsqrt with transpose operations"""
+
+    def fn(x):
+        x_t = x.transpose(0, 1)
+        return torch.sqrt(x_t) + torch.rsqrt(x_t + 0.1)
+
+    x = torch.randn(3, 4).abs() + 0.01
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_sqrt_rsqrt_broadcasting(device: str):
+    """Test sqrt and rsqrt with broadcasting"""
+
+    def fn(x, y):
+        sqrt_x = torch.sqrt(x)
+        rsqrt_y = torch.rsqrt(y)
+        return sqrt_x + rsqrt_y
+
+    x = torch.randn(3, 1).abs() + 0.01
+    y = torch.randn(1, 4).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x, y])
