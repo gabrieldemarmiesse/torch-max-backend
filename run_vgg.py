@@ -4,9 +4,11 @@ from PIL import Image
 import requests
 from io import BytesIO
 from max_torch_backend import MaxCompiler
+import time
 
+device = "cuda"
 
-model = models.vgg11(pretrained=True)
+model = models.vgg11(pretrained=True).to(device)
 model.eval()
 model = torch.compile(model, backend=MaxCompiler)
 
@@ -44,10 +46,15 @@ def predict_image(image_path_or_url, top_k=5):
     image = load_image(image_path_or_url)
 
     input_tensor = preprocess(image)
-    input_batch = input_tensor.unsqueeze(0)  # Add batch dimension
+    input_batch = input_tensor.unsqueeze(0).to(device)  # Add batch dimension
 
     with torch.no_grad():
         output = model(input_batch)
+        # Let's time it
+        start_time = time.time()
+        output = model(input_batch)
+        end_time = time.time()
+        print(f"Inference time: {end_time - start_time:.4f} seconds")
 
     probabilities = torch.nn.functional.softmax(output[0], dim=0)
 
