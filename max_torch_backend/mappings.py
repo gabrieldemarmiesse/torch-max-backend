@@ -40,9 +40,6 @@ def torch_conv2d_equivalent(
     if groups != 1:
         raise NotImplementedError("Grouped convolution is not supported yet.")
 
-    if dilation != 1:
-        raise NotImplementedError("Dilation is not supported yet.")
-
     if isinstance(stride, int):
         stride = (stride, stride)
     if isinstance(padding, int):
