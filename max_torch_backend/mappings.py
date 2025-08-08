@@ -122,15 +122,6 @@ def torch_autocast_equivalent(*args, **kwargs):
     pass
 
 
-def torch_log_api_usage_once_equivalent(*args, **kwargs):
-    """
-    No-op function for torch._C.PyCapsule._log_api_usage_once.
-    This is an internal PyTorch function used for API usage logging
-    that we can safely ignore in the MAX backend.
-    """
-    pass
-
-
 def torch_float_equivalent(tensor):
     return max.graph.ops.cast(tensor, dtype=max.graph.type.DType.float32)
 
@@ -247,6 +238,15 @@ def torch_transpose_equivalent(tensor, dim0, dim1):
     perm[dim0], perm[dim1] = perm[dim1], perm[dim0]
 
     return max.graph.ops.permute(tensor, perm)
+
+
+def torch_log_api_usage_once_equivalent(*args, **kwargs):
+    """
+    No-op function for torch._C.PyCapsule._log_api_usage_once.
+    This is an internal PyTorch function used for API usage logging
+    that we can safely ignore in the MAX backend.
+    """
+    pass
 
 
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
