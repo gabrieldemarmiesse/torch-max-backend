@@ -281,47 +281,14 @@ def torch_linear_equivalent(input, weight, bias=None):
 
 
 def torch_contiguous_equivalent(tensor):
-    """
-    PyTorch contiguous equivalent using MAX operations.
-
-    The contiguous operation returns a tensor with the same data and shape
-    but with contiguous memory layout. In MAX, tensors are generally assumed
-    to be contiguous, so this is typically a no-op.
-
-    Args:
-        tensor: Input tensor
-
-    Returns:
-        Tensor with contiguous memory layout (no-op in MAX)
-    """
-    # In MAX backend, we assume tensors are contiguous by default
-    # So this is effectively a no-op operation
     return tensor
 
 
 def torch_view_equivalent(tensor, *shape):
-    """
-    PyTorch view equivalent using MAX operations.
-
-    The view operation returns a tensor with the same data but different shape.
-    In MAX, this is equivalent to reshape operation, which already supports -1.
-
-    Args:
-        tensor: Input tensor to reshape
-        *shape: New shape as individual arguments or tuple
-
-    Returns:
-        Tensor with the new shape
-    """
-    # Handle different calling patterns:
-    # tensor.view(2, 3, 4) -> shape = (2, 3, 4)
-    # tensor.view((2, 3, 4)) -> shape = ((2, 3, 4),)
     if len(shape) == 1 and isinstance(shape[0], tuple | list):
         target_shape = list(shape[0])
     else:
         target_shape = list(shape)
-
-    # MAX reshape already supports -1 for dimension inference
     return max.graph.ops.reshape(tensor, target_shape)
 
 
