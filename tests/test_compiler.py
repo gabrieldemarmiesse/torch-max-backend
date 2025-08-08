@@ -1408,6 +1408,15 @@ def test_mean_3d_tensor(device: str):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_mean_3d_tensor_change_dtype(device: str):
+    def fn(x):
+        return torch.mean(x, dim=1, dtype=torch.float32)
+
+    a = torch.randn(2, 3, 4).to(torch.int32)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
 def test_mean_combined_with_arithmetic(device: str, tensor_shapes: tuple):
     """Test mean combined with arithmetic operations"""
 
