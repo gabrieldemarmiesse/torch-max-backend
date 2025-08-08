@@ -304,7 +304,7 @@ def torch_view_equivalent(tensor, *shape):
     PyTorch view equivalent using MAX operations.
 
     The view operation returns a tensor with the same data but different shape.
-    In MAX, this is equivalent to reshape operation.
+    In MAX, this is equivalent to reshape operation, which already supports -1.
 
     Args:
         tensor: Input tensor to reshape
@@ -321,30 +321,7 @@ def torch_view_equivalent(tensor, *shape):
     else:
         target_shape = list(shape)
 
-    # Handle -1 in shape (infer dimension)
-    if -1 in target_shape:
-        # Calculate total number of elements
-        total_elements = 1
-        current_shape = tensor.shape
-        for dim in current_shape:
-            total_elements *= dim
-
-        # Calculate known dimensions
-        known_elements = 1
-        unknown_idx = -1
-        for i, dim in enumerate(target_shape):
-            if dim == -1:
-                if unknown_idx != -1:
-                    raise ValueError("Only one dimension can be -1")
-                unknown_idx = i
-            else:
-                known_elements *= dim
-
-        # Infer the unknown dimension
-        if unknown_idx != -1:
-            inferred_dim = total_elements // known_elements
-            target_shape[unknown_idx] = inferred_dim
-
+    # MAX reshape already supports -1 for dimension inference
     return max.graph.ops.reshape(tensor, target_shape)
 
 
