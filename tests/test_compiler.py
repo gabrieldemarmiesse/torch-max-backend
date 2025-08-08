@@ -141,6 +141,15 @@ def test_sin(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_relu(device: str, tensor_shapes: tuple):
+    def fn(x):
+        return F.relu(x)
+
+    a = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
 def test_cat(device: str, tensor_shapes: tuple):
     def fn(x, y):
         return torch.cat([x, y], dim=0)

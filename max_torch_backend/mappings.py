@@ -314,6 +314,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.conv2d: torch_conv2d_equivalent,
     F.embedding: torch_embedding_equivalent,
     F.linear: torch_linear_equivalent,
+    F.relu: max.graph.ops.relu,
     # TODO: Use noop function
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
