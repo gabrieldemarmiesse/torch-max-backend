@@ -2237,18 +2237,6 @@ def test_negation_different_shapes(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [x])
 
 
-class SimpleModuleWithParameter(torch.nn.Module):
-    """Simple module with parameter for get_attr testing"""
-
-    def __init__(self):
-        super().__init__()
-        self.weight = torch.nn.Parameter(torch.randn(3, 4))
-        self.bias = torch.nn.Parameter(torch.randn(4))
-
-    def forward(self, x):
-        return x @ self.weight + self.bias
-
-
 def test_get_attr_parameter(device: str):
     """Test get_attr node with parameter access"""
 
@@ -2262,9 +2250,7 @@ def test_get_attr_parameter(device: str):
             # This will create get_attr nodes for self.weight and self.bias
             return x @ self.weight + self.bias
 
-    module = ParameterModule()
-    if device is not None:
-        module = module.to(device)
+    module = ParameterModule().to(device)
 
     x = torch.randn(2, 3)
 
@@ -2277,8 +2263,8 @@ def test_get_attr_parameter(device: str):
     )
     # Should have nodes for weight and bias
     targets = [node.target for node in get_attr_nodes]
-    assert "weight" in targets, "Expected 'weight' in get_attr targets"
-    assert "bias" in targets, "Expected 'bias' in get_attr targets"
+    assert "weight" in targets
+    assert "bias" in targets
 
     check_functions_are_equivalent(module, device, [x])
 
@@ -2296,9 +2282,7 @@ def test_get_attr_nested_parameter(device: str):
             # This will create get_attr nodes for nested parameters
             return self.linear(x) * self.scale
 
-    module = NestedModule()
-    if device is not None:
-        module = module.to(device)
+    module = NestedModule().to(device)
 
     x = torch.randn(2, 3)
 
@@ -2308,7 +2292,7 @@ def test_get_attr_nested_parameter(device: str):
     # Should have at least the scale parameter as get_attr
     # Linear might be optimized into call_module instead
     targets = [node.target for node in get_attr_nodes]
-    assert "scale" in targets, f"Expected 'scale' in get_attr targets, got {targets}"
+    assert "scale" in targets
 
     check_functions_are_equivalent(module, device, [x])
 
@@ -2326,9 +2310,7 @@ def test_get_attr_buffer(device: str):
             # This will create get_attr nodes for both parameter and buffer
             return (x + self.running_mean) * self.weight
 
-    module = ModuleWithBuffer()
-    if device is not None:
-        module = module.to(device)
+    module = ModuleWithBuffer().to(device)
 
     x = torch.randn(2, 4)
 
@@ -2337,9 +2319,8 @@ def test_get_attr_buffer(device: str):
     get_attr_nodes = [node for node in traced.graph.nodes if node.op == "get_attr"]
     targets = [node.target for node in get_attr_nodes]
     # Should have weight and running_mean
-    assert "weight" in targets or "running_mean" in targets, (
-        f"Expected parameter or buffer in get_attr targets, got {targets}"
-    )
+    assert "weight" in targets
+    assert "running_mean" in targets
 
     check_functions_are_equivalent(module, device, [x])
 
@@ -2360,9 +2341,7 @@ def test_get_attr_multiple_parameters(device: str):
             h = x @ self.weight1 + self.bias1
             return h @ self.weight2 + self.bias2
 
-    module = MultiParamModule()
-    if device is not None:
-        module = module.to(device)
+    module = MultiParamModule().to(device)
 
     x = torch.randn(2, 3)
 
@@ -2382,9 +2361,7 @@ def test_get_attr_with_arithmetic(device: str):
             # get_attr nodes will be used for scale and offset
             return (x * self.scale + self.offset) + y
 
-    module = ArithmeticModule()
-    if device is not None:
-        module = module.to(device)
+    module = ArithmeticModule().to(device)
 
     x = torch.randn(2, 3)
     y = torch.randn(2, 3)
@@ -2407,9 +2384,7 @@ def test_get_attr_constant_tensor(device: str):
             # This will create a get_attr node for the constant
             return x + self.constant
 
-    module = ConstantModule()
-    if device is not None:
-        module = module.to(device)
+    module = ConstantModule().to(device)
 
     x = torch.randn(2, 3)
 
@@ -2439,9 +2414,7 @@ def test_get_attr_deeply_nested(device: str):
             # This will create get_attr nodes with dotted paths
             return x @ self.middle.inner.inner_weight + self.middle.middle_bias
 
-    module = OuterModule()
-    if device is not None:
-        module = module.to(device)
+    module = OuterModule().to(device)
 
     x = torch.randn(2, 3)
 
@@ -2461,9 +2434,7 @@ def test_get_attr_mixed_with_functions(device: str):
             linear_out = x @ self.weight
             return torch.sin(linear_out) + torch.cos(linear_out)
 
-    module = MixedModule()
-    if device is not None:
-        module = module.to(device)
+    module = MixedModule().to(device)
 
     x = torch.randn(2, 3)
 
@@ -2483,24 +2454,15 @@ def test_get_attr_simple_constant(device: str):
             # Simple addition that should create get_attr node
             return x + self.constant
 
-    module = SimpleConstantModule()
-    if device is not None:
-        module = module.to(device)
+    module = SimpleConstantModule().to(device)
 
     x = torch.randn(3)
 
     # Verify get_attr nodes are in the graph
     traced = torch.fx.symbolic_trace(module)
     get_attr_nodes = [node for node in traced.graph.nodes if node.op == "get_attr"]
-    assert len(get_attr_nodes) >= 1, (
-        f"Expected at least 1 get_attr node, got {len(get_attr_nodes)}"
-    )
+    assert len(get_attr_nodes) >= 1
     targets = [node.target for node in get_attr_nodes]
-    assert "constant" in targets, (
-        f"Expected 'constant' in get_attr targets, got {targets}"
-    )
-
-    # Print the graph for debugging
-    print(f"Graph nodes: {[(n.op, n.target) for n in traced.graph.nodes]}")
+    assert "constant" in targets
 
     check_functions_are_equivalent(module, device, [x])
