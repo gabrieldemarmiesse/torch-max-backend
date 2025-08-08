@@ -24,12 +24,13 @@ def get_fully_qualified_name(func):
     return result
 
 
-def keep_only_tensors(inputs: list) -> list[torch.Tensor]:
+def keep_only_tensors(inputs: list, detach: bool=False) -> list[torch.Tensor]:
     result = []
     for x in inputs:
         if isinstance(x, torch.Tensor):
-            # Detach tensors to avoid gradient tracking issues with DLpack
-            result.append(x.detach())
+            if detach:
+                x = x.detach()
+            result.append(x)
     return result
 
 
@@ -120,6 +121,7 @@ class GraphFunction:
             elif node.op == "get_attr":
                 attr_value = self.fetch_attr(node.target)
                 if isinstance(attr_value, torch.Tensor):
+                    # TODO: Maybe we should stay on GPU?
                     max_tensor = ops.constant(attr_value.detach().cpu().numpy())
                     tensor_book[node.name] = max_tensor
                 else:
@@ -181,5 +183,6 @@ class MaxCompiler:
         self.model = session.load(graph)
 
     def __call__(self, *args) -> list[torch.Tensor]:
-        outputs = self.model.execute(*keep_only_tensors(args))
+        # Detach tensors to avoid gradient tracking issues with DLpack
+        outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         return [torch.Tensor(x) for x in outputs]
