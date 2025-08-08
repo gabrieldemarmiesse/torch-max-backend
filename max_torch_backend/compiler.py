@@ -121,6 +121,7 @@ class GraphFunction:
             elif node.op == "get_attr":
                 attr_value = self.fetch_attr(node.target)
                 if isinstance(attr_value, torch.Tensor):
+                    raise ValueError
                     # TODO: Maybe we should stay on GPU?
                     max_tensor = ops.constant(attr_value.detach().cpu().numpy())
                     tensor_book[node.name] = max_tensor
