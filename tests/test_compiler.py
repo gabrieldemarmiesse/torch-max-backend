@@ -1671,6 +1671,8 @@ def test_sqrt_rsqrt_broadcasting(device: str):
     y = torch.randn(1, 4).abs() + 0.1
 
     check_functions_are_equivalent(fn, device, [x, y])
+
+
 def test_linear_basic(device: str):
     """Test basic linear function without bias"""
 
