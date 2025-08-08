@@ -2101,3 +2101,48 @@ def test_tensor_contiguous_view_chain(device: str):
     x = torch.randn(2, 3, 4)
 
     check_functions_are_equivalent(fn, device, [x])
+
+
+def test_unary_negation(device: str):
+    """Test unary negation operator (-x)"""
+
+    def fn(x):
+        return -x
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_negation_with_arithmetic(device: str):
+    """Test negation combined with arithmetic operations"""
+
+    def fn(x, y):
+        return -x + y
+
+    x = torch.randn(3, 4)
+    y = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_double_negation(device: str):
+    """Test double negation (-(-x))"""
+
+    def fn(x):
+        return -(-x)
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_negation_different_shapes(device: str, tensor_shapes: tuple):
+    """Test negation with different tensor shapes"""
+
+    def fn(x):
+        return -x
+
+    x = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [x])
