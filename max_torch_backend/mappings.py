@@ -261,24 +261,80 @@ def torch_mean_equivalent(input, dim=None, keepdim=False, *, dtype=None):
     result = input
 
     if dim is None:
-        dim = tuple(range(len(input.shape)))
+        # Reduce all dimensions - need to handle GPU limitation
+        # GPU reduction is currently limited to inner axis, so we need to reshape
+        # and reduce along the last axis
+        tensor_shape = input.shape
+        total_elements = 1
+        for s in tensor_shape:
+            total_elements *= s
+
+        # Reshape to 1D tensor and reduce along axis 0 (which becomes the inner axis)
+        reshaped = max.graph.ops.reshape(input, [total_elements])
+        result = max.graph.ops.mean(reshaped, axis=0)
+
+        if not keepdim:
+            # For scalar result (all dimensions reduced), squeeze to get scalar shape []
+            result = max.graph.ops.squeeze(result, axis=0)
+            return result
+        else:
+            # Need to restore shape with all dimensions as 1
+            ones_shape = [1] * len(tensor_shape)
+            return max.graph.ops.reshape(result, ones_shape)
+
     elif isinstance(dim, int):
         dim = (dim,)
 
-    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
+    if dim is not None:
+        dim = [x if x >= 0 else len(input.shape) + x for x in dim]
+        original_shape = input.shape
 
-    # Multiple dimensions reduction - reduce each dimension one by one
-    # Sort dimensions in descending order to avoid index shifting issues
-    for axis in dim:
-        result = max.graph.ops.mean(result, axis=axis)
+        # Use unified approach for all cases to handle GPU limitation
+        # Always move dimensions to reduce to the end
 
-    # Handle keepdim=False - MAX's mean keeps dimensions by default, so we need to squeeze
-    if not keepdim:
-        # Remove multiple dimensions - need to be careful about index shifting
-        # Sort original dimensions and squeeze from highest to lowest
-        dims_to_squeeze = sorted(dim, reverse=True)
-        for axis in dims_to_squeeze:
-            result = max.graph.ops.squeeze(result, axis=axis)
+        # Separate dimensions to keep and dimensions to reduce
+        all_dims = set(range(len(original_shape)))
+        dims_to_reduce = set(dim)
+        dims_to_keep = sorted(all_dims - dims_to_reduce)
+        dims_to_reduce_sorted = sorted(dims_to_reduce)
+
+        # Create permutation: keep_dims + reduce_dims
+        perm = dims_to_keep + dims_to_reduce_sorted
+
+        # Permute tensor to move reduce dimensions to the end
+        result = max.graph.ops.permute(result, perm)
+
+        # Calculate new shape: [keep_shape..., reduce_shape_flattened]
+        keep_shape = [original_shape[i] for i in dims_to_keep]
+        reduce_elements = 1
+        for i in dims_to_reduce_sorted:
+            reduce_elements *= original_shape[i]
+
+        new_shape = keep_shape + [reduce_elements]
+        result = max.graph.ops.reshape(result, new_shape)
+
+        # Now reduce along the last axis (which contains all reduce dimensions)
+        last_axis = len(new_shape) - 1
+        result = max.graph.ops.mean(result, axis=last_axis)
+
+        if not keepdim:
+            # Squeeze the reduced dimension
+            result = max.graph.ops.squeeze(result, axis=last_axis)
+        else:
+            # Restore the reduced dimensions as size 1
+            if dims_to_keep:
+                # Insert 1s for the reduced dimensions in their original positions
+                final_shape = []
+                for i in range(len(original_shape)):
+                    if i in dims_to_keep:
+                        final_shape.append(original_shape[i])
+                    else:
+                        final_shape.append(1)
+                result = max.graph.ops.reshape(result, final_shape)
+            else:
+                # All dimensions were reduced, result should be shape [1, 1, ..., 1]
+                ones_shape = [1] * len(original_shape)
+                result = max.graph.ops.reshape(result, ones_shape)
 
     return result
 
