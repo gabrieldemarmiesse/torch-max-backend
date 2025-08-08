@@ -255,51 +255,30 @@ def torch_mean_equivalent(input, dim=None, keepdim=False, *, dtype=None):
         Tensor with mean computed along specified dimensions
     """
     if dtype is not None:
-        raise NotImplementedError("dtype parameter not supported in mean yet")
+        max_dtype = DType.from_torch(dtype)
+        input = max.graph.ops.cast(input, dtype=max_dtype)
 
     result = input
 
     if dim is None:
-        # Reduce all dimensions - need to reduce each dimension one by one
-        # Start from the last dimension and work backwards to avoid index shifting
-        for axis in reversed(range(len(input.shape))):
-            result = max.graph.ops.mean(result, axis=axis)
+        dim = tuple(range(len(input.shape)))
     elif isinstance(dim, int):
-        # Single dimension reduction
-        # Handle negative dimensions
-        axis = dim if dim >= 0 else len(input.shape) + dim
+        dim = (dim,)
+
+    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
+
+    # Multiple dimensions reduction - reduce each dimension one by one
+    # Sort dimensions in descending order to avoid index shifting issues
+    for axis in dim:
         result = max.graph.ops.mean(result, axis=axis)
-    elif isinstance(dim, tuple | list):
-        # Multiple dimensions reduction - reduce each dimension one by one
-        # Sort dimensions in descending order to avoid index shifting issues
-        dims_to_reduce = sorted(
-            [d if d >= 0 else len(input.shape) + d for d in dim], reverse=True
-        )
-        for axis in dims_to_reduce:
-            result = max.graph.ops.mean(result, axis=axis)
-    else:
-        raise ValueError(f"Invalid dim type: {type(dim)}")
 
     # Handle keepdim=False - MAX's mean keeps dimensions by default, so we need to squeeze
     if not keepdim:
-        if dim is None:
-            # Remove all dimensions that became size 1 (all original dimensions)
-            for _ in range(len(input.shape)):
-                result = max.graph.ops.squeeze(result, axis=0)
-        elif isinstance(dim, int):
-            # Remove the single reduced dimension
-            axis = dim if dim >= 0 else len(input.shape) + dim
-            # After reduction, the axis position might have shifted due to previous squeezes
-            # For single dimension, we can squeeze the specific axis
+        # Remove multiple dimensions - need to be careful about index shifting
+        # Sort original dimensions and squeeze from highest to lowest
+        dims_to_squeeze = sorted(dim, reverse=True)
+        for axis in dims_to_squeeze:
             result = max.graph.ops.squeeze(result, axis=axis)
-        elif isinstance(dim, tuple | list):
-            # Remove multiple dimensions - need to be careful about index shifting
-            # Sort original dimensions and squeeze from highest to lowest
-            dims_to_squeeze = sorted(
-                [d if d >= 0 else len(input.shape) + d for d in dim], reverse=True
-            )
-            for axis in dims_to_squeeze:
-                result = max.graph.ops.squeeze(result, axis=axis)
 
     return result
 
