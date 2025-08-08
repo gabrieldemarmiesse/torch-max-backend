@@ -55,6 +55,8 @@ class TensorsBook:
             return something
         elif something is None:
             return None
+        elif something == ...:
+            return ...
         raise ValueError(f"Unsupported type when reading the graph: {type(something)}")
 
 
