@@ -303,6 +303,11 @@ def torch_log_api_usage_once_equivalent(*args, **kwargs):
     pass
 
 
+def relu_equivalent(tensor, inplace: bool = False):
+    # inplace has no meaning in max since it's graph-based
+    return max.graph.ops.relu(tensor)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -314,7 +319,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.conv2d: torch_conv2d_equivalent,
     F.embedding: torch_embedding_equivalent,
     F.linear: torch_linear_equivalent,
-    F.relu: max.graph.ops.relu,
+    F.relu: relu_equivalent,
     # TODO: Use noop function
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
