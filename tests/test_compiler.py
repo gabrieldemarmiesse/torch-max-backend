@@ -2101,3 +2101,92 @@ def test_tensor_contiguous_view_chain(device: str):
     x = torch.randn(2, 3, 4)
 
     check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_unsqueeze_basic(device: str):
+    """Test basic tensor.unsqueeze() operation"""
+
+    def fn(x):
+        return x.unsqueeze(0)
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_unsqueeze_middle_dim(device: str):
+    """Test tensor.unsqueeze() in middle dimension"""
+
+    def fn(x):
+        return x.unsqueeze(1)
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_unsqueeze_last_dim(device: str):
+    """Test tensor.unsqueeze() at last dimension"""
+
+    def fn(x):
+        return x.unsqueeze(-1)
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_unsqueeze_negative_dim(device: str):
+    """Test tensor.unsqueeze() with negative dimension"""
+
+    def fn(x):
+        return x.unsqueeze(-2)
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_unsqueeze_multiple_ops(device: str):
+    """Test multiple tensor.unsqueeze() operations"""
+
+    def fn(x):
+        return x.unsqueeze(0).unsqueeze(-1)
+
+    x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_unsqueeze_with_view(device: str):
+    """Test tensor.unsqueeze() combined with view()"""
+
+    def fn(x):
+        x_unsq = x.unsqueeze(1)  # (2, 3) -> (2, 1, 3)
+        return x_unsq.view(2, 3)  # (2, 1, 3) -> (2, 3)
+
+    x = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_unsqueeze_1d_tensor(device: str):
+    """Test tensor.unsqueeze() on 1D tensor"""
+
+    def fn(x):
+        return x.unsqueeze(0)
+
+    x = torch.randn(5)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_unsqueeze_scalar(device: str):
+    """Test tensor.unsqueeze() on scalar tensor"""
+
+    def fn(x):
+        return x.unsqueeze(0)
+
+    x = torch.randn(())
+
+    check_functions_are_equivalent(fn, device, [x])

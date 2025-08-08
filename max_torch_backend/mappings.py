@@ -292,6 +292,10 @@ def torch_view_equivalent(tensor, *shape):
     return max.graph.ops.reshape(tensor, target_shape)
 
 
+def torch_unsqueeze_equivalent(tensor, dim):
+    return max.graph.ops.unsqueeze(tensor, axis=dim)
+
+
 def torch_log_api_usage_once_equivalent(*args, **kwargs):
     """
     No-op function for torch._C.PyCapsule._log_api_usage_once.
@@ -324,6 +328,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "transpose": torch_transpose_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
+    "unsqueeze": torch_unsqueeze_equivalent,
     "abs": max.graph.ops.abs,
     "cos": max.graph.ops.cos,
     "sin": max.graph.ops.sin,
