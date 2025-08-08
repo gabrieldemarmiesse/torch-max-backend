@@ -128,7 +128,7 @@ The project implements a custom PyTorch compiler backend (`my_compiler`) that:
   - Magic trailing comma skipped in formatting
 - Project configured for Modular's nightly builds
 - Tests parametrized for multiple devices when available
-- The directory `/projects/open_source/modular/` contains the python code for the max graph. You can look inside to find out how the max graph is implemented. You can find examples of graphs in `modular/max/pipelines/architectures`.
-- The directory `pytorch/` contains the PyTorch source code. It might be helpful to look inside as 
+- The directory `../modular/` contains the python code for the max graph. You can look inside to find out how the max graph is implemented. You can find examples of graphs in `modular/max/pipelines/architectures`.
+- The directory `../pytorch/` contains the PyTorch source code. It might be helpful to look inside as 
   many things in `torch.compile` are not documented correctly.
   
