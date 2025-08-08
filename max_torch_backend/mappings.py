@@ -8,6 +8,10 @@ from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
 from max.dtype import DType
 
+# Import specific function objects that appear in VGG FX graph
+import torch._C._nn  # for conv2d and linear built-ins
+import torch._C  # for flatten built-in
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -308,6 +312,95 @@ def relu_equivalent(tensor, inplace: bool = False):
     return max.graph.ops.relu(tensor)
 
 
+def torch_max_pool2d_equivalent(
+    input,
+    kernel_size,
+    stride=None,
+    padding=0,
+    dilation=1,
+    ceil_mode=False,
+    return_indices=False,
+):
+    if return_indices:
+        raise NotImplementedError("return_indices=True is not supported yet")
+
+    if stride is None:
+        stride = kernel_size
+
+    if isinstance(kernel_size, int):
+        kernel_size = (kernel_size, kernel_size)
+    if isinstance(stride, int):
+        stride = (stride, stride)
+    if isinstance(padding, int):
+        padding = (padding, padding)
+    if isinstance(dilation, int):
+        dilation = (dilation, dilation)
+
+    # Convert input from NCHW (PyTorch default) to NHWC (MAX requirement)
+    input_nhwc = input.permute([0, 2, 3, 1])
+
+    result = max.graph.ops.max_pool2d(
+        input_nhwc,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        ceil_mode=ceil_mode,
+    )
+
+    # Convert result back from NHWC to NCHW for PyTorch compatibility
+    return result.permute([0, 3, 1, 2])
+
+
+def torch_adaptive_avg_pool2d_equivalent(input, output_size):
+    # For now, we'll implement this using global average pooling for (1, 1) output
+    # and regular avg pooling for other sizes
+    if output_size == (1, 1) or output_size == 1:
+        # Global average pooling - take mean over spatial dimensions
+        return torch_mean_equivalent(input, dim=(2, 3), keepdim=True)
+    else:
+        # For other output sizes, we'll use avg_pool2d with calculated kernel size and stride
+        # Get input spatial dimensions (assuming NCHW format)
+        input_h, input_w = input.shape[2], input.shape[3]
+
+        if isinstance(output_size, int):
+            output_h = output_w = output_size
+        else:
+            output_h, output_w = output_size
+
+        # Calculate kernel size and stride to achieve the desired output size
+        kernel_h = input_h // output_h
+        kernel_w = input_w // output_w
+        stride_h = input_h // output_h
+        stride_w = input_w // output_w
+
+        # Convert input from NCHW to NHWC for MAX
+        input_nhwc = input.permute([0, 2, 3, 1])
+
+        result = max.graph.ops.avg_pool2d(
+            input_nhwc,
+            kernel_size=(kernel_h, kernel_w),
+            stride=(stride_h, stride_w),
+            padding=(0, 0),
+            ceil_mode=False,
+            count_boundary=True,
+        )
+
+        # Convert result back from NHWC to NCHW
+        return result.permute([0, 3, 1, 2])
+
+
+def torch_flatten_equivalent(input, start_dim=1, end_dim=-1):
+    return max.graph.ops.flatten(input, start_dim=start_dim, end_dim=end_dim)
+
+
+def torch_dropout_equivalent(input, p=0.5, training=True, inplace=False):
+    if training:
+        raise NotImplementedError("Dropout is not implemented in the MAX backend. ")
+    else:
+        return input
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -320,11 +413,18 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.embedding: torch_embedding_equivalent,
     F.linear: torch_linear_equivalent,
     F.relu: relu_equivalent,
+    F.max_pool2d: torch_max_pool2d_equivalent,
+    F.adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,
+    F.dropout: torch_dropout_equivalent,
+    # torch._C._nn.conv2d: torch_conv2d_equivalent,  # This attribute doesn't exist
+    torch._C._nn.linear: torch_linear_equivalent,
+    # VGG-specific function object mappings for built-ins
+    # torch._C.flatten: torch_flatten_equivalent,  # Need to find correct reference
+    torch.flatten: torch_flatten_equivalent,  # alternative flatten reference
     # TODO: Use noop function
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
     torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,
-    torch._C._nn.linear: torch_linear_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -333,6 +433,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
     "unsqueeze": torch_unsqueeze_equivalent,
+    "flatten": torch_flatten_equivalent,
     "abs": max.graph.ops.abs,
     "cos": max.graph.ops.cos,
     "sin": max.graph.ops.sin,
@@ -341,6 +442,16 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "pow": operator.pow,
     "mean": torch_mean_equivalent,
 }
+
+# Add the exact function objects that appear in VGG FX graph
+MAPPING_TORCH_TO_MOJO_FUNCTIONS.update(
+    {
+        torch.nn.functional.max_pool2d: torch_max_pool2d_equivalent,  # boolean_dispatch function
+        torch.nn.functional.relu: relu_equivalent,  # <function relu at 0x...>
+        torch.nn.functional.adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,  # <function adaptive_avg_pool2d at 0x...>
+        torch.nn.functional.dropout: torch_dropout_equivalent,  # <function dropout at 0x...>
+    }
+)
 
 for func in IDENTICAL_FUNCTIONS:
     MAPPING_TORCH_TO_MOJO_FUNCTIONS[func] = func
