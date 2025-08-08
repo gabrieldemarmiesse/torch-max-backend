@@ -28,6 +28,8 @@ skip-magic-trailing-comma = true
 
 [dependency-groups]
 dev = [
+    "accelerate>=1.10.0",
+    "ibm-fms>=1.2.1",
     "pillow>=11.3.0",
     "pytest>=8.4.1",
     "pytest-xdist>=3.8.0",

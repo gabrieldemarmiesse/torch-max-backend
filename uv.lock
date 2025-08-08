@@ -3,6 +3,24 @@ revision = 2
 requires-python = ">=3.12"
 
 [[package]]
+name = "accelerate"
+version = "1.10.0"
+source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f7/66/be171836d86dc5b8698b3a9bf4b9eb10cb53369729939f88bf650167588b/accelerate-1.10.0.tar.gz", hash = "sha256:8270568fda9036b5cccdc09703fef47872abccd56eb5f6d53b54ea5fb7581496", size = 392261, upload-time = "2025-08-07T10:54:51.664Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/dd/0107f0aa179869ee9f47ef5a2686abd5e022fdc82af901d535e52fe91ce1/accelerate-1.10.0-py3-none-any.whl", hash = "sha256:260a72b560e100e839b517a331ec85ed495b3889d12886e79d1913071993c5a3", size = 374718, upload-time = "2025-08-07T10:54:49.988Z" },
+]
+
+[[package]]
 name = "aiofiles"
 version = "24.1.0"
 source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
@@ -352,6 +370,17 @@ wheels = [
 ]
 
 [[package]]
+name = "ibm-fms"
+version = "1.2.1"
+source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
+dependencies = [
+    { name = "torch" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/88/b0a5c0c9259868b00d823d569a19e0b44ccec76087e4676f655e92c41776/ibm_fms-1.2.1-py3-none-any.whl", hash = "sha256:f151717788d7c8d4d6ddbbf85f6687887f64ce2823926832a877016a6fd72849", size = 179297, upload-time = "2025-08-07T15:18:12.315Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.10"
 source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
@@ -513,6 +542,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "accelerate" },
+    { name = "ibm-fms" },
     { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-xdist" },
@@ -531,6 +562,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "accelerate", specifier = ">=1.10.0" },
+    { name = "ibm-fms", specifier = ">=1.2.1" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
