@@ -1307,3 +1307,121 @@ def test_recompilation(device: str):
     assert counter.call_count == 2
 
     # TODO: Make it work if called with more shapes (dynamo doesn't recompile)
+
+
+def test_mean_no_dim(device: str, tensor_shapes: tuple):
+    """Test mean without specifying dimensions (reduce all)"""
+
+    def fn(x):
+        return torch.mean(x)
+
+    a = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_mean_single_dim(device: str, tensor_shapes: tuple):
+    """Test mean with single dimension"""
+
+    def fn(x):
+        return torch.mean(x, dim=1)
+
+    a = torch.randn(tensor_shapes) if len(tensor_shapes) > 1 else torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_mean_negative_dim(device: str, tensor_shapes: tuple):
+    """Test mean with negative dimension"""
+
+    def fn(x):
+        return torch.mean(x, dim=-1)
+
+    a = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_mean_keepdim_true(device: str, tensor_shapes: tuple):
+    """Test mean with keepdim=True"""
+
+    def fn(x):
+        return torch.mean(x, dim=1, keepdim=True)
+
+    a = torch.randn(tensor_shapes) if len(tensor_shapes) > 1 else torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_mean_multiple_dims(device: str):
+    """Test mean with multiple dimensions"""
+
+    def fn(x):
+        return torch.mean(x, dim=(1, 2))
+
+    a = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_mean_multiple_dims_keepdim(device: str):
+    """Test mean with multiple dimensions and keepdim=True"""
+
+    def fn(x):
+        return torch.mean(x, dim=(0, 2), keepdim=True)
+
+    a = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_tensor_mean_method(device: str, tensor_shapes: tuple):
+    """Test tensor.mean() method"""
+
+    def fn(x):
+        return x.mean()
+
+    a = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_tensor_mean_method_with_dim(device: str, tensor_shapes: tuple):
+    """Test tensor.mean(dim) method"""
+
+    def fn(x):
+        return x.mean(dim=1)
+
+    a = torch.randn(tensor_shapes) if len(tensor_shapes) > 1 else torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_mean_3d_tensor(device: str):
+    """Test mean on 3D tensor"""
+
+    def fn(x):
+        return torch.mean(x, dim=1)
+
+    a = torch.randn(2, 3, 4)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_mean_combined_with_arithmetic(device: str, tensor_shapes: tuple):
+    """Test mean combined with arithmetic operations"""
+
+    def fn(x, y):
+        mean_x = torch.mean(x, dim=-1, keepdim=True)
+        return mean_x + y
+
+    a = torch.randn(tensor_shapes)
+    # Create y with compatible shape for broadcasting
+    if len(tensor_shapes) == 0:
+        y = torch.randn(())
+    else:
+        y_shape = list(tensor_shapes)
+        y_shape[-1] = 1  # Make last dimension 1 for broadcasting
+        y = torch.randn(y_shape)
+
+    check_functions_are_equivalent(fn, device, [a, y])

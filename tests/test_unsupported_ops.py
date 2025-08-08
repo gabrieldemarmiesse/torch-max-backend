@@ -61,20 +61,6 @@ def test_unsupported_sqrt_error():
         fn_compiled(a)
 
 
-def test_unsupported_mean_error():
-    def fn(x):
-        return torch.mean(x)
-
-    fn_compiled = torch.compile(backend=MaxCompiler)(fn)
-
-    a = torch.randn(3, 4)
-
-    with pytest.raises(
-        BackendCompilerFailed, match="Function .* not supported by the Max backend yet"
-    ):
-        fn_compiled(a)
-
-
 def test_unsupported_max_error():
     def fn(x):
         return torch.max(x)

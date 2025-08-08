@@ -240,6 +240,70 @@ def torch_transpose_equivalent(tensor, dim0, dim1):
     return max.graph.ops.permute(tensor, perm)
 
 
+def torch_mean_equivalent(input, dim=None, keepdim=False, *, dtype=None):
+    """
+    PyTorch mean equivalent using MAX operations.
+
+    Args:
+        input: The input tensor
+        dim: Dimension(s) to reduce. If None, reduce all dimensions.
+             If int, reduce single dimension. If tuple, reduce multiple dimensions.
+        keepdim: Whether to keep the reduced dimensions
+        dtype: Output dtype (currently not supported)
+
+    Returns:
+        Tensor with mean computed along specified dimensions
+    """
+    if dtype is not None:
+        raise NotImplementedError("dtype parameter not supported in mean yet")
+
+    result = input
+
+    if dim is None:
+        # Reduce all dimensions - need to reduce each dimension one by one
+        # Start from the last dimension and work backwards to avoid index shifting
+        for axis in reversed(range(len(input.shape))):
+            result = max.graph.ops.mean(result, axis=axis)
+    elif isinstance(dim, int):
+        # Single dimension reduction
+        # Handle negative dimensions
+        axis = dim if dim >= 0 else len(input.shape) + dim
+        result = max.graph.ops.mean(result, axis=axis)
+    elif isinstance(dim, tuple | list):
+        # Multiple dimensions reduction - reduce each dimension one by one
+        # Sort dimensions in descending order to avoid index shifting issues
+        dims_to_reduce = sorted(
+            [d if d >= 0 else len(input.shape) + d for d in dim], reverse=True
+        )
+        for axis in dims_to_reduce:
+            result = max.graph.ops.mean(result, axis=axis)
+    else:
+        raise ValueError(f"Invalid dim type: {type(dim)}")
+
+    # Handle keepdim=False - MAX's mean keeps dimensions by default, so we need to squeeze
+    if not keepdim:
+        if dim is None:
+            # Remove all dimensions that became size 1 (all original dimensions)
+            for _ in range(len(input.shape)):
+                result = max.graph.ops.squeeze(result, axis=0)
+        elif isinstance(dim, int):
+            # Remove the single reduced dimension
+            axis = dim if dim >= 0 else len(input.shape) + dim
+            # After reduction, the axis position might have shifted due to previous squeezes
+            # For single dimension, we can squeeze the specific axis
+            result = max.graph.ops.squeeze(result, axis=axis)
+        elif isinstance(dim, tuple | list):
+            # Remove multiple dimensions - need to be careful about index shifting
+            # Sort original dimensions and squeeze from highest to lowest
+            dims_to_squeeze = sorted(
+                [d if d >= 0 else len(input.shape) + d for d in dim], reverse=True
+            )
+            for axis in dims_to_squeeze:
+                result = max.graph.ops.squeeze(result, axis=axis)
+
+    return result
+
+
 def torch_log_api_usage_once_equivalent(*args, **kwargs):
     """
     No-op function for torch._C.PyCapsule._log_api_usage_once.
@@ -253,6 +317,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
     torch.sin: max.graph.ops.sin,
+    torch.mean: torch_mean_equivalent,
     torch.cat: torch_cat_equivalent,
     F.conv2d: torch_conv2d_equivalent,
     F.embedding: torch_embedding_equivalent,
@@ -268,6 +333,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "cos": max.graph.ops.cos,
     "sin": max.graph.ops.sin,
     "pow": operator.pow,
+    "mean": torch_mean_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:

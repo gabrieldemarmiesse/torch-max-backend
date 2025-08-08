@@ -12,3 +12,4 @@ wheels/
 
 pytorch/
 modular/
+.claude/settings.local.json
