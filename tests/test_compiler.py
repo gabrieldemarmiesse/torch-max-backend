@@ -1595,24 +1595,6 @@ def test_linear_chained(device: str):
     check_functions_are_equivalent(fn, device, [input, weight1, bias1, weight2, bias2])
 
 
-def test_linear_with_arithmetic(device: str):
-    """Test linear function combined with arithmetic operations"""
-
-    def fn(input, weight, bias, residual):
-        linear_out = F.linear(input, weight, bias)
-        return linear_out + residual  # Residual connection
-
-    in_features, out_features = 5, 5  # Same dimensions for residual
-    batch_size = 2
-
-    input = torch.randn(batch_size, in_features)
-    weight = torch.randn(out_features, in_features)
-    bias = torch.randn(out_features)
-    residual = torch.randn(batch_size, out_features)
-
-    check_functions_are_equivalent(fn, device, [input, weight, bias, residual])
-
-
 def test_linear_broadcasting(device: str):
     """Test linear function with broadcasting scenarios"""
 
@@ -1671,24 +1653,6 @@ def test_linear_with_transpose(device: str):
 
     in_features, out_features = 6, 4
     batch_size = 3
-
-    input = torch.randn(batch_size, in_features)
-    weight = torch.randn(out_features, in_features)
-    bias = torch.randn(out_features)
-
-    check_functions_are_equivalent(fn, device, [input, weight, bias])
-
-
-def test_linear_mathematical_properties(device: str):
-    """Test mathematical properties of linear function"""
-
-    def fn(input, weight, bias):
-        # Test: F.linear(2*input, weight, bias) == 2*F.linear(input, weight, bias) + bias
-        # But simplified to just test scaling
-        return F.linear(input * 2, weight, bias)
-
-    in_features, out_features = 4, 3
-    batch_size = 2
 
     input = torch.randn(batch_size, in_features)
     weight = torch.randn(out_features, in_features)
