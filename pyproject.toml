@@ -36,5 +36,6 @@ dev = [
     "requests>=2.32.4",
     "ruff>=0.12.7",
     "sentencepiece>=0.2.0",
+    "torchvision>=0.22.1",
     "transformers>=4.54.1",
 ]
