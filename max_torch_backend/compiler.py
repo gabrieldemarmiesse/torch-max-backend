@@ -24,7 +24,7 @@ def get_fully_qualified_name(func):
     return result
 
 
-def keep_only_tensors(inputs: list, detach: bool=False) -> list[torch.Tensor]:
+def keep_only_tensors(inputs: list, detach: bool = False) -> list[torch.Tensor]:
     result = []
     for x in inputs:
         if isinstance(x, torch.Tensor):
