@@ -1,5 +1,4 @@
 import operator
-import _operator
 
 import max.graph.ops
 import torch
@@ -20,7 +19,6 @@ IDENTICAL_FUNCTIONS = [
     operator.getitem,
     operator.matmul,
     operator.neg,
-    _operator.neg,
     torch.add,
     torch.sub,
     torch.mul,
