@@ -2490,3 +2490,78 @@ def test_get_attr_torch_tensor(device: str):
     assert "constant" in targets
 
     check_functions_are_equivalent(module, device, [x])
+
+
+def test_index_copy_basic(device: str):
+    """Test basic index_copy_ operation"""
+
+    def fn(input_tensor, source, index):
+        return input_tensor.index_copy_(0, index, source)
+
+    input_tensor = torch.zeros(5, 3, dtype=torch.float32)
+    source = torch.ones(2, 3, dtype=torch.float32) * 5.0
+    index = torch.tensor([1, 3], dtype=torch.int64)
+
+    check_functions_are_equivalent(fn, device, [input_tensor, source, index])
+
+
+@pytest.mark.xfail(
+    reason="MAX scatter operations have rank mismatch issues with non-zero dimensions"
+)
+def test_index_copy_different_dim(device: str):
+    """Test index_copy_ operation along different dimensions"""
+
+    def fn(input_tensor, source, index):
+        return input_tensor.index_copy_(1, index, source)
+
+    input_tensor = torch.zeros(3, 5, dtype=torch.float32)
+    source = torch.ones(3, 2, dtype=torch.float32) * 7.0
+    index = torch.tensor([0, 4], dtype=torch.int64)
+
+    check_functions_are_equivalent(fn, device, [input_tensor, source, index])
+
+
+def test_index_copy_single_index(device: str):
+    """Test index_copy_ with single index"""
+
+    def fn(input_tensor, source, index):
+        return input_tensor.index_copy_(0, index, source)
+
+    input_tensor = torch.zeros(4, 2, dtype=torch.float32)
+    source = torch.ones(1, 2, dtype=torch.float32) * 3.0
+    index = torch.tensor([2], dtype=torch.int64)
+
+    check_functions_are_equivalent(fn, device, [input_tensor, source, index])
+
+
+@pytest.mark.xfail(
+    reason="MAX scatter operations have rank mismatch issues with non-zero dimensions"
+)
+def test_index_copy_3d_tensor(device: str):
+    """Test index_copy_ with 3D tensors"""
+
+    def fn(input_tensor, source, index):
+        return input_tensor.index_copy_(1, index, source)
+
+    input_tensor = torch.zeros(2, 4, 3, dtype=torch.float32)
+    source = torch.ones(2, 2, 3, dtype=torch.float32) * 2.5
+    index = torch.tensor([1, 3], dtype=torch.int64)
+
+    check_functions_are_equivalent(fn, device, [input_tensor, source, index])
+
+
+def test_index_copy_with_arithmetic(device: str):
+    """Test index_copy_ combined with arithmetic operations"""
+
+    def fn(input_tensor, source, index, multiplier):
+        result = input_tensor.index_copy_(0, index, source)
+        return result * multiplier
+
+    input_tensor = torch.zeros(3, 2, dtype=torch.float32)
+    source = torch.ones(1, 2, dtype=torch.float32) * 4.0
+    index = torch.tensor([1], dtype=torch.int64)
+    multiplier = torch.tensor(2.0)
+
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, source, index, multiplier]
+    )

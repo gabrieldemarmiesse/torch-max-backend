@@ -306,6 +306,10 @@ def torch_log_api_usage_once_equivalent(*args, **kwargs):
     pass
 
 
+def torch_index_copy_equivalent(input_tensor, dim, index, source):
+    return max.graph.ops.scatter(input_tensor, source, index, axis=dim)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -337,6 +341,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "rsqrt": max.graph.ops.rsqrt,
     "pow": operator.pow,
     "mean": torch_mean_equivalent,
+    "index_copy_": torch_index_copy_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
