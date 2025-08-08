@@ -307,7 +307,30 @@ def torch_log_api_usage_once_equivalent(*args, **kwargs):
 
 
 def torch_index_copy_equivalent(input_tensor, dim, index, source):
-    return max.graph.ops.scatter(input_tensor, source, index, axis=dim)
+    """
+    Equivalent to torch.Tensor.index_copy_(dim, index, tensor).
+
+    PyTorch's index_copy_ copies elements from source to input_tensor at positions
+    specified by index along dimension dim.
+
+    Implementation notes:
+    - For dim=0: Uses scatter_nd which properly handles different tensor shapes
+    - For dim!=0: Falls back to scatter (CPU-only) due to complexity of coordinate generation
+
+    Limitations:
+    - Non-zero dimensions may have device transfer overhead due to scatter's CPU-only operation
+    - Complex coordinate generation for scatter_nd with arbitrary dimensions not yet implemented
+    """
+    if dim == 0:
+        # Dimension 0 case: Use scatter_nd with simple 2D indices
+        # Convert 1D index [i, j, k] to 2D indices [[i], [j], [k]]
+        indices_2d = max.graph.ops.unsqueeze(index, axis=1)
+        return max.graph.ops.scatter_nd(input_tensor, source, indices_2d)
+    else:
+        # For non-zero dimensions, fall back to scatter
+        # Note: This forces CPU execution but handles the axis-based indexing correctly
+        # TODO: Implement proper coordinate generation for scatter_nd to support GPU
+        return max.graph.ops.scatter(input_tensor, source, index, axis=dim)
 
 
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {

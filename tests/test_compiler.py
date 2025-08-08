@@ -2506,7 +2506,7 @@ def test_index_copy_basic(device: str):
 
 
 @pytest.mark.xfail(
-    reason="MAX scatter operations have rank mismatch issues with non-zero dimensions"
+    reason="MAX scatter operations have rank mismatch issues during device transfers"
 )
 def test_index_copy_different_dim(device: str):
     """Test index_copy_ operation along different dimensions"""
@@ -2535,7 +2535,7 @@ def test_index_copy_single_index(device: str):
 
 
 @pytest.mark.xfail(
-    reason="MAX scatter operations have rank mismatch issues with non-zero dimensions"
+    reason="MAX scatter operations have rank mismatch issues during device transfers"
 )
 def test_index_copy_3d_tensor(device: str):
     """Test index_copy_ with 3D tensors"""
