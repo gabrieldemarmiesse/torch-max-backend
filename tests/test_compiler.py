@@ -2551,7 +2551,6 @@ def test_graph_break_with_item_access(device: str):
     explanation = torch._dynamo.explain(fn_with_item)(x)
     assert explanation.graph_break_count == 1
     assert explanation.graph_count == 2
-    # This should cause a graph break due to len() and conditional
     check_functions_are_equivalent(fn_with_item, device, [x])
 
 
@@ -2570,7 +2569,6 @@ def test_graph_break_with_python_loop_over_tensor(device: str):
     explanation = torch._dynamo.explain(fn_with_python_loop)(x)
     assert explanation.graph_break_count == 1
     assert explanation.graph_count == 2
-    # This should cause graph breaks due to Python loop with len()
     check_functions_are_equivalent(fn_with_python_loop, device, [x])
 
 
@@ -2580,7 +2578,6 @@ def test_graph_break_with_python_loop_over_tensor_complexe_dtypes(device: str):
 
     def fn_with_python_loop(x):
         x = x * x
-        # Python iteration over tensor shapes causes graph breaks
         result = x
         for i in range(int(x[0, 0])):  # This will cause graph break
             result = (result * (i + 1)).to(torch.int32)
@@ -2590,7 +2587,6 @@ def test_graph_break_with_python_loop_over_tensor_complexe_dtypes(device: str):
     explanation = torch._dynamo.explain(fn_with_python_loop)(x)
     assert explanation.graph_break_count == 1
     assert explanation.graph_count == 2
-    # This should cause graph breaks due to Python loop with len()
     check_functions_are_equivalent(fn_with_python_loop, device, [x])
 
 
