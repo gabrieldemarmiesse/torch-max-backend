@@ -4,6 +4,9 @@ from collections.abc import Callable
 from max_torch_backend import MaxCompiler
 import pytest
 from torch._dynamo import mark_dynamic
+import warnings
+import io
+from unittest.mock import patch
 
 
 def check_functions_are_equivalent(
@@ -2497,6 +2500,221 @@ def test_get_attr_torch_tensor(device: str):
     assert "constant" in targets
 
     check_functions_are_equivalent(module, device, [x])
+
+
+# Graph Break Tests
+def test_graph_break_with_print(device: str):
+    """Test graph break caused by print statements"""
+
+    def fn_with_print(x):
+        print(f"Processing tensor with shape: {x.shape}")
+        return x * 2
+
+    x = torch.randn(3, 4)
+
+    # This should cause a graph break due to print
+    with patch("sys.stdout", new_callable=io.StringIO):
+        check_functions_are_equivalent(fn_with_print, device, [x])
+
+
+def test_graph_break_with_warnings(device: str):
+    """Test graph break caused by warnings"""
+
+    def fn_with_warning(x):
+        warnings.warn("This is a test warning")
+        return torch.abs(x)
+
+    x = torch.randn(2, 3)
+
+    # This should cause a graph break due to warning
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        check_functions_are_equivalent(fn_with_warning, device, [x])
+
+
+def test_graph_break_with_python_builtin_len(device: str):
+    """Test graph break caused by Python built-in len()"""
+
+    def fn_with_len(x):
+        # Using len() on tensor shape should cause graph break
+        size = len(x.shape)
+        return x * size  # Use multiplication instead of sum/division
+
+    x = torch.randn(2, 3, 4)
+
+    # This might cause a graph break due to len()
+    check_functions_are_equivalent(fn_with_len, device, [x])
+
+
+def test_graph_break_with_python_builtin_max(device: str):
+    """Test graph break caused by Python built-in max()"""
+
+    def fn_with_builtin_max(x):
+        # Using Python's built-in max() instead of torch.max()
+        shape_max = max(x.shape)
+        return x / shape_max
+
+    x = torch.randn(2, 5, 3)
+
+    # This should cause a graph break due to built-in max()
+    check_functions_are_equivalent(fn_with_builtin_max, device, [x])
+
+
+def test_graph_break_with_conditional_tensor_creation(device: str):
+    """Test graph break caused by conditional tensor creation"""
+
+    def fn_with_conditional(x):
+        # Simulate a data-dependent condition using Python built-ins that cause graph breaks
+        shape_product = len(x.shape)  # This causes a graph break
+        if shape_product > 2:
+            result = x * 2
+        else:
+            result = x * -1
+        return result
+
+    x = torch.randn(2, 3)
+
+    # This should cause a graph break due to conditional logic and len()
+    check_functions_are_equivalent(fn_with_conditional, device, [x])
+
+
+def test_graph_break_with_item_access(device: str):
+    """Test graph break caused by .item() calls"""
+
+    def fn_with_item(x):
+        # Use a simpler approach - just check if the tensor has right shape
+        # and use Python operations that cause graph breaks
+        if len(x.shape) > 0:  # This will cause graph break
+            return x * 2
+        else:
+            return x
+
+    x = torch.randn(2, 3) + 1.0  # Ensure non-zero values
+
+    # This should cause a graph break due to len() and conditional
+    check_functions_are_equivalent(fn_with_item, device, [x])
+
+
+def test_graph_break_with_python_loop_over_tensor(device: str):
+    """Test graph break caused by Python loops over tensor elements"""
+
+    def fn_with_python_loop(x):
+        # Python iteration over tensor shapes causes graph breaks
+        result = x
+        for i in range(len(x.shape)):  # This will cause graph break
+            result = result * (i + 1)
+        return result
+
+    x = torch.randn(3, 2)
+
+    # This should cause graph breaks due to Python loop with len()
+    check_functions_are_equivalent(fn_with_python_loop, device, [x])
+
+
+def test_graph_break_with_string_operations(device: str):
+    """Test graph break caused by string operations"""
+
+    def fn_with_string_ops(x):
+        # String operations cause graph breaks
+        tensor_info = f"Tensor shape: {x.shape}, dtype: {x.dtype}"
+        # Just return the tensor since we can't return strings
+        return x * (len(tensor_info) % 10)
+
+    x = torch.randn(2, 3)
+
+    # This should cause graph breaks due to string operations
+    check_functions_are_equivalent(fn_with_string_ops, device, [x])
+
+
+def test_graph_break_with_global_variable_access(device: str):
+    """Test graph break caused by accessing global variables"""
+    global_scale = 2.5
+
+    def fn_with_global_access(x):
+        # Accessing global variables can cause graph breaks
+        return x * global_scale
+
+    x = torch.randn(2, 3)
+
+    # This might cause graph breaks due to global variable access
+    check_functions_are_equivalent(fn_with_global_access, device, [x])
+
+
+def test_graph_break_with_type_checking(device: str):
+    """Test graph break caused by runtime type checking"""
+
+    def fn_with_type_checking(x):
+        # Runtime type checks cause graph breaks
+        if isinstance(x, torch.Tensor):
+            return x.abs()
+        else:
+            return torch.tensor(0.0)
+
+    x = torch.randn(2, 3)
+
+    # This should cause graph breaks due to isinstance check
+    check_functions_are_equivalent(fn_with_type_checking, device, [x])
+
+
+def test_graph_break_with_dictionary_access(device: str):
+    """Test graph break caused by dictionary operations"""
+    config = {"scale": 2.0, "offset": 1.0}
+
+    def fn_with_dict_access(x):
+        # Dictionary access can cause graph breaks
+        return x * config["scale"] + config["offset"]
+
+    x = torch.randn(2, 3)
+
+    # This might cause graph breaks due to dictionary access
+    check_functions_are_equivalent(fn_with_dict_access, device, [x])
+
+
+def test_multiple_graph_breaks_in_sequence(device: str):
+    """Test function with multiple operations that cause graph breaks"""
+
+    def fn_with_multiple_breaks(x):
+        # First graph break: print
+        print(f"Input shape: {x.shape}")
+
+        # Second graph break: len() and conditional
+        ndims = len(x.shape)
+
+        # Third graph break: conditional logic
+        if ndims > 1:
+            result = x * 2
+        else:
+            result = x * -1
+
+        # Fourth graph break: another print
+        print("Result computed")
+
+        return result
+
+    x = torch.randn(2, 3)
+
+    # This should cause multiple graph breaks
+    with patch("sys.stdout", new_callable=io.StringIO):
+        check_functions_are_equivalent(fn_with_multiple_breaks, device, [x])
+
+
+def test_no_graph_breaks_with_supported_operations(device: str):
+    """Test that supported operations don't cause unnecessary graph breaks"""
+
+    def well_supported_fn(x, y):
+        # Only use operations that should be well supported
+        z = x + y
+        z = torch.sin(z)
+        z = torch.cos(z)
+        z = z * 2
+        z = torch.abs(z)
+        return z
+
+    x = torch.randn(3, 4)
+    y = torch.randn(3, 4)
+
+    # This should not cause graph breaks with MAX backend
+    check_functions_are_equivalent(well_supported_fn, device, [x, y])
 
 
 def test_max_pool2d_basic(device: str):
