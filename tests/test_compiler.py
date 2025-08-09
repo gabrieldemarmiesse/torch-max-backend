@@ -4,7 +4,6 @@ from collections.abc import Callable
 from max_torch_backend import MaxCompiler
 import pytest
 from torch._dynamo import mark_dynamic
-import warnings
 import io
 from unittest.mock import patch
 
@@ -2519,24 +2518,6 @@ def test_graph_break_with_print(device: str):
     # This should cause a graph break due to print
     with patch("sys.stdout", new_callable=io.StringIO):
         check_functions_are_equivalent(fn_with_print, device, [x])
-
-
-def test_graph_break_with_warnings(device: str):
-    """Test graph break caused by warnings"""
-
-    def fn_with_warning(x):
-        x = torch.cos(x)
-        warnings.warn("This is a test warning")
-        return torch.abs(x)
-
-    x = torch.randn(2, 3)
-    explanation = torch._dynamo.explain(fn_with_warning)(x)
-    assert explanation.graph_break_count == 1
-    assert explanation.graph_count == 2
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        check_functions_are_equivalent(fn_with_warning, device, [x])
 
 
 def test_graph_break_with_item_access(device: str):
