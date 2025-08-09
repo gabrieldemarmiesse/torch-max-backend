@@ -2594,7 +2594,6 @@ def test_graph_break_with_string_operations(device: str):
     """Test graph break caused by string operations"""
 
     def fn_with_string_ops(x):
-        # String operations cause graph breaks
         x = x * 2
         tensor_info = f"Tensor shape: {x}, dtype: {x.dtype}"
         # Just return the tensor since we can't return strings
