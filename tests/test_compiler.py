@@ -251,54 +251,53 @@ def test_torch_argmin_no_dim(device: str, shapes):
     check_functions_are_equivalent(fn, device, [a])
 
 
+@pytest.mark.parametrize("func", [torch.min, torch.max])
 @pytest.mark.parametrize("shapes", [(8,), (3, 4), (2, 3, 4), (5, 6, 2, 3)])
-def test_torch_max_single_value(device: str, shapes):
-    """Test torch.max(input) - single maximum value variant."""
+def test_torch_max_single_value(device: str, shapes, func):
     if device == "cuda":
         pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
 
     def fn(x):
-        return torch.max(x)
+        return func(x)
 
     a = torch.randn(shapes)
 
     check_functions_are_equivalent(fn, device, [a])
 
 
+@pytest.mark.parametrize("func", [torch.min, torch.max])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("shapes,dims", [((8,), 0), ((2, 3, 4), -1)])
-def test_torch_max_with_dim(device: str, shapes, dims, keepdim):
-    """Test torch.max(input, dim, keepdim) - (values, indices) tuple variant."""
+def test_torch_max_with_dim(device: str, shapes, dims, keepdim, func):
     if device == "cuda":
         pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
 
     def fn(x):
-        return torch.max(x, dim=dims, keepdim=keepdim)
+        return func(x, dim=dims, keepdim=keepdim)
 
     a = torch.randn(shapes)
 
     check_functions_are_equivalent(fn, device, [a])
 
 
+@pytest.mark.parametrize("func", [torch.min, torch.max])
 @pytest.mark.parametrize("shapes,dims", [((8,), 0), ((2, 3, 4), -1)])
-def test_torch_max_with_dim_positional(device: str, shapes, dims):
-    """Test torch.max(input, dim, keepdim) - (values, indices) tuple variant."""
+def test_torch_max_with_dim_positional(device: str, shapes, dims, func):
     if device == "cuda":
         pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
 
     def fn(x):
-        return torch.max(x, dims)
+        return func(x, dims)
 
     a = torch.randn(shapes)
 
     check_functions_are_equivalent(fn, device, [a])
 
 
-def test_torch_max_elementwise(device: str, tensor_shapes: tuple):
-    """Test torch.max(input, other) - element-wise maximum variant."""
-
+@pytest.mark.parametrize("func", [torch.min, torch.max])
+def test_torch_max_elementwise(device: str, tensor_shapes: tuple, func):
     def fn(x, y):
-        return torch.max(x, y)
+        return func(x, y)
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)

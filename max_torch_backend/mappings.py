@@ -583,6 +583,57 @@ def torch_max_equivalent(*args, **kwargs):
         raise ValueError(f"torch.max expects 1-3 arguments, got {len(args)}")
 
 
+def torch_min_equivalent(*args, **kwargs):
+    """
+    Implements torch.min with 3 variants:
+    1. torch.min(input) - single minimum value
+    2. torch.min(input, dim, keepdim=False) - (values, indices) tuple along dimension
+    3. torch.min(input, other) - element-wise minimum
+    """
+    if len(args) == 1:
+        # Variant 1: torch.min(input) - single minimum value
+        input_tensor = args[0]
+        # Check if dim is specified in kwargs
+        if "dim" in kwargs:
+            dim = kwargs["dim"]
+            keepdim = kwargs.get("keepdim", False)
+            # Get both values and indices
+            values = torch_amin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+            indices = torch_argmin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+            return (values, indices)
+        else:
+            return torch_amin_equivalent(input_tensor, dim=None, keepdim=False)
+
+    elif len(args) == 2:
+        input_tensor, second_arg = args
+
+        # Check if second argument is a tensor (element-wise min)
+        if hasattr(second_arg, "shape") and hasattr(second_arg, "dtype"):
+            # Variant 3: torch.min(input, other) - element-wise minimum
+            return max_ops.min(input_tensor, second_arg)
+        else:
+            # Variant 2: torch.min(input, dim) - (values, indices) tuple along dimension
+            dim = second_arg
+            keepdim = kwargs.get("keepdim", False)
+
+            # Get both values and indices
+            values = torch_amin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+            indices = torch_argmin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+
+            # Return as tuple (PyTorch returns namedtuple, but tuple should work)
+            return (values, indices)
+
+    elif len(args) == 3:
+        # Variant 2: torch.min(input, dim, keepdim)
+        input_tensor, dim, keepdim = args
+        values = torch_amin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+        indices = torch_argmin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+        return (values, indices)
+
+    else:
+        raise ValueError(f"torch.min expects 1-3 arguments, got {len(args)}")
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max_ops.abs,
     torch.cos: max_ops.cos,
@@ -613,6 +664,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.argmax: torch_argmax_equivalent,
     torch.argmin: torch_argmin_equivalent,
     torch.max: torch_max_equivalent,
+    torch.min: torch_min_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
