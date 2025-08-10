@@ -430,6 +430,12 @@ def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=N
     return result
 
 
+def torch_type_as_equivalent(
+    input: max_ops.TensorType, other: max_ops.TensorType
+) -> max_ops.TensorType:
+    return max.graph.ops.cast(input, dtype=other.dtype)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -472,6 +478,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "pow": operator.pow,
     "mean": torch_mean_equivalent,
     "tril": torch_tril_equivalent,
+    "type_as": torch_type_as_equivalent,
 }
 
 # Add the exact function objects that appear in VGG FX graph
