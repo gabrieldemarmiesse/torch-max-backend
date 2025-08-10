@@ -251,6 +251,47 @@ def test_torch_argmin_no_dim(device: str, shapes):
     check_functions_are_equivalent(fn, device, [a])
 
 
+@pytest.mark.parametrize("shapes", [(8,), (3, 4), (2, 3, 4), (5, 6, 2, 3)])
+def test_torch_max_single_value(device: str, shapes):
+    """Test torch.max(input) - single maximum value variant."""
+    if device == "cuda":
+        pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
+
+    def fn(x):
+        return torch.max(x)
+
+    a = torch.randn(shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("shapes,dims", [((8,), 0), ((2, 3, 4), -1)])
+def test_torch_max_with_dim(device: str, shapes, dims, keepdim):
+    """Test torch.max(input, dim, keepdim) - (values, indices) tuple variant."""
+    if device == "cuda":
+        pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
+
+    def fn(x):
+        return torch.max(x, dim=dims, keepdim=keepdim)
+
+    a = torch.randn(shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_torch_max_elementwise(device: str, tensor_shapes: tuple):
+    """Test torch.max(input, other) - element-wise maximum variant."""
+
+    def fn(x, y):
+        return torch.max(x, y)
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
 @pytest.mark.parametrize("func", [torch.minimum, torch.maximum])
 def test_minimum_maximum(device: str, tensor_shapes: tuple, func):
     """Only works with elementwise min/max of two tensors."""
