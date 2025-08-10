@@ -166,7 +166,7 @@ def deviceref_to_torch(device_ref: DeviceRef) -> torch.device:
     if device_ref.api == "cpu":
         return torch.device(f"cpu:{device_ref.id}")
     elif device_ref.api == "cuda":
-        return torch.device(f"cuda:{device_ref.index}")
+        return torch.device(f"cuda:{device_ref.id}")
     else:
         raise TypeError(f"Unable to convert {device_ref} to a PyTorch device.")
 
