@@ -534,11 +534,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.max_pool2d: torch_max_pool2d_equivalent,
     F.adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,
     F.dropout: torch_dropout_equivalent,
-    # torch._C._nn.conv2d: torch_conv2d_equivalent,  # This attribute doesn't exist
     torch._C._nn.linear: torch_linear_equivalent,
-    # VGG-specific function object mappings for built-ins
-    # torch._C.flatten: torch_flatten_equivalent,  # Need to find correct reference
-    torch.flatten: torch_flatten_equivalent,  # alternative flatten reference
+    torch.flatten: torch_flatten_equivalent,
     # TODO: Use noop function
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
@@ -573,16 +570,6 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "max": max_ops.max,
     "min": max_ops.min,
 }
-
-# Add the exact function objects that appear in VGG FX graph
-MAPPING_TORCH_TO_MOJO_FUNCTIONS.update(
-    {
-        torch.nn.functional.max_pool2d: torch_max_pool2d_equivalent,  # boolean_dispatch function
-        torch.nn.functional.relu: relu_equivalent,  # <function relu at 0x...>
-        torch.nn.functional.adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,  # <function adaptive_avg_pool2d at 0x...>
-        torch.nn.functional.dropout: torch_dropout_equivalent,  # <function dropout at 0x...>
-    }
-)
 
 for func in IDENTICAL_FUNCTIONS:
     MAPPING_TORCH_TO_MOJO_FUNCTIONS[func] = func

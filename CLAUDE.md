@@ -23,7 +23,7 @@ This is a PyTorch backend implementation using Modular's MAX framework. The proj
 
 ```bash
 # Run tests
-uv run pytest
+uv run pytest -v -n 5
 
 # Run specific test file
 uv run pytest tests/test_compiler.py
