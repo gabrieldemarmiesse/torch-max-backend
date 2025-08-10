@@ -452,73 +452,6 @@ def torch_split_equivalent(
     return max_ops.split(input, new_split_size, dim)
 
 
-def torch_max_equivalent(input, other=None, dim=None, keepdim=False, *, out=None):
-    if other is not None:
-        if isinstance(other, int):
-            dim = other
-        elif isinstance(other, tuple):
-            raise ValueError(
-                "torch.max does not support reducing on multiple dimensions at once. "
-                "Use torch.amax instead."
-            )
-        else:
-            # If other is provided, we use max operation
-            return max_ops.max(input, other)
-    return torch_amax_equivalent(input, dim, keepdim, out=out)
-
-
-def torch_amax_equivalent(input, dim, keepdim=False, *, out=None):
-    # If only input is provided, we find the maximum along the specified dimension
-    if dim is None:
-        dim = [i for i in range(len(input.shape))]
-    elif isinstance(dim, int):
-        dim = [dim]
-
-    # Similar to mean, we can only reduce dimensions one at a time
-    result = input
-    for axis in dim:
-        result = max_ops.max(result, axis=axis)
-    if not keepdim:
-        # Squeeze the reduced dimensions
-        for axis in sorted(dim, reverse=True):
-            result = max_ops.squeeze(result, axis=axis)
-    return result
-
-
-def torch_min_equivalent(input, other=None, dim=None, keepdim=False, *, out=None):
-    if other is not None:
-        if isinstance(other, int):
-            dim = other
-        elif isinstance(other, tuple):
-            raise ValueError(
-                "torch.min does not support reducing on multiple dimensions at once. "
-                "Use torch.amin instead."
-            )
-        else:
-            # If other is provided, we use min operation
-            return max_ops.min(input, other)
-
-    return torch_amax_equivalent(input, dim, keepdim, out=out)
-
-
-def torch_amin_equivalent(input, dim, keepdim=False, *, out=None):
-    # If only input is provided, we find the minimum along the specified dimension
-    if dim is None:
-        dim = [i for i in range(len(input.shape))]
-    elif isinstance(dim, int):
-        dim = [dim]
-
-    # Similar to mean, we can only reduce dimensions one at a time
-    result = input
-    for axis in dim:
-        result = max_ops.min(result, axis=axis)
-    if not keepdim:
-        # Squeeze the reduced dimensions
-        for axis in sorted(dim, reverse=True):
-            result = max_ops.squeeze(result, axis=axis)
-    return result
-
-
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max_ops.abs,
     torch.cos: max_ops.cos,
@@ -534,22 +467,15 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.max_pool2d: torch_max_pool2d_equivalent,
     F.adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,
     F.dropout: torch_dropout_equivalent,
-    # torch._C._nn.conv2d: torch_conv2d_equivalent,  # This attribute doesn't exist
     torch._C._nn.linear: torch_linear_equivalent,
-    # VGG-specific function object mappings for built-ins
-    # torch._C.flatten: torch_flatten_equivalent,  # Need to find correct reference
-    torch.flatten: torch_flatten_equivalent,  # alternative flatten reference
+    torch.flatten: torch_flatten_equivalent,
     # TODO: Use noop function
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
     torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,
     torch.tril: torch_tril_equivalent,
     torch.split: torch_split_equivalent,
-    torch.max: torch_max_equivalent,
-    torch.amax: torch_amax_equivalent,
     torch.maximum: max_ops.max,
-    torch.min: torch_min_equivalent,
-    torch.amin: torch_amin_equivalent,
     torch.minimum: max_ops.min,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
@@ -573,16 +499,6 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "max": max_ops.max,
     "min": max_ops.min,
 }
-
-# Add the exact function objects that appear in VGG FX graph
-MAPPING_TORCH_TO_MOJO_FUNCTIONS.update(
-    {
-        torch.nn.functional.max_pool2d: torch_max_pool2d_equivalent,  # boolean_dispatch function
-        torch.nn.functional.relu: relu_equivalent,  # <function relu at 0x...>
-        torch.nn.functional.adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,  # <function adaptive_avg_pool2d at 0x...>
-        torch.nn.functional.dropout: torch_dropout_equivalent,  # <function dropout at 0x...>
-    }
-)
 
 for func in IDENTICAL_FUNCTIONS:
     MAPPING_TORCH_TO_MOJO_FUNCTIONS[func] = func
