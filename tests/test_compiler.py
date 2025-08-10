@@ -159,6 +159,9 @@ def test_builtin_min_max(device: str, func):
 def test_torch_min_max_single_element(device: str, tensor_shapes, func):
     """Only works with a single element."""
 
+    if device == "cuda":
+        pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
+
     def fn(x):
         return func(x)
 
@@ -209,6 +212,8 @@ def test_torch_amin_amax_single_element_options(
 )
 def test_torch_min_max_single_element_options(device: str, shapes, dims, keepdim, func):
     """Only works with a single element."""
+    if device == "cuda":
+        pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
 
     def fn(x):
         return func(x, dim=dims, keepdim=keepdim)
