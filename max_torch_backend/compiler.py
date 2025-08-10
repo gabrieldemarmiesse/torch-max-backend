@@ -192,9 +192,4 @@ class MaxCompiler:
     def __call__(self, *args) -> list[torch.Tensor]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
-        return [
-            torch.tensor(
-                x, dtype=x.dtype.to_torch(), device=deviceref_to_torch(x.device)
-            )
-            for x in outputs
-        ]
+        return [torch.from_dlpack(x) for x in outputs]
