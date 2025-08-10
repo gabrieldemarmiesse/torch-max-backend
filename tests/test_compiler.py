@@ -76,6 +76,16 @@ def test_multiplication(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
+def test_multiplication_int32(device: str, tensor_shapes: tuple):
+    def fn(x, y):
+        return x * y
+
+    a = torch.randint(0, 10, size=tensor_shapes, dtype=torch.int32)
+    b = torch.randint(0, 10, size=tensor_shapes, dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
 def test_division(device: str, tensor_shapes: tuple):
     def fn(x, y):
         return x / y
