@@ -498,7 +498,7 @@ def torch_min_equivalent(input, other=None, dim=None, keepdim=False, *, out=None
             # If other is provided, we use min operation
             return max_ops.min(input, other)
 
-    return torch_amax_equivalent(input, dim, keepdim, out=out)
+    return torch_amin_equivalent(input, dim, keepdim, out=out)
 
 
 def torch_amin_equivalent(input, dim, keepdim=False, *, out=None):

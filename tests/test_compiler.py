@@ -187,7 +187,14 @@ def test_torch_min_max_multiple_elements(device: str, tensor_shapes, func):
 @pytest.mark.parametrize("func", [torch.amin, torch.amax])
 @pytest.mark.parametrize(
     "shapes,dims",
-    [((3, 4), (0,)), ((5, 6, 2), (0, 2)), ((8,), (0,)), ((2, 3, 4), (-1,))],
+    [
+        ((3, 4), (0,)),
+        ((5, 6, 2), (0, 2)),
+        ((8,), (0,)),
+        ((2, 3, 4), (-1,)),
+        ((2, 3, 4), -1),
+        ((2, 3, 4), None),
+    ],
 )
 def test_torch_amin_amax_single_element_options(
     device: str, shapes, dims, keepdim, func
