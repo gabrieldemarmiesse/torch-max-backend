@@ -10,6 +10,8 @@ from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 import uuid
 import warnings
 
+from max.graph import DeviceRef
+
 
 def get_fully_qualified_name(func):
     result = ""
@@ -159,6 +161,16 @@ def get_accelerators():
                 warnings.warn(f"Failed to create accelerator {i}. {e}")
 
 
+def deviceref_to_torch(device_ref: DeviceRef) -> torch.device:
+    """Returns the equivalent PyTorch device for a MAX graph device."""
+    if device_ref.api == "cpu":
+        return torch.device(f"cpu:{device_ref.id}")
+    elif device_ref.api == "cuda":
+        return torch.device(f"cuda:{device_ref.index}")
+    else:
+        raise TypeError(f"Unable to convert {device_ref} to a PyTorch device.")
+
+
 class MaxCompiler:
     def __init__(
         self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
@@ -169,6 +181,7 @@ class MaxCompiler:
         print(f"number of nodes: {len(gm.graph.nodes)}")
 
         max_input_specs = generate_input_types(keep_only_tensors(example_inputs))
+        print(f"max_input_specs: {max_input_specs}")
         with Graph("some_graph", input_types=max_input_specs) as graph:
             outputs = GraphFunction(self.gm)(*graph.inputs)
             graph.output(*outputs)
@@ -179,4 +192,9 @@ class MaxCompiler:
     def __call__(self, *args) -> list[torch.Tensor]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
-        return [torch.Tensor(x) for x in outputs]
+        return [
+            torch.tensor(
+                x, dtype=x.dtype.to_torch(), device=deviceref_to_torch(x.device)
+            )
+            for x in outputs
+        ]
