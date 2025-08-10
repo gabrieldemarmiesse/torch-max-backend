@@ -10,6 +10,7 @@ from max.dtype import DType
 from max.graph import StaticDim
 import max.graph.type as max_type
 import numpy as np
+import math
 
 # Import specific function objects that appear in VGG FX graph
 import torch._C._nn  # for conv2d and linear built-ins
@@ -653,7 +654,17 @@ def torch_clamp_equivalent(input, min=None, max=None, *, out=None):
     return result
 
 
-def torch_arange_equivalent(*args, **kwargs):
+def torch_arange_equivalent(
+    start,
+    end=None,
+    step=1,
+    *,
+    out=None,
+    dtype=None,
+    layout=torch.strided,
+    device=None,
+    requires_grad=False,
+):
     """
     Implements torch.arange using max_ops.range.
 
@@ -664,72 +675,33 @@ def torch_arange_equivalent(*args, **kwargs):
 
     Keyword arguments like dtype, device are also supported.
     """
-    # Handle positional arguments
-    if len(args) == 1:
-        # torch.arange(end)
-        start = 0
-        end = args[0]
-        step = 1
-    elif len(args) == 2:
-        # torch.arange(start, end)
-        start = args[0]
-        end = args[1]
-        step = 1
-    elif len(args) == 3:
-        # torch.arange(start, end, step)
-        start = args[0]
-        end = args[1]
-        step = args[2]
-    else:
-        # Handle keyword-only version
-        start = kwargs.get("start", 0)
-        end = kwargs.get("end")
-        step = kwargs.get("step", 1)
-
-        if end is None:
-            raise ValueError("torch.arange requires 'end' to be specified")
-
-    # Handle dtype - convert PyTorch dtype to MAX dtype if provided
-    dtype = kwargs.get("dtype", None)
-    if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
-    else:
+    if dtype is None:
         # Default dtype inference like PyTorch:
         # If any of start, end, step are float, use float32
         # Otherwise use int64
         if any(isinstance(x, float) for x in [start, end, step]):
-            max_dtype = max_type.DType.float32
+            dtype = torch.float32
         else:
-            max_dtype = max_type.DType.int64
+            dtype = torch.int64
+    dtype = DType.from_torch(dtype)
 
-    # Handle device
-    device = kwargs.get("device", None)
-    if device is not None:
-        if isinstance(device, str):
-            if device == "cpu":
-                max_device = DeviceRef.CPU()
-            elif device == "cuda":
-                max_device = DeviceRef.GPU()
-            else:
-                raise ValueError(f"Unsupported device string: {device}")
-        elif isinstance(device, torch.device):
-            max_device = max_device_ref(device)
-        else:
-            max_device = device
-    else:
-        max_device = DeviceRef.CPU()  # Default to CPU
+    if device is None:
+        device = torch.get_default_device()
+    device = max_device_ref(device)
+
+    if end is None:
+        # Single argument form: torch.arange(end)
+        end = start
+        start = 0
 
     # Calculate output dimension for max_ops.range
     # The length is ceil((end - start) / step) as per PyTorch docs
-    import math
 
     out_length = math.ceil((end - start) / step)
     out_dim = int(out_length)  # Convert to integer for MAX
 
     # Use max_ops.range to create the sequence
-    return max_ops.range(
-        start, end, step, out_dim=out_dim, device=max_device, dtype=max_dtype
-    )
+    return max_ops.range(start, end, step, out_dim=out_dim, device=device, dtype=dtype)
 
 
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
