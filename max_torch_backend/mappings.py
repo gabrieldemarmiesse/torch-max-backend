@@ -34,6 +34,7 @@ IDENTICAL_FUNCTIONS = [
     operator.and_,
     operator.or_,
     operator.xor,
+    operator.max,
     torch.add,
     torch.sub,
     torch.mul,
@@ -449,6 +450,10 @@ def torch_split_equivalent(
     return max_ops.split(input, new_split_size, dim)
 
 
+def torch_max_equivalent(input, other, dim, keepdim=False, *, out=None):
+    raise NotImplementedError()
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -475,6 +480,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,
     torch.tril: torch_tril_equivalent,
     torch.split: torch_split_equivalent,
+    torch.max: max.graph.ops.max,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -494,6 +500,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "tril": torch_tril_equivalent,
     "type_as": torch_type_as_equivalent,
     "split": torch_split_equivalent,
+    "max": max.graph.ops.max,
 }
 
 # Add the exact function objects that appear in VGG FX graph
