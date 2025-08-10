@@ -3002,3 +3002,61 @@ def test_tril_int32(device: str):
     # Test with float32 (main supported type)
     x_float32 = torch.randint(0, 5, (3, 3), dtype=torch.int32)
     check_functions_are_equivalent(fn, device, [x_float32])
+
+
+def test_split_basic(device: str):
+    """Test basic tensor splitting"""
+
+    def fn(x):
+        return torch.split(x, 2, 0)
+
+    x = torch.randn(6, 4)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_split_uneven(device: str):
+    """Test tensor splitting with uneven split sizes"""
+
+    def fn(x):
+        return torch.split(x, 3, 0)
+
+    # 7 elements split by 3 should give splits of [3, 3, 1]
+    x = torch.randn(7, 4)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_split_different_dims(device: str):
+    """Test tensor splitting along different dimensions"""
+
+    def fn_dim0(x):
+        return torch.split(x, 2, 0)
+
+    def fn_dim1(x):
+        return torch.split(x, 3, 1)
+
+    x = torch.randn(4, 6)
+
+    check_functions_are_equivalent(fn_dim0, device, [x])
+    check_functions_are_equivalent(fn_dim1, device, [x])
+
+
+def test_split_single_element(device: str):
+    """Test tensor splitting into single elements"""
+
+    def fn(x):
+        return torch.split(x, 1, 0)
+
+    x = torch.randn(3, 2)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_type_as_same_dtype(device: str):
+    """Test type_as with same dtype (float32 to float32)"""
+
+    def fn(x, y):
+        return x.type_as(y)
+
+    x = torch.randn(3, 3, dtype=torch.float32)
+    y = torch.randn(2, 2, dtype=torch.float32)
+
+    check_functions_are_equivalent(fn, device, [x, y])

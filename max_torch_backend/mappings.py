@@ -444,7 +444,9 @@ def torch_split_equivalent(
         new_split_size = [split_size] * (shape // split_size)
         if shape % split_size != 0:
             new_split_size.append(shape % split_size)
-    return max_ops.split(input, split_size=new_split_size, dim=dim)
+    else:
+        new_split_size = split_size
+    return max_ops.split(input, new_split_size, dim)
 
 
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
