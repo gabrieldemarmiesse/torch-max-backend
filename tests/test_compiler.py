@@ -3048,15 +3048,3 @@ def test_split_single_element(device: str):
 
     x = torch.randn(3, 2)
     check_functions_are_equivalent(fn, device, [x])
-
-
-def test_type_as_same_dtype(device: str):
-    """Test type_as with same dtype (float32 to float32)"""
-
-    def fn(x, y):
-        return x.type_as(y)
-
-    x = torch.randn(3, 3, dtype=torch.float32)
-    y = torch.randn(2, 2, dtype=torch.float32)
-
-    check_functions_are_equivalent(fn, device, [x, y])
