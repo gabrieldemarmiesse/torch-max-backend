@@ -488,6 +488,28 @@ def torch_amin_equivalent(input, dim, keepdim=False, *, out=None):
     return result
 
 
+def torch_argmax_equivalent(input, dim=None, keepdim=False, *, out=None):
+    # If dim is None, return argmax of flattened tensor
+    if dim is None:
+        # Flatten the tensor and compute argmax along axis 0
+        flattened = max_ops.reshape(input, [-1])
+        result = max_ops.argmax(flattened, axis=0)
+        if keepdim:
+            # Return tensor with same number of dimensions as input, all size 1
+            result_shape = [1] * len(input.shape)
+            result = max_ops.reshape(result, result_shape)
+        else:
+            # Return scalar (0-dimensional tensor)
+            result = max_ops.squeeze(result, axis=0)
+    else:
+        # Compute argmax along specified dimension
+        result = max_ops.argmax(input, axis=dim)
+        if not keepdim:
+            # Squeeze the reduced dimension
+            result = max_ops.squeeze(result, axis=dim)
+    return result
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max_ops.abs,
     torch.cos: max_ops.cos,
@@ -515,6 +537,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.maximum: max_ops.max,
     torch.amin: torch_amin_equivalent,
     torch.minimum: max_ops.min,
+    torch.argmax: torch_argmax_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
