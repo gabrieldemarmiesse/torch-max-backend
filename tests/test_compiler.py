@@ -280,6 +280,20 @@ def test_torch_max_with_dim(device: str, shapes, dims, keepdim):
     check_functions_are_equivalent(fn, device, [a])
 
 
+@pytest.mark.parametrize("shapes,dims", [((8,), 0), ((2, 3, 4), -1)])
+def test_torch_max_with_dim_positional(device: str, shapes, dims):
+    """Test torch.max(input, dim, keepdim) - (values, indices) tuple variant."""
+    if device == "cuda":
+        pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
+
+    def fn(x):
+        return torch.max(x, dims)
+
+    a = torch.randn(shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
 def test_torch_max_elementwise(device: str, tensor_shapes: tuple):
     """Test torch.max(input, other) - element-wise maximum variant."""
 
