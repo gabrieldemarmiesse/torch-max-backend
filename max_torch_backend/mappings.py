@@ -452,21 +452,6 @@ def torch_split_equivalent(
     return max_ops.split(input, new_split_size, dim)
 
 
-def torch_max_equivalent(input, other=None, dim=None, keepdim=False, *, out=None):
-    if other is not None:
-        if isinstance(other, int):
-            dim = other
-        elif isinstance(other, tuple):
-            raise ValueError(
-                "torch.max does not support reducing on multiple dimensions at once. "
-                "Use torch.amax instead."
-            )
-        else:
-            # If other is provided, we use max operation
-            return max_ops.max(input, other)
-    return torch_amax_equivalent(input, dim, keepdim, out=out)
-
-
 def torch_amax_equivalent(input, dim, keepdim=False, *, out=None):
     # If only input is provided, we find the maximum along the specified dimension
     if dim is None:
@@ -483,22 +468,6 @@ def torch_amax_equivalent(input, dim, keepdim=False, *, out=None):
         for axis in sorted(dim, reverse=True):
             result = max_ops.squeeze(result, axis=axis)
     return result
-
-
-def torch_min_equivalent(input, other=None, dim=None, keepdim=False, *, out=None):
-    if other is not None:
-        if isinstance(other, int):
-            dim = other
-        elif isinstance(other, tuple):
-            raise ValueError(
-                "torch.min does not support reducing on multiple dimensions at once. "
-                "Use torch.amin instead."
-            )
-        else:
-            # If other is provided, we use min operation
-            return max_ops.min(input, other)
-
-    return torch_amax_equivalent(input, dim, keepdim, out=out)
 
 
 def torch_amin_equivalent(input, dim, keepdim=False, *, out=None):
@@ -542,10 +511,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,
     torch.tril: torch_tril_equivalent,
     torch.split: torch_split_equivalent,
-    torch.max: torch_max_equivalent,
     torch.amax: torch_amax_equivalent,
     torch.maximum: max_ops.max,
-    torch.min: torch_min_equivalent,
     torch.amin: torch_amin_equivalent,
     torch.minimum: max_ops.min,
     # methods are given as strings in the graph
