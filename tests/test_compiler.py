@@ -143,6 +143,92 @@ def test_sin(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
+@pytest.mark.parametrize("func", [min, max])
+def test_builtin_min_max(device: str, func):
+    """Only works with a single dimension."""
+
+    def fn(x):
+        return func(x)
+
+    a = torch.randn((9,))
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("func", [torch.min, torch.max])
+def test_torch_min_max_single_element(device: str, tensor_shapes, func):
+    """Only works with a single element."""
+
+    def fn(x):
+        return func(x)
+
+    a = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("func", [torch.min, torch.max])
+def test_torch_min_max_multiple_elements(device: str, tensor_shapes, func):
+    """Only works with a single element."""
+
+    def fn(x, y):
+        return func(x, y)
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("func", [torch.amin, torch.amax])
+@pytest.mark.parametrize(
+    "shapes,dims",
+    [((3, 4), (0,)), ((5, 6, 2), (0, 2)), ((8,), (0,)), ((2, 3, 4), (-1,))],
+)
+def test_torch_amin_amax_single_element_options(
+    device: str, shapes, dims, keepdim, func
+):
+    """Only works with a single element."""
+
+    def fn(x):
+        return func(x, dim=dims, keepdim=keepdim)
+
+    a = torch.randn(shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.xfail(reason="WTF?")
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("func", [torch.min, torch.max])
+@pytest.mark.parametrize(
+    "shapes,dims", [((3, 4), 0), ((5, 6, 2), 2), ((8,), 0), ((2, 3, 4), -1)]
+)
+def test_torch_min_max_single_element_options(device: str, shapes, dims, keepdim, func):
+    """Only works with a single element."""
+
+    def fn(x):
+        return func(x, dim=dims, keepdim=keepdim)
+
+    a = torch.randn(shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("func", [torch.minimum, torch.maximum])
+def test_minimum_maximum(device: str, tensor_shapes: tuple, func):
+    """Only works with elementwise min/max of two tensors."""
+
+    def fn(x, y):
+        return func(x, y)
+
+    a = torch.randn(tensor_shapes)
+    b = torch.randn(tensor_shapes)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
 def test_relu(device: str, tensor_shapes: tuple):
     def fn(x):
         return F.relu(x)
