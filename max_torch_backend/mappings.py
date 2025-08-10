@@ -665,16 +665,6 @@ def torch_arange_equivalent(
     device=None,
     requires_grad=False,
 ):
-    """
-    Implements torch.arange using max_ops.range.
-
-    Supports multiple call signatures:
-    - torch.arange(end)
-    - torch.arange(start, end)
-    - torch.arange(start, end, step)
-
-    Keyword arguments like dtype, device are also supported.
-    """
     if dtype is None:
         # Default dtype inference like PyTorch:
         # If any of start, end, step are float, use float32
