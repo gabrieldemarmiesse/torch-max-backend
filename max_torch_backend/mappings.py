@@ -421,15 +421,18 @@ def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=N
             f"Input tensor must be 2D, got {len(shape)}D tensor with shape {shape}"
         )
 
-    if not isinstance(shape[0], int) or not isinstance(shape[1], int):
-        raise ValueError(f"Input tensor must have integer dimensions, got {shape}")
+    for i in range(len(shape)):
+        if not isinstance(shape[i], max.graph.StaticDim):
+            raise ValueError(f"Input dims must be static, got shape {shape}")
 
-    numpy_mask = np.ones(input.shape, dtype=np.int32)
+    rows = int(shape[0])
+    cols = int(shape[1])
+
+    numpy_mask = np.ones((rows, cols), dtype=input.dtype.to_numpy())
     numpy_mask = np.tril(numpy_mask, k=diagonal)
-    mask_in_graph = max_ops.constant(
-        numpy_mask, dtype=max.graph.type.DType.int32, device=input.device
-    )
-    return input * mask_in_graph
+    mask_in_graph = max_ops.constant(numpy_mask, dtype=input.dtype, device=input.device)
+    result = input * mask_in_graph
+    return result
 
 
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {

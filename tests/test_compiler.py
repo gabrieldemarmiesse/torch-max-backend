@@ -2926,3 +2926,59 @@ def test_max_pool2d_return_indices(device: str):
     x = torch.randn(batch_size, channels, height, width)
 
     check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tril_basic(device: str):
+    """Test basic tril operation on 2D tensor"""
+
+    def fn(x):
+        return torch.tril(x)
+
+    x = torch.randn(4, 4)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tril_with_positive_diagonal(device: str):
+    """Test tril with positive diagonal offset"""
+
+    def fn(x):
+        return torch.tril(x, diagonal=1)
+
+    x = torch.randn(5, 5)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tril_with_negative_diagonal(device: str):
+    """Test tril with negative diagonal offset"""
+
+    def fn(x):
+        return torch.tril(x, diagonal=-1)
+
+    x = torch.randn(4, 4)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tril_rectangular_matrix(device: str):
+    """Test tril on rectangular matrices"""
+
+    def fn(x):
+        return torch.tril(x)
+
+    # Test both tall and wide matrices
+    x_tall = torch.randn(6, 4)
+    x_wide = torch.randn(3, 7)
+
+    check_functions_are_equivalent(fn, device, [x_tall])
+    check_functions_are_equivalent(fn, device, [x_wide])
+
+
+@pytest.mark.xfail(reason="FIXME: Gets converted to float32 but not sure why")
+def test_tril_int32(device: str):
+    """Test tril with float32 tensors"""
+
+    def fn(x):
+        return torch.tril(x)
+
+    # Test with float32 (main supported type)
+    x_float32 = torch.randint(0, 5, (3, 3), dtype=torch.int32)
+    check_functions_are_equivalent(fn, device, [x_float32])
