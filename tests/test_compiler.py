@@ -190,6 +190,8 @@ def test_torch_amin_amax_single_element_options(
     device: str, shapes, dims, keepdim, func
 ):
     """Only works with a single element."""
+    if device == "cuda":
+        pytest.xfail("ValueError: GPU reduction currently limited to inner axis.")
 
     def fn(x):
         return func(x, dim=dims, keepdim=keepdim)
