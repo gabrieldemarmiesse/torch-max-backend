@@ -634,6 +634,25 @@ def torch_min_equivalent(*args, **kwargs):
         raise ValueError(f"torch.min expects 1-3 arguments, got {len(args)}")
 
 
+def torch_clamp_equivalent(input, min=None, max=None, *, out=None):
+    """
+    Implements torch.clamp by clamping all elements in input to the range [min, max].
+    Uses max_ops.max and max_ops.min to implement clamp as:
+    clamp(x, min, max) = min(max(x, min), max)
+    """
+    result = input
+
+    # Apply lower bound if min is provided
+    if min is not None:
+        result = max_ops.max(result, min)
+
+    # Apply upper bound if max is provided
+    if max is not None:
+        result = max_ops.min(result, max)
+
+    return result
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max_ops.abs,
     torch.cos: max_ops.cos,
@@ -665,6 +684,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.argmin: torch_argmin_equivalent,
     torch.max: torch_max_equivalent,
     torch.min: torch_min_equivalent,
+    torch.clamp: torch_clamp_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,

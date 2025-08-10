@@ -3203,3 +3203,69 @@ def test_split_single_element(device: str):
 
     x = torch.randn(3, 2)
     check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("shapes", [(8,), (3, 4), (2, 3, 4)])
+def test_torch_clamp_both_bounds(device: str, shapes):
+    """Test torch.clamp with both min and max bounds."""
+
+    def fn(x):
+        return torch.clamp(x, min=-0.5, max=0.5)
+
+    a = torch.randn(shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("shapes", [(8,), (3, 4), (2, 3, 4)])
+def test_torch_clamp_min_only(device: str, shapes):
+    """Test torch.clamp with only min bound."""
+
+    def fn(x):
+        return torch.clamp(x, min=-1.0)
+
+    a = torch.randn(shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("shapes", [(8,), (3, 4), (2, 3, 4)])
+def test_torch_clamp_max_only(device: str, shapes):
+    """Test torch.clamp with only max bound."""
+
+    def fn(x):
+        return torch.clamp(x, max=1.0)
+
+    a = torch.randn(shapes)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_torch_clamp_tensor_bounds(device: str, tensor_shapes: tuple):
+    """Test torch.clamp with tensor bounds (min and max as tensors)."""
+
+    def fn(x, min_tensor, max_tensor):
+        return torch.clamp(x, min=min_tensor, max=max_tensor)
+
+    a = torch.randn(tensor_shapes)
+    min_tensor = torch.full(tensor_shapes, -0.5)
+    max_tensor = torch.full(tensor_shapes, 0.5)
+
+    check_functions_are_equivalent(fn, device, [a, min_tensor, max_tensor])
+
+
+def test_torch_clamp_edge_cases(device: str):
+    """Test torch.clamp edge cases with specific values."""
+
+    def fn_identical_bounds(x):
+        # When min equals max, all values should be set to that value
+        return torch.clamp(x, min=0.5, max=0.5)
+
+    def fn_inverted_bounds(x):
+        # When min > max, PyTorch sets all values to max
+        return torch.clamp(x, min=1.0, max=0.5)
+
+    a = torch.tensor([-2.0, -0.5, 0.0, 0.5, 1.0, 2.0])
+
+    check_functions_are_equivalent(fn_identical_bounds, device, [a])
+    check_functions_are_equivalent(fn_inverted_bounds, device, [a])
