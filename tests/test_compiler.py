@@ -3269,3 +3269,138 @@ def test_torch_clamp_edge_cases(device: str):
 
     check_functions_are_equivalent(fn_identical_bounds, device, [a])
     check_functions_are_equivalent(fn_inverted_bounds, device, [a])
+
+
+def test_torch_arange_single_arg(device: str):
+    """Test torch.arange(end) - single argument form."""
+
+    def fn():
+        return torch.arange(5)
+
+    def fn_float():
+        return torch.arange(5.0)
+
+    # Can't use check_functions_are_equivalent since these don't take tensor inputs
+    fn_compiled = torch.compile(backend=MaxCompiler)(fn)
+    fn_float_compiled = torch.compile(backend=MaxCompiler)(fn_float)
+
+    expected = fn()
+    result = fn_compiled()
+    expected_float = fn_float()
+    result_float = fn_float_compiled()
+
+    if device == "cuda":
+        pytest.skip("CUDA tests skipped for arange")
+
+    assert torch.equal(expected, result)
+    assert expected.dtype == result.dtype
+
+    assert torch.allclose(expected_float, result_float)
+    assert expected_float.dtype == result_float.dtype
+
+
+def test_torch_arange_two_args(device: str):
+    """Test torch.arange(start, end) - two argument form."""
+
+    def fn():
+        return torch.arange(1, 8)
+
+    def fn_negative():
+        return torch.arange(-3, 2)
+
+    fn_compiled = torch.compile(backend=MaxCompiler)(fn)
+    fn_negative_compiled = torch.compile(backend=MaxCompiler)(fn_negative)
+
+    if device == "cuda":
+        pytest.skip("CUDA tests skipped for arange")
+
+    expected = fn()
+    result = fn_compiled()
+    assert torch.equal(expected, result)
+    assert expected.dtype == result.dtype
+
+    expected_neg = fn_negative()
+    result_neg = fn_negative_compiled()
+    assert torch.equal(expected_neg, result_neg)
+    assert expected_neg.dtype == result_neg.dtype
+
+
+def test_torch_arange_three_args(device: str):
+    """Test torch.arange(start, end, step) - three argument form."""
+
+    def fn_step2():
+        return torch.arange(0, 10, 2)
+
+    def fn_float_step():
+        return torch.arange(0.0, 3.0, 0.5)
+
+    def fn_negative_step():
+        return torch.arange(10, 0, -1)
+
+    fn_step2_compiled = torch.compile(backend=MaxCompiler)(fn_step2)
+    fn_float_step_compiled = torch.compile(backend=MaxCompiler)(fn_float_step)
+    fn_negative_step_compiled = torch.compile(backend=MaxCompiler)(fn_negative_step)
+
+    if device == "cuda":
+        pytest.skip("CUDA tests skipped for arange")
+
+    # Test integer step
+    expected = fn_step2()
+    result = fn_step2_compiled()
+    assert torch.equal(expected, result)
+    assert expected.dtype == result.dtype
+
+    # Test float step
+    expected_float = fn_float_step()
+    result_float = fn_float_step_compiled()
+    assert torch.allclose(expected_float, result_float)
+    assert expected_float.dtype == result_float.dtype
+
+    # Test negative step
+    expected_neg = fn_negative_step()
+    result_neg = fn_negative_step_compiled()
+    assert torch.equal(expected_neg, result_neg)
+    assert expected_neg.dtype == result_neg.dtype
+
+
+def test_torch_arange_with_dtype(device: str):
+    """Test torch.arange with explicit dtype."""
+
+    def fn_float32():
+        return torch.arange(5, dtype=torch.float32)
+
+    def fn_int32():
+        return torch.arange(5, dtype=torch.int32)
+
+    fn_float32_compiled = torch.compile(backend=MaxCompiler)(fn_float32)
+    fn_int32_compiled = torch.compile(backend=MaxCompiler)(fn_int32)
+
+    if device == "cuda":
+        pytest.skip("CUDA tests skipped for arange")
+
+    expected_f32 = fn_float32()
+    result_f32 = fn_float32_compiled()
+    assert torch.allclose(expected_f32, result_f32)
+    assert expected_f32.dtype == result_f32.dtype
+
+    expected_i32 = fn_int32()
+    result_i32 = fn_int32_compiled()
+    assert torch.equal(expected_i32, result_i32)
+    assert expected_i32.dtype == result_i32.dtype
+
+
+@pytest.mark.parametrize("device_str", ["cpu"])
+def test_torch_arange_with_device(device_str: str):
+    """Test torch.arange with explicit device."""
+
+    def fn():
+        return torch.arange(5, device=device_str)
+
+    fn_compiled = torch.compile(backend=MaxCompiler)(fn)
+
+    expected = fn()
+    result = fn_compiled()
+
+    assert torch.equal(expected, result)
+    assert expected.dtype == result.dtype
+    assert expected.device == result.device
