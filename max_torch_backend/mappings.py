@@ -727,6 +727,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.min: torch_min_equivalent,
     torch.clamp: torch_clamp_equivalent,
     torch.arange: torch_arange_equivalent,
+    torch.outer: max_ops.outer,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,

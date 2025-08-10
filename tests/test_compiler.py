@@ -153,6 +153,17 @@ def test_sin(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_outer(device: str):
+    def fn(x, y):
+        return torch.outer(x, y)
+
+    # torch.outer requires 1D tensors
+    a = torch.randn(5)
+    b = torch.randn(3)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
 @pytest.mark.parametrize("func", [min, max])
 def test_builtin_min_max(device: str, func):
     """Only works with a single dimension."""
