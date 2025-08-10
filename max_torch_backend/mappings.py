@@ -436,6 +436,17 @@ def torch_type_as_equivalent(
     return max.graph.ops.cast(input, dtype=other.dtype)
 
 
+def torch_split_equivalent(
+    input: max_ops.TensorType, split_size: int | list[int], dim: int = 0
+) -> list[max_ops.TensorType]:
+    if isinstance(split_size, int):
+        shape = int(input.shape[dim])
+        new_split_size = [split_size] * (shape // split_size)
+        if shape % split_size != 0:
+            new_split_size.append(shape % split_size)
+    return max_ops.split(input, split_size=new_split_size, dim=dim)
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -461,6 +472,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
     torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,
     torch.tril: torch_tril_equivalent,
+    torch.split: torch_split_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -479,6 +491,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "mean": torch_mean_equivalent,
     "tril": torch_tril_equivalent,
     "type_as": torch_type_as_equivalent,
+    "split": torch_split_equivalent,
 }
 
 # Add the exact function objects that appear in VGG FX graph
