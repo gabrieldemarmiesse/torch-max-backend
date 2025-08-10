@@ -1,12 +1,14 @@
 import operator
 
 import max.graph.ops
+import max.graph.ops as max_ops
 import torch
 import torch.nn.functional as F
 import torch.amp.autocast_mode
 from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
 from max.dtype import DType
+import numpy as np
 
 # Import specific function objects that appear in VGG FX graph
 import torch._C._nn  # for conv2d and linear built-ins
@@ -410,6 +412,26 @@ def torch_dropout_equivalent(input, p=0.5, training=True, inplace=False):
         return input
 
 
+def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
+    # Max doesn't have tril built-in, so we get around this. It should be pretty
+    # easy to implement on cpu and gpu though.
+    shape = input.shape
+    if len(shape) != 2:
+        raise ValueError(
+            f"Input tensor must be 2D, got {len(shape)}D tensor with shape {shape}"
+        )
+
+    if not isinstance(shape[0], int) or not isinstance(shape[1], int):
+        raise ValueError(f"Input tensor must have integer dimensions, got {shape}")
+
+    numpy_mask = np.ones(input.shape, dtype=np.int32)
+    numpy_mask = np.tril(numpy_mask, k=diagonal)
+    mask_in_graph = max_ops.constant(
+        numpy_mask, dtype=max.graph.type.DType.int32, device=input.device
+    )
+    return input * mask_in_graph
+
+
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.abs: max.graph.ops.abs,
     torch.cos: max.graph.ops.cos,
@@ -434,6 +456,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.amp.autocast_mode._enter_autocast: torch_autocast_equivalent,
     torch.amp.autocast_mode._exit_autocast: torch_autocast_equivalent,
     torch._C._log_api_usage_once: torch_log_api_usage_once_equivalent,
+    torch.tril: torch_tril_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
