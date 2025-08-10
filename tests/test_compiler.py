@@ -2972,6 +2972,26 @@ def test_tril_rectangular_matrix(device: str):
     check_functions_are_equivalent(fn, device, [x_wide])
 
 
+def test_tril_3_dimensions(device: str):
+    """Test tril on 3D tensor (should apply tril to each 2D slice)"""
+
+    def fn(x):
+        return torch.tril(x)
+
+    x = torch.randn(2, 4, 6)  # 2 slices of 4x4 matrices
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tril_4_dimensions(device: str):
+    """Test tril on 4D tensor (should apply tril to each 2D slice)"""
+
+    def fn(x):
+        return torch.tril(x)
+
+    x = torch.randn(2, 3, 4, 5)  # 2 batches of 3 slices of 4x4 matrices
+    check_functions_are_equivalent(fn, device, [x])
+
+
 @pytest.mark.xfail(reason="FIXME: Gets converted to float32 but not sure why")
 def test_tril_int32(device: str):
     """Test tril with float32 tensors"""

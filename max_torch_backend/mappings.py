@@ -416,19 +416,14 @@ def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=N
     # Max doesn't have tril built-in, so we get around this. It should be pretty
     # easy to implement on cpu and gpu though.
     shape = input.shape
-    if len(shape) != 2:
-        raise ValueError(
-            f"Input tensor must be 2D, got {len(shape)}D tensor with shape {shape}"
-        )
 
     for i in range(len(shape)):
         if not isinstance(shape[i], max.graph.StaticDim):
             raise ValueError(f"Input dims must be static, got shape {shape}")
 
-    rows = int(shape[0])
-    cols = int(shape[1])
+    shape_ints = [int(dim) for dim in shape]
 
-    numpy_mask = np.ones((rows, cols), dtype=input.dtype.to_numpy())
+    numpy_mask = np.ones(shape_ints, dtype=input.dtype.to_numpy())
     numpy_mask = np.tril(numpy_mask, k=diagonal)
     mask_in_graph = max_ops.constant(numpy_mask, dtype=input.dtype, device=input.device)
     result = input * mask_in_graph
@@ -476,6 +471,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "rsqrt": max.graph.ops.rsqrt,
     "pow": operator.pow,
     "mean": torch_mean_equivalent,
+    "tril": torch_tril_equivalent,
 }
 
 # Add the exact function objects that appear in VGG FX graph
