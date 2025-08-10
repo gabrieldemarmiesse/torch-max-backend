@@ -43,6 +43,8 @@ IDENTICAL_FUNCTIONS = [
     torch.pow,
     torch.remainder,
     str,
+    max,
+    min,
 ]
 
 
