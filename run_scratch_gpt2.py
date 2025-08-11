@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from max_torch_backend import MaxCompiler
+from torch._dynamo import mark_dynamic
 
 
 class CausalSelfAttention(nn.Module):
@@ -217,7 +218,7 @@ class GPT2(nn.Module):
 
     def forward(self, idx, targets=None):
         device = idx.device
-        b, t = idx.size()
+        b, t = idx.shape
         assert t <= self.config.block_size, (
             f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         )
@@ -328,6 +329,10 @@ def main():
                 if idx.size(1) <= model.config.block_size
                 else idx[:, -model.config.block_size :]
             )
+            # Mark the conditioned input as dynamic too
+            mark_dynamic(idx_cond, 0)  # Batch dimension
+            mark_dynamic(idx_cond, 1)  # Sequence length dimension
+
             # Use compiled forward pass for each step
             logits, _ = compiled_forward(idx_cond)
             logits = logits[:, -1, :] / temperature

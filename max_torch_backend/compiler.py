@@ -17,6 +17,15 @@ class MaxCompilerError(Exception):
     pass
 
 
+def analyze_dynamic_shapes(example_inputs):
+    for i, inp in enumerate(example_inputs):
+        if isinstance(inp, torch.SymInt):
+            print(f"Input {i} is a symbolic integer: {inp}")
+        if hasattr(inp, "_dynamo_dynamic_indices"):
+            for dim_idx in inp._dynamo_dynamic_indices:
+                print(f"Input {i} Dynamic dimension at index {dim_idx} for input {inp}")
+
+
 def get_fully_qualified_name(func):
     if isinstance(func, str):
         return f"torch.Tensor.{func}"
@@ -184,7 +193,8 @@ class MaxCompiler:
     ):
         self.gm = gm
         self.example_inputs = example_inputs
-        # gm.graph.print_tabular()
+        gm.graph.print_tabular()
+        analyze_dynamic_shapes(example_inputs)
         print(f"number of nodes: {len(gm.graph.nodes)}")
         print(f"Number of inputs for the examples: {len(example_inputs)}")
 
