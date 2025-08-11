@@ -85,63 +85,122 @@ class TensorsBook:
         raise ValueError(f"Unsupported type when reading the graph: {type(something)}")
 
 
-class GraphFunction:
-    def __init__(self, gm: torch.fx.GraphModule):
-        self.gm = gm
+def fetch_attr(gm: torch.fx.GraphModule, target: str):
+    """Fetch an attribute from the Module hierarchy of self.gm.
+    Args:
+        target (str): The fully-qualified name of the attribute to fetch
+    """
+    target_atoms = target.split(".")
+    attr_itr = gm
+    for i, atom in enumerate(target_atoms):
+        if not hasattr(attr_itr, atom):
+            raise RuntimeError(
+                f"Node referenced nonexistent target {'.'.join(target_atoms[: i + 1])}"
+            )
+        attr_itr = getattr(attr_itr, atom)
+    return attr_itr
 
-    def fetch_attr(self, target: str):
-        """Fetch an attribute from the Module hierarchy of self.gm.
-        Args:
-            target (str): The fully-qualified name of the attribute to fetch
-        """
-        target_atoms = target.split(".")
-        attr_itr = self.gm
-        for i, atom in enumerate(target_atoms):
-            if not hasattr(attr_itr, atom):
-                raise RuntimeError(
-                    f"Node referenced nonexistent target {'.'.join(target_atoms[: i + 1])}"
+
+class _GraphFactory:
+    def __init__(self):
+        self.names_to_input_idx: dict[str, int] = {}
+        self.shape_names_to_input_dim: dict[str, tuple[str, int]] = {}
+        self.graph_inputs = []
+        self.graph = None
+        self.tensor_book = TensorsBook()
+
+    def initialize_graph(self):
+        if self.graph is not None:
+            raise RuntimeError("Graph has already been initialized.")
+        self.graph = Graph(
+            "max_torch_backend", input_types=self.graph_inputs
+        ).__enter__()
+        # Let's fill the tensor book
+        for tensor_name, idx in self.names_to_input_idx.items():
+            self.tensor_book[tensor_name] = self.graph.inputs[idx]
+        for shape_name, (tensor_name, dim_idx) in self.shape_names_to_input_dim.items():
+            self.tensor_book[shape_name] = self.tensor_book.tensors[tensor_name].shape[
+                dim_idx
+            ]
+
+    def handle_placeholder(self, node: torch.fx.Node):
+        example_value = node.meta["example_value"]
+        if isinstance(example_value, torch.SymInt):
+            pass
+        if isinstance(example_value, torch.Tensor | torch.nn.Parameter):
+            shape = []
+            for dim_idx, dim in enumerate(example_value.shape):
+                if isinstance(dim, torch.SymInt):
+                    shape.append(str(dim))
+                    self.shape_names_to_input_dim[str(dim)] = (node.name, dim_idx)
+                elif isinstance(dim, int):
+                    shape.append(dim)
+                else:
+                    raise TypeError(
+                        f"Unsupported dimension type {type(dim)} for input {node.name} at index {dim_idx}"
+                    )
+            self.graph_inputs.append(
+                max.graph.value.TensorType(
+                    dtype=DType.from_torch(example_value.dtype),
+                    shape=shape,
+                    device=max_device_ref(example_value.device),
                 )
-            attr_itr = getattr(attr_itr, atom)
-        return attr_itr
+            )
+            self.names_to_input_idx[node.name] = len(self.graph_inputs) - 1
 
-    def __call__(
-        self, *args: max.graph.value.TensorValue
-    ) -> tuple[max.graph.value.TensorValue, ...]:
-        tensor_book = TensorsBook()
-        args_index = 0
-        for node_idx, node in enumerate(self.gm.graph.nodes):
+    def handle_call_function(self, node_idx: int, node: torch.fx.Node):
+        func_args = [self.tensor_book.convert_to_max(x) for x in node.args]
+        func_kwargs = {
+            k: self.tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
+        }
+        if node.target not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
+            raise ValueError(
+                f"Failing at node {node_idx}. Function {get_fully_qualified_name(node.target)}  not supported by the Max backend yet."
+            )
+        try:
+            func_output = MAPPING_TORCH_TO_MOJO_FUNCTIONS[node.target](
+                *func_args, **func_kwargs
+            )
+        except Exception as e:
+            raise MaxCompilerError(
+                f"Failed to execute node {node_idx} with target {get_fully_qualified_name(node.target)}, "
+                f"inputs were: args={func_args}, kwargs={func_kwargs}. Error: {e}"
+            ) from e
+        self.tensor_book[node.name] = func_output
+
+    def handle_get_attr(self, node: torch.fx.Node):
+        attr_value = self.fetch_attr(node.target)
+        self.tensor_book[node.name] = attr_value
+
+    def handle_output(self, node: torch.fx.Node):
+        output_tensors = tuple(self.tensor_book.convert_to_max(x) for x in node.args[0])
+        self.graph.output(*output_tensors)
+        self.graph.__exit__(None, None, None)
+
+    def create_graph(self, gm: torch.fx.GraphModule) -> Graph:
+        for node_idx, node in enumerate(gm.graph.nodes):
             if node.op == "placeholder":
-                if node.name.startswith("s"):
-                    # shape input
-                    continue
-                tensor_book[node.name] = args[args_index]
-                args_index += 1
-            elif node.op in ("call_function", "call_method"):
-                func_args = [tensor_book.convert_to_max(x) for x in node.args]
-                func_kwargs = {
-                    k: tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
-                }
-                if node.target not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
-                    raise ValueError(
-                        f"Failing at node {node_idx}. Function {get_fully_qualified_name(node.target)}  not supported by the Max backend yet."
-                    )
-                try:
-                    tensor = MAPPING_TORCH_TO_MOJO_FUNCTIONS[node.target](
-                        *func_args, **func_kwargs
-                    )
-                except Exception as e:
-                    raise MaxCompilerError(
-                        f"Failed to execute node {node_idx} with target {get_fully_qualified_name(node.target)}, "
-                        f"inputs were: args={func_args}, kwargs={func_kwargs}. Error: {e}"
-                    ) from e
-                tensor_book[node.name] = tensor
+                self.handle_placeholder(node)
+                continue
+
+            if not self.graph:
+                self.initialize_graph()
+
+            if node.op in ("call_function", "call_method"):
+                self.handle_call_function(node_idx, node)
             elif node.op == "get_attr":
-                attr_value = self.fetch_attr(node.target)
-                tensor_book[node.name] = attr_value
+                self.handle_get_attr(node)
             elif node.op == "output":
-                return tuple(tensor_book.convert_to_max(x) for x in node.args[0])
+                self.handle_output(node)
             else:
                 raise ValueError(f"Unsupported node type: {node.op}")
+        return self.graph
+
+
+def generate_graph(gm: torch.fx.GraphModule) -> Graph:
+    """Generates a MAX graph from a PyTorch FX GraphModule."""
+    factory = _GraphFactory()
+    return factory.create_graph(gm)
 
 
 def generate_input_types(
@@ -198,11 +257,13 @@ class MaxCompiler:
         print(f"number of nodes: {len(gm.graph.nodes)}")
         print(f"Number of inputs for the examples: {len(example_inputs)}")
 
-        max_input_specs = generate_input_types(keep_only_tensors(example_inputs))
-        # print(f"max_input_specs: {max_input_specs}")
-        with Graph("some_graph", input_types=max_input_specs) as graph:
-            outputs = GraphFunction(self.gm)(*graph.inputs)
-            graph.output(*outputs)
+        # max_input_specs = generate_input_types(keep_only_tensors(example_inputs))
+        ## print(f"max_input_specs: {max_input_specs}")
+        # with Graph("some_graph", input_types=max_input_specs) as graph:
+        #    outputs = GraphFunction(self.gm)(*graph.inputs)
+        #    graph.output(*outputs)
+
+        graph = generate_graph(gm)
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
