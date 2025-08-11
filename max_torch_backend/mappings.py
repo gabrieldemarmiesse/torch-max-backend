@@ -691,6 +691,107 @@ def torch_new_ones_equivalent(
     return max_ops.constant(np.ones(size), dtype=dtype, device=device)
 
 
+def torch_layer_norm_equivalent(
+    input, normalized_shape, weight=None, bias=None, eps=1e-5
+):
+    # Layer norm normalizes over the last len(normalized_shape) dimensions
+    # Calculate mean and variance over these dimensions
+    axis_to_reduce = list(
+        range(len(input.shape) - len(normalized_shape), len(input.shape))
+    )
+
+    # Calculate mean
+    mean = torch_mean_equivalent(input, dim=axis_to_reduce, keepdim=True)
+
+    # Calculate variance: Var(X) = E[(X - mean)^2]
+    centered = input - mean
+    variance = torch_mean_equivalent(
+        centered * centered, dim=axis_to_reduce, keepdim=True
+    )
+
+    # Normalize: (x - mean) / sqrt(variance + eps)
+    normalized = centered / max_ops.sqrt(variance + eps)
+
+    # Apply scale and shift if provided
+    if weight is not None:
+        normalized = normalized * weight
+    if bias is not None:
+        normalized = normalized + bias
+
+    return normalized
+
+
+def torch_gelu_equivalent(input, approximate="none"):
+    if approximate == "tanh":
+        # Approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+        coeff = math.sqrt(2.0 / math.pi)
+        inner = coeff * (input + 0.044715 * input * input * input)
+        return 0.5 * input * (1.0 + max_ops.tanh(inner))
+    else:
+        # Exact: 0.5 * x * (1 + erf(x / sqrt(2)))
+        # Since MAX might not have erf, use the tanh approximation
+        coeff = math.sqrt(2.0 / math.pi)
+        inner = coeff * (input + 0.044715 * input * input * input)
+        return 0.5 * input * (1.0 + max_ops.tanh(inner))
+
+
+def torch_sum_equivalent(input, dim=None, keepdim=False, *, dtype=None):
+    if dtype is not None:
+        max_dtype = DType.from_torch(dtype)
+        input = max_ops.cast(input, dtype=max_dtype)
+
+    result = input
+
+    if dim is None:
+        dim = tuple(range(len(input.shape)))
+    elif isinstance(dim, int):
+        dim = (dim,)
+
+    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
+
+    # Sum over each dimension
+    for axis in sorted(dim, reverse=True):
+        result = max_ops.sum(result, axis=axis)
+
+    # Handle keepdim=False - squeeze the reduced dimensions
+    if not keepdim:
+        # MAX's sum keeps dimensions by default, so we need to squeeze
+        for axis in sorted(dim, reverse=True):
+            result = max_ops.squeeze(result, axis=axis)
+
+    return result
+
+
+def torch_softmax_equivalent(input, dim=-1, dtype=None):
+    if dtype is not None:
+        max_dtype = DType.from_torch(dtype)
+        input = max_ops.cast(input, dtype=max_dtype)
+
+    # Handle negative dim
+    if dim < 0:
+        dim = len(input.shape) + dim
+
+    # Manual implementation
+    # Compute max along the specified axis for numerical stability, keeping dimensions
+    x_max = torch_amax_equivalent(input, dim=[dim], keepdim=True)
+
+    # Subtract max for numerical stability
+    x_shifted = input - x_max
+
+    # Compute exponential
+    x_exp = max_ops.exp(x_shifted)
+
+    # Sum along the axis, keeping dimensions for broadcasting
+    x_sum = torch_sum_equivalent(x_exp, dim=[dim], keepdim=True)
+
+    # Divide to get softmax
+    return x_exp / x_sum
+
+
+def torch_masked_fill_equivalent(input, mask, value):
+    return max_ops.where(mask, value, input)
+
+
 def no_op(*args, **kwargs):
     pass
 
@@ -749,6 +850,9 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.max_pool2d: torch_max_pool2d_equivalent,
     F.adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,
     F.dropout: torch_dropout_equivalent,
+    F.layer_norm: torch_layer_norm_equivalent,
+    F.gelu: torch_gelu_equivalent,
+    F.softmax: torch_softmax_equivalent,
     torch._C._nn.linear: torch_linear_equivalent,
     torch.flatten: torch_flatten_equivalent,
     # TODO: Use noop function
@@ -772,6 +876,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.arange: torch_arange_equivalent,
     torch.outer: max_ops.outer,
     torch.stack: torch_stack_equivalent,
+    torch.sum: torch_sum_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -794,6 +899,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "max": max_ops.max,
     "min": max_ops.min,
     "new_ones": torch_new_ones_equivalent,
+    "masked_fill": torch_masked_fill_equivalent,
+    "sum": torch_sum_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
