@@ -164,7 +164,8 @@ class _GraphFactory:
         except Exception as e:
             raise MaxCompilerError(
                 f"Failed to execute node {node_idx} with target {get_fully_qualified_name(node.target)}, "
-                f"inputs were: args={func_args}, kwargs={func_kwargs}. Error: {e}"
+                f"inputs were: args={func_args}, kwargs={func_kwargs}. Error: {e}. It comes from there in your code: \n"
+                f"{node.stack_trace}"
             ) from e
         self.tensor_book[node.name] = func_output
 
