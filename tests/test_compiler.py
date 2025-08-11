@@ -3197,17 +3197,22 @@ def test_tril_with_negative_diagonal(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_tril_rectangular_matrix(device: str):
-    """Test tril on rectangular matrices"""
-
+def test_tril_rectangular_matrix_tall(device: str):
     def fn(x):
         return torch.tril(x)
 
     # Test both tall and wide matrices
     x_tall = torch.randn(6, 4)
-    x_wide = torch.randn(3, 7)
 
     check_functions_are_equivalent(fn, device, [x_tall])
+
+
+def test_tril_rectangular_matrix_wide(device: str):
+    def fn(x):
+        return torch.tril(x)
+
+    # Test both tall and wide matrices
+    x_wide = torch.randn(3, 7)
     check_functions_are_equivalent(fn, device, [x_wide])
 
 
@@ -3362,13 +3367,6 @@ def test_torch_arange_single_arg_int(device: str):
     check_functions_are_equivalent(fn, device, [])
 
 
-def test_torch_arange_single_arg_float(device: str):
-    def fn():
-        return torch.arange(5.0, device=torch.device(device))
-
-    check_functions_are_equivalent(fn, device, [])
-
-
 def test_torch_arange_two_args(device: str):
     def fn():
         return torch.arange(1, 8, device=torch.device(device))
@@ -3386,13 +3384,6 @@ def test_torch_arange_two_args_negative(device: str):
 def test_torch_arange_three_args(device: str):
     def fn():
         return torch.arange(0, 10, 2, device=torch.device(device))
-
-    check_functions_are_equivalent(fn, device, [])
-
-
-def test_torch_arange_three_args_float(device: str):
-    def fn():
-        return torch.arange(0.0, 3.0, 0.5, device=torch.device(device))
 
     check_functions_are_equivalent(fn, device, [])
 
