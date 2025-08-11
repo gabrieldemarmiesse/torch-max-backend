@@ -660,9 +660,9 @@ def torch_arange_equivalent(
 
     # Calculate output dimension for max_ops.range
     # The length is ceil((end - start) / step) as per PyTorch docs
-
-    out_length = math.ceil((end - start) / step)
-    out_dim = int(out_length)  # Convert to integer for MAX
+    out_dim = end - start
+    if step != 1:
+        out_dim = int(math.ceil(out_dim / step))
 
     # Use max_ops.range to create the sequence
     return max_ops.range(start, end, step, out_dim=out_dim, device=device, dtype=dtype)
