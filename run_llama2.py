@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from max_torch_backend import MaxCompiler
+from max_torch_backend import MaxCompiler, get_accelerators
 from torch._dynamo import mark_dynamic
 
 
@@ -20,24 +20,38 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device, dtype=torch.float32)
     freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
-    return freqs_cis
+    # Return cos and sin instead of complex exponentials to avoid complex64
+    freqs_cos = torch.cos(freqs)
+    freqs_sin = torch.sin(freqs)
+    return freqs_cos, freqs_sin
 
 
-def reshape_for_broadcast(freqs_cis, x):
+def reshape_for_broadcast(freqs_cos, freqs_sin, x):
     ndim = x.ndim
     assert 0 <= 1 < ndim
-    assert freqs_cis.shape == (x.shape[1], x.shape[-1])
+    assert freqs_cos.shape == (x.shape[1], x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
-    return freqs_cis.view(*shape)
+    return freqs_cos.view(*shape), freqs_sin.view(*shape)
 
 
-def apply_rotary_emb(xq, xk, freqs_cis):
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+def apply_rotary_emb(xq, xk, freqs_cos, freqs_sin):
+    # Reshape to separate real and imaginary parts
+    xq_r, xq_i = xq.float().reshape(*xq.shape[:-1], -1, 2).unbind(-1)
+    xk_r, xk_i = xk.float().reshape(*xk.shape[:-1], -1, 2).unbind(-1)
+
+    # Reshape frequencies for broadcasting
+    freqs_cos, freqs_sin = reshape_for_broadcast(freqs_cos, freqs_sin, xq_r)
+
+    # Apply rotation using real arithmetic: (a+bi) * (c+di) = (ac-bd) + (ad+bc)i
+    xq_out_r = xq_r * freqs_cos - xq_i * freqs_sin
+    xq_out_i = xq_r * freqs_sin + xq_i * freqs_cos
+    xk_out_r = xk_r * freqs_cos - xk_i * freqs_sin
+    xk_out_i = xk_r * freqs_sin + xk_i * freqs_cos
+
+    # Combine back to original shape
+    xq_out = torch.stack([xq_out_r, xq_out_i], dim=-1).flatten(3)
+    xk_out = torch.stack([xk_out_r, xk_out_i], dim=-1).flatten(3)
+
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
@@ -62,9 +76,9 @@ class CausalSelfAttention(nn.Module):
         self.head_dim = config.head_dim
 
         # Precompute frequencies for RoPE
-        self.register_buffer(
-            "freqs_cis", precompute_freqs_cis(config.head_dim, config.max_seq_len)
-        )
+        freqs_cos, freqs_sin = precompute_freqs_cis(config.head_dim, config.max_seq_len)
+        self.register_buffer("freqs_cos", freqs_cos)
+        self.register_buffer("freqs_sin", freqs_sin)
 
     def forward(self, x):
         bsz, seqlen, _ = x.shape
@@ -76,8 +90,9 @@ class CausalSelfAttention(nn.Module):
         xv = xv.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
 
         # Apply rotary embeddings
-        freqs_cis = self.freqs_cis[:seqlen]
-        xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
+        freqs_cos = self.freqs_cos[:seqlen]
+        freqs_sin = self.freqs_sin[:seqlen]
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cos, freqs_sin)
 
         # Grouped multi-query attention
         keys = xk.repeat_interleave(self.n_rep, dim=2)
@@ -285,7 +300,7 @@ def load_tokenizer():
 
 
 def main():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if len(list(get_accelerators())) >= 2 else "cpu"
     print(f"Using device: {device}")
 
     # Create Llama2 model

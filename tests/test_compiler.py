@@ -3587,3 +3587,114 @@ def test_masked_fill_broadcast(device: str):
     input_tensor = torch.randn(3, 4, 5)
     mask = torch.randint(0, 2, (4, 5), dtype=torch.bool)
     check_functions_are_equivalent(fn, device, [input_tensor, mask])
+
+
+def test_reshape_basic(device: str):
+    def fn(x):
+        return x.reshape(6, 4)
+
+    input_tensor = torch.randn(3, 8)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_reshape_flatten(device: str):
+    def fn(x):
+        return x.reshape(-1)
+
+    input_tensor = torch.randn(2, 3, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_reshape_with_negative_dim(device: str):
+    def fn(x):
+        return x.reshape(2, -1, 3)
+
+    input_tensor = torch.randn(2, 4, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_unbind_basic(device: str):
+    def fn(x):
+        # unbind returns a tuple, so we convert to list for testing
+        return list(x.unbind(dim=0))
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_unbind_different_dim(device: str):
+    def fn(x):
+        return list(x.unbind(dim=1))
+
+    input_tensor = torch.randn(2, 3, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_unbind_negative_dim(device: str):
+    def fn(x):
+        return list(x.unbind(dim=-1))
+
+    input_tensor = torch.randn(2, 3, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_repeat_interleave_basic(device: str):
+    def fn(x):
+        return x.repeat_interleave(2, dim=0)
+
+    input_tensor = torch.randn(3, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_repeat_interleave_different_dim(device: str):
+    def fn(x):
+        return x.repeat_interleave(3, dim=1)
+
+    input_tensor = torch.randn(2, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_repeat_interleave_negative_dim(device: str):
+    def fn(x):
+        return x.repeat_interleave(2, dim=-1)
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_torch_full_basic(device: str):
+    def fn():
+        return torch.full((3, 4), -float("inf"))
+
+    check_functions_are_equivalent(fn, device, [])
+
+
+def test_torch_full_with_dtype(device: str):
+    def fn():
+        return torch.full((2, 3), 5.5, dtype=torch.float32)
+
+    check_functions_are_equivalent(fn, device, [])
+
+
+def test_torch_triu_basic(device: str):
+    def fn(x):
+        return torch.triu(x)
+
+    input_tensor = torch.randn(4, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_torch_triu_with_diagonal(device: str):
+    def fn(x):
+        return torch.triu(x, diagonal=1)
+
+    input_tensor = torch.randn(3, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_silu_activation(device: str):
+    def fn(x):
+        return F.silu(x)
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])

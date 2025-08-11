@@ -1,1 +1,1 @@
-`uv run run_scratch_gpt2.py`
+`uv run run_gpt2.py`
