@@ -3423,3 +3423,176 @@ def test_torch_arange_force_dtype_int(device: str):
         return torch.arange(5, dtype=torch.int32, device=torch.device(device))
 
     check_functions_are_equivalent(fn, device, [])
+
+
+def test_layer_norm_basic(device: str):
+    def fn(x):
+        return F.layer_norm(x, normalized_shape=(10,))
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_layer_norm_with_weight_bias(device: str):
+    def fn(x, weight, bias):
+        return F.layer_norm(x, normalized_shape=(10,), weight=weight, bias=bias)
+
+    input_tensor = torch.randn(5, 10)
+    weight = torch.randn(10)
+    bias = torch.randn(10)
+    check_functions_are_equivalent(fn, device, [input_tensor, weight, bias])
+
+
+def test_layer_norm_multidim(device: str):
+    def fn(x):
+        return F.layer_norm(x, normalized_shape=(3, 4))
+
+    input_tensor = torch.randn(2, 5, 3, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_layer_norm_custom_eps(device: str):
+    def fn(x):
+        return F.layer_norm(x, normalized_shape=(10,), eps=1e-6)
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_gelu_basic(device: str):
+    def fn(x):
+        return F.gelu(x)
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_gelu_tanh_approx(device: str):
+    def fn(x):
+        return F.gelu(x, approximate="tanh")
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_gelu_negative_values(device: str):
+    def fn(x):
+        return F.gelu(x)
+
+    input_tensor = torch.randn(5, 10) - 2.0  # Mostly negative values
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_softmax_basic(device: str):
+    def fn(x):
+        return F.softmax(x, dim=-1)
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_softmax_dim_0(device: str):
+    def fn(x):
+        return F.softmax(x, dim=0)
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_softmax_dim_1(device: str):
+    def fn(x):
+        return F.softmax(x, dim=1)
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_softmax_multidim(device: str):
+    def fn(x):
+        return F.softmax(x, dim=2)
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_softmax_negative_dim(device: str):
+    def fn(x):
+        return F.softmax(x, dim=-2)
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_sum_basic(device: str):
+    def fn(x):
+        return torch.sum(x)
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_sum_with_dim(device: str):
+    def fn(x):
+        return torch.sum(x, dim=1)
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_sum_with_keepdim(device: str):
+    def fn(x):
+        return torch.sum(x, dim=1, keepdim=True)
+
+    input_tensor = torch.randn(5, 10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_sum_multiple_dims(device: str):
+    def fn(x):
+        return torch.sum(x, dim=[1, 2])
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_sum_multiple_dims_keepdim(device: str):
+    def fn(x):
+        return torch.sum(x, dim=[1, 2], keepdim=True)
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_sum_negative_dim(device: str):
+    def fn(x):
+        return torch.sum(x, dim=-1)
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_masked_fill_basic(device: str):
+    def fn(x, mask):
+        return x.masked_fill(mask, -float("inf"))
+
+    input_tensor = torch.randn(5, 10)
+    mask = torch.randint(0, 2, (5, 10), dtype=torch.bool)
+    check_functions_are_equivalent(fn, device, [input_tensor, mask])
+
+
+def test_masked_fill_scalar_value(device: str):
+    def fn(x, mask):
+        return x.masked_fill(mask, 0.0)
+
+    input_tensor = torch.randn(5, 10)
+    mask = torch.randint(0, 2, (5, 10), dtype=torch.bool)
+    check_functions_are_equivalent(fn, device, [input_tensor, mask])
+
+
+def test_masked_fill_broadcast(device: str):
+    def fn(x, mask):
+        return x.masked_fill(mask, 99.0)
+
+    input_tensor = torch.randn(3, 4, 5)
+    mask = torch.randint(0, 2, (4, 5), dtype=torch.bool)
+    check_functions_are_equivalent(fn, device, [input_tensor, mask])

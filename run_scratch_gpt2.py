@@ -236,7 +236,7 @@ class GPT2(nn.Module):
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
         else:
-            logits = self.lm_head(x[:, [-1], :])
+            logits = self.lm_head(x[:, -1, :][:, None, :])
             loss = None
 
         return logits, loss
