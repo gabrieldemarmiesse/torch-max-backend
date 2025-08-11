@@ -67,7 +67,11 @@ class TensorsBook:
         elif isinstance(something, float):
             return something
         elif isinstance(something, slice):
-            return something
+            return slice(
+                self.convert_to_max(something.start),
+                self.convert_to_max(something.stop),
+                self.convert_to_max(something.step),
+            )
         elif isinstance(something, torch.fx.immutable_collections.immutable_list):
             return [self.convert_to_max(x) for x in something]
         elif isinstance(something, tuple):
@@ -161,7 +165,7 @@ class _GraphFactory:
             func_output = MAPPING_TORCH_TO_MOJO_FUNCTIONS[node.target](
                 *func_args, **func_kwargs
             )
-        except Exception as e:
+        except RuntimeError as e:
             raise MaxCompilerError(
                 f"Failed to execute node {node_idx} with target {get_fully_qualified_name(node.target)}, "
                 f"inputs were: args={func_args}, kwargs={func_kwargs}. Error: {e}. It comes from there in your code: \n"
@@ -253,10 +257,10 @@ class MaxCompiler:
     ):
         self.gm = gm
         self.example_inputs = example_inputs
-        gm.graph.print_tabular()
-        analyze_dynamic_shapes(example_inputs)
-        print(f"number of nodes: {len(gm.graph.nodes)}")
-        print(f"Number of inputs for the examples: {len(example_inputs)}")
+        # gm.graph.print_tabular()
+        # analyze_dynamic_shapes(example_inputs)
+        # print(f"number of nodes: {len(gm.graph.nodes)}")
+        # print(f"Number of inputs for the examples: {len(example_inputs)}")
 
         # max_input_specs = generate_input_types(keep_only_tensors(example_inputs))
         ## print(f"max_input_specs: {max_input_specs}")
@@ -270,7 +274,6 @@ class MaxCompiler:
         self.model = session.load(graph)
 
     def __call__(self, *args) -> list[torch.Tensor]:
-        print(f"number of inputs when calling the function: {len(args)}")
         # Detach tensors to avoid gradient tracking issues with DLpack
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         return [torch.from_dlpack(x) for x in outputs]
