@@ -184,11 +184,12 @@ class MaxCompiler:
     ):
         self.gm = gm
         self.example_inputs = example_inputs
-        gm.graph.print_tabular()
+        # gm.graph.print_tabular()
         print(f"number of nodes: {len(gm.graph.nodes)}")
+        print(f"Number of inputs for the examples: {len(example_inputs)}")
 
         max_input_specs = generate_input_types(keep_only_tensors(example_inputs))
-        print(f"max_input_specs: {max_input_specs}")
+        # print(f"max_input_specs: {max_input_specs}")
         with Graph("some_graph", input_types=max_input_specs) as graph:
             outputs = GraphFunction(self.gm)(*graph.inputs)
             graph.output(*outputs)
@@ -197,6 +198,7 @@ class MaxCompiler:
         self.model = session.load(graph)
 
     def __call__(self, *args) -> list[torch.Tensor]:
+        print(f"number of inputs when calling the function: {len(args)}")
         # Detach tensors to avoid gradient tracking issues with DLpack
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         return [torch.from_dlpack(x) for x in outputs]

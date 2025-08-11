@@ -299,11 +299,7 @@ def main():
     print("Testing GPT-2 generation without torch.compile")
     print("=" * 50)
 
-    prompts = [
-        "The future of artificial intelligence",
-        "Once upon a time",
-        "Python programming is",
-    ]
+    prompts = ["The future of artificial intelligence"]
 
     for prompt in prompts:
         print(f"\nPrompt: '{prompt}'")
