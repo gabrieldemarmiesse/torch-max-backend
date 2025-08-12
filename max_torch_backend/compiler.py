@@ -249,14 +249,7 @@ class _GraphFactory:
 
         # Store the none indices for runtime handling
         self.none_indices = none_indices
-
-        if output_tensors:  # Only output if we have actual tensors
-            self.graph.output(*output_tensors)
-        else:
-            raise ValueError(
-                f"Node {node.name} has no valid outputs. All outputs were None."
-            )
-
+        self.graph.output(*output_tensors)
         self.graph.__exit__(None, None, None)
 
     def create_graph(self, gm: torch.fx.GraphModule) -> Graph:
