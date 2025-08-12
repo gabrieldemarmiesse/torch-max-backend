@@ -90,11 +90,15 @@ def test_basic_training(device: str):
     weight_compiled_default = model.linear.weight.data.cpu().numpy()
     bias_compiled_default = model.linear.bias.data.cpu().numpy()
 
-    np.assert_allclose(loss_not_compiled, loss_compiled_default, rtol=5e-2, atol=5e-3)
-    np.assert_allclose(
+    np.testing.assert_allclose(
+        loss_not_compiled, loss_compiled_default, rtol=5e-2, atol=5e-3
+    )
+    np.testing.assert_allclose(
         weight_not_compiled, weight_compiled_default, rtol=5e-2, atol=5e-3
     )
-    np.assert_allclose(bias_not_compiled, bias_compiled_default, rtol=5e-2, atol=5e-3)
+    np.testing.assert_allclose(
+        bias_not_compiled, bias_compiled_default, rtol=5e-2, atol=5e-3
+    )
 
     model.linear.weight.data.fill_(0.01)
     model.linear.bias.data.fill_(0.01)
@@ -105,9 +109,11 @@ def test_basic_training(device: str):
     weight_compiled = model.linear.weight.data.cpu().numpy()
     bias_compiled = model.linear.bias.data.cpu().numpy()
 
-    np.assert_allclose(loss_not_compiled, loss_compiled, rtol=5e-2, atol=5e-3)
-    np.assert_allclose(weight_not_compiled, weight_compiled, rtol=5e-2, atol=5e-3)
-    np.assert_allclose(bias_not_compiled, bias_compiled, rtol=5e-2, atol=5e-3)
+    np.testing.assert_allclose(loss_not_compiled, loss_compiled, rtol=5e-2, atol=5e-3)
+    np.testing.assert_allclose(
+        weight_not_compiled, weight_compiled, rtol=5e-2, atol=5e-3
+    )
+    np.testing.assert_allclose(bias_not_compiled, bias_compiled, rtol=5e-2, atol=5e-3)
 
 
 def test_iadd(device: str):

@@ -13,6 +13,7 @@ import numpy as np
 import math
 import torch._functorch.vmap
 import torch._C._functorch
+from torch.ops import aten
 
 # Import specific function objects that appear in VGG FX graph
 import torch._C._nn  # for conv2d and linear built-ins
@@ -1028,6 +1029,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "expand": torch_expand_equivalent,
     "to": torch_to_equivalent,
     "transpose": torch_transpose_equivalent,
+    aten.t: torch_transpose_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
     "unsqueeze": torch_unsqueeze_equivalent,

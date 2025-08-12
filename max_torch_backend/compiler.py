@@ -9,8 +9,10 @@ from max.driver import Accelerator, accelerator_count, CPU
 from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 import uuid
 import warnings
+from torch._dynamo.backends.common import aot_autograd
 
 from max.graph import DeviceRef
+from functorch.compile import make_boxed_func
 
 
 class MaxCompilerError(Exception):
@@ -128,7 +130,10 @@ class _GraphFactory:
             ]
 
     def handle_placeholder(self, node: torch.fx.Node):
-        example_value = node.meta["example_value"]
+        if "example_value" in node.meta:
+            example_value = node.meta["example_value"]
+        elif "val" in node.meta:
+            example_value = node.meta["val"]
         if isinstance(example_value, torch.SymInt):
             pass
         if isinstance(example_value, torch.Tensor | torch.nn.Parameter):
@@ -157,12 +162,15 @@ class _GraphFactory:
         func_kwargs = {
             k: self.tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
         }
-        if node.target not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
+        key = node.target
+        if key.namespace == "aten":
+            key = key.overloadpacket
+        if key not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
             raise ValueError(
                 f"Failing at node {node_idx}. Function {get_fully_qualified_name(node.target)}  not supported by the Max backend yet."
             )
         try:
-            func_output = MAPPING_TORCH_TO_MOJO_FUNCTIONS[node.target](
+            func_output = MAPPING_TORCH_TO_MOJO_FUNCTIONS[key](
                 *func_args, **func_kwargs
             )
         except RuntimeError as e:
@@ -257,7 +265,7 @@ class MaxCompiler:
     ):
         self.gm = gm
         self.example_inputs = example_inputs
-        # gm.graph.print_tabular()
+        gm.graph.print_tabular()
         # analyze_dynamic_shapes(example_inputs)
         # print(f"number of nodes: {len(gm.graph.nodes)}")
         # print(f"Number of inputs for the examples: {len(example_inputs)}")
@@ -277,3 +285,15 @@ class MaxCompiler:
         # Detach tensors to avoid gradient tracking issues with DLpack
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         return [torch.from_dlpack(x) for x in outputs]
+
+
+class _MaxCompilerGradCompatible:
+    def __init__(
+        self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
+    ):
+        super().__init__(gm, example_inputs)
+        self._max_compiler = MaxCompiler(gm, example_inputs)
+        self.__call__ = make_boxed_func(self._max_compiler.__call__)
+
+
+MaxCompilerGradCompatible = aot_autograd(fw_compiler=_MaxCompilerGradCompatible)
