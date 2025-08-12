@@ -240,11 +240,13 @@ class _GraphFactory:
         output_tensors = []
         none_indices = []
 
-        for i, x in enumerate(node.args[0]):
+        for x in node.args[0]:
             converted = self.tensor_book.convert_to_max(x)
             if converted is None:
-                none_indices.append(i)
+                none_indices.append(None)
             else:
+                # position of the output tensor
+                none_indices.append(len(output_tensors))
                 output_tensors.append(converted)
 
         # Store the none indices for runtime handling
@@ -317,11 +319,11 @@ class MaxCompiler:
 
         # Reconstruct the original output structure with None values
         result = []
-        for i in range(len(tensor_outputs) + len(self.none_indices)):
-            if i in self.none_indices:
+        for i in self.none_indices:
+            if i is None:
                 result.append(None)
             else:
-                result.append(tensor_outputs[len(result)])
+                result.append(tensor_outputs[i])
         return result
 
 
