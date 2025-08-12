@@ -3698,3 +3698,69 @@ def test_silu_activation(device: str):
 
     input_tensor = torch.randn(3, 4, 5)
     check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_mse_loss_default_reduction(device: str):
+    """Test MSE loss with default mean reduction"""
+
+    def fn(input_tensor, target):
+        return F.mse_loss(input_tensor, target)
+
+    input_tensor = torch.randn(3, 4)
+    target = torch.randn(3, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor, target])
+
+
+def test_mse_loss_mean_reduction(device: str):
+    """Test MSE loss with explicit mean reduction"""
+
+    def fn(input_tensor, target):
+        return F.mse_loss(input_tensor, target, reduction="mean")
+
+    input_tensor = torch.randn(2, 5)
+    target = torch.randn(2, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor, target])
+
+
+def test_mse_loss_sum_reduction(device: str):
+    """Test MSE loss with sum reduction"""
+
+    def fn(input_tensor, target):
+        return F.mse_loss(input_tensor, target, reduction="sum")
+
+    input_tensor = torch.randn(3, 3)
+    target = torch.randn(3, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor, target])
+
+
+def test_mse_loss_none_reduction(device: str):
+    """Test MSE loss with no reduction (returns element-wise squared differences)"""
+
+    def fn(input_tensor, target):
+        return F.mse_loss(input_tensor, target, reduction="none")
+
+    input_tensor = torch.randn(2, 3)
+    target = torch.randn(2, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor, target])
+
+
+def test_mse_loss_1d(device: str):
+    """Test MSE loss on 1D tensors"""
+
+    def fn(input_tensor, target):
+        return F.mse_loss(input_tensor, target)
+
+    input_tensor = torch.randn(10)
+    target = torch.randn(10)
+    check_functions_are_equivalent(fn, device, [input_tensor, target])
+
+
+def test_mse_loss_3d(device: str):
+    """Test MSE loss on 3D tensors"""
+
+    def fn(input_tensor, target):
+        return F.mse_loss(input_tensor, target)
+
+    input_tensor = torch.randn(2, 3, 4)
+    target = torch.randn(2, 3, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor, target])
