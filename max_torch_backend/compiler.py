@@ -339,3 +339,6 @@ def _MaxCompilerBackpropCompatible(
 
 
 MaxCompilerBackpropCompatible = aot_autograd(fw_compiler=_MaxCompilerBackpropCompatible)
+
+
+default_compiler = MaxCompiler
