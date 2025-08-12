@@ -911,6 +911,241 @@ def torch_softmax_equivalent(input, dim=-1, dtype=None):
     return x_exp / x_sum
 
 
+def torch_ops_exp(input):
+    return max_ops.exp(input)
+
+
+def torch_tensor_type_equivalent(tensor, dtype):
+    return max_ops.cast(tensor, dtype=DType.from_torch(dtype))
+
+
+def torch_nn_function_silu_equivalent(input):
+    return torch_silu_equivalent(input)
+
+
+def torch_nn_functional_group_norm_equivalent(
+    input, num_groups, weight=None, bias=None, eps=1e-5
+):
+    # Group normalization divides channels into groups and normalizes within each group
+    # input shape: [N, C, H, W] (assuming 4D)
+    batch_size = int(input.shape[0])
+    channels = int(input.shape[1])
+
+    if channels % num_groups != 0:
+        raise ValueError(
+            f"Number of channels {channels} must be divisible by num_groups {num_groups}"
+        )
+
+    channels_per_group = channels // num_groups
+    spatial_dims = input.shape[2:]  # H, W for 4D input
+
+    # Reshape to [N, num_groups, channels_per_group, H, W]
+    group_shape = [batch_size, num_groups, channels_per_group] + list(spatial_dims)
+    grouped = max_ops.reshape(input, group_shape)
+
+    # Calculate mean and variance over the group dimensions (channels_per_group and spatial)
+    # For 4D input, normalize over dims 2, 3, 4 (channels_per_group, H, W)
+    norm_dims = list(range(2, len(group_shape)))
+
+    # Calculate mean and variance
+    mean = torch_mean_equivalent(grouped, dim=norm_dims, keepdim=True)
+    centered = grouped - mean
+    variance = torch_mean_equivalent(centered * centered, dim=norm_dims, keepdim=True)
+
+    # Normalize
+    normalized = centered / max_ops.sqrt(variance + eps)
+
+    # Reshape back to original shape
+    normalized = max_ops.reshape(normalized, input.shape)
+
+    # Apply scale and shift if provided
+    if weight is not None:
+        # weight should be [C] - broadcast over all dims except channel
+        weight_shape = [1, channels] + [1] * len(spatial_dims)
+        weight_reshaped = max_ops.reshape(weight, weight_shape)
+        normalized = normalized * weight_reshaped
+
+    if bias is not None:
+        # bias should be [C] - broadcast over all dims except channel
+        bias_shape = [1, channels] + [1] * len(spatial_dims)
+        bias_reshaped = max_ops.reshape(bias, bias_shape)
+        normalized = normalized + bias_reshaped
+
+    return normalized
+
+
+def torch_nn_functional_sdpa_equivalent(
+    query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False
+):
+    # Scaled Dot-Product Attention: Attention(Q,K,V) = softmax(QK^T/√d_k)V
+    # query, key, value: [batch_size, num_heads, seq_len, head_dim]
+
+    if dropout_p > 0.0 and is_causal:
+        raise NotImplementedError("Dropout with causal attention not supported")
+
+    head_dim = query.shape[-1]
+    scale = 1.0 / max_ops.sqrt(
+        max_ops.constant(float(head_dim), dtype=query.dtype, device=query.device)
+    )
+
+    # Compute attention scores: QK^T
+    scores = max_ops.matmul(query, torch_transpose_equivalent(key, -2, -1))
+
+    # Scale scores
+    scores = scores * scale
+
+    # Apply causal mask if specified
+    if is_causal:
+        seq_len = int(scores.shape[-1])
+        # Create upper triangular mask (causal mask)
+        causal_mask = torch_triu_equivalent(
+            max_ops.constant(
+                np.ones((seq_len, seq_len)), dtype=scores.dtype, device=scores.device
+            ),
+            diagonal=1,
+        )
+        # Convert to boolean mask (True where we want -inf)
+        causal_mask = causal_mask > 0
+        large_neg = max_ops.constant(-1e9, dtype=scores.dtype, device=scores.device)
+        scores = torch_masked_fill_equivalent(scores, causal_mask, large_neg)
+
+    # Apply attention mask if provided
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            # Boolean mask: True positions get -inf
+            large_neg = max_ops.constant(-1e9, dtype=scores.dtype, device=scores.device)
+            scores = torch_masked_fill_equivalent(scores, attn_mask, large_neg)
+        else:
+            # Additive mask: add the mask values to scores
+            scores = scores + attn_mask
+
+    # Apply softmax
+    attn_weights = torch_softmax_equivalent(scores, dim=-1)
+
+    # Apply dropout if specified (for now, skip in inference)
+    if dropout_p > 0.0:
+        # In training mode, should apply dropout, but for now we skip
+        pass
+
+    # Apply attention to values: softmax(QK^T/√d_k)V
+    output = max_ops.matmul(attn_weights, value)
+
+    return output
+
+
+def torch_nn_functional_interpolate_equivalent(
+    input, size=None, scale_factor=None, mode="nearest", align_corners=None
+):
+    # Basic interpolation implementation - only supports nearest for now
+    if mode != "nearest":
+        raise NotImplementedError(
+            f"Interpolation mode '{mode}' not supported, only 'nearest'"
+        )
+
+    if size is not None and scale_factor is not None:
+        raise ValueError("Cannot specify both size and scale_factor")
+
+    if size is None and scale_factor is None:
+        raise ValueError("Must specify either size or scale_factor")
+
+    if scale_factor is not None:
+        if isinstance(scale_factor, int | float):
+            # Apply same scale to all spatial dimensions
+            current_shape = input.shape
+            if len(current_shape) == 4:  # NCHW format
+                new_h = int(current_shape[2] * scale_factor)
+                new_w = int(current_shape[3] * scale_factor)
+                size = (new_h, new_w)
+            else:
+                raise NotImplementedError("Only 4D tensors supported for interpolation")
+
+    # For nearest neighbor, we can use repeat_interleave or broadcasting
+    # This is a simplified implementation
+    if len(input.shape) == 4:  # NCHW
+        target_h, target_w = size
+        current_h, current_w = int(input.shape[2]), int(input.shape[3])
+
+        # Simple nearest neighbor by integer scaling only
+        if target_h % current_h == 0 and target_w % current_w == 0:
+            h_scale = target_h // current_h
+            w_scale = target_w // current_w
+
+            # Repeat along height dimension
+            if h_scale > 1:
+                input = torch_repeat_interleave_equivalent(input, h_scale, dim=2)
+
+            # Repeat along width dimension
+            if w_scale > 1:
+                input = torch_repeat_interleave_equivalent(input, w_scale, dim=3)
+
+            return input
+        else:
+            raise NotImplementedError(
+                "Non-integer scaling not supported for nearest interpolation"
+            )
+    else:
+        raise NotImplementedError("Only 4D tensors supported for interpolation")
+
+
+def torch_movedim_equivalent(input, source, destination):
+    # torch.movedim moves dimensions from source positions to destination positions
+    ndim = len(input.shape)
+
+    # Normalize negative dimensions
+    if isinstance(source, int):
+        source = [source]
+    if isinstance(destination, int):
+        destination = [destination]
+
+    source = [s if s >= 0 else ndim + s for s in source]
+    destination = [d if d >= 0 else ndim + d for d in destination]
+
+    if len(source) != len(destination):
+        raise ValueError("source and destination must have the same number of elements")
+
+    # Remove source dimensions
+    remaining_dims = [i for i in range(ndim) if i not in source]
+
+    # Insert moved dimensions at destination positions
+    for src, dst in zip(source, destination):
+        remaining_dims.insert(dst, src)
+
+    # Handle the permutation more carefully
+    # Create the final permutation by placing source dims at destination positions
+    final_perm = list(range(ndim))
+    temp_perm = [i for i in range(ndim) if i not in source]
+
+    # Insert source dimensions at their destination positions
+    for i, (src, dst) in enumerate(zip(source, destination)):
+        temp_perm.insert(dst, src)
+
+    # Truncate to correct length
+    final_perm = temp_perm[:ndim]
+
+    return max_ops.permute(input, final_perm)
+
+
+def torch_tensor_chunk_equivalent(input, chunks, dim=0):
+    # torch.chunk splits tensor into approximately equal chunks
+    dim_size = int(input.shape[dim])
+    chunk_size = (dim_size + chunks - 1) // chunks  # Ceiling division
+
+    # Calculate actual chunk sizes
+    chunk_sizes = []
+    remaining = dim_size
+    for i in range(chunks):
+        if remaining <= 0:
+            break
+        size = min(chunk_size, remaining)
+        chunk_sizes.append(size)
+        remaining -= size
+
+    if not chunk_sizes:
+        return []
+
+    return max_ops.split(input, chunk_sizes, dim)
+
+
 def torch_masked_fill_equivalent(input, mask, value):
     return max_ops.where(mask, value, input)
 
@@ -964,6 +1199,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.sin: max_ops.sin,
     torch.rsqrt: max_ops.rsqrt,
     torch.sqrt: max_ops.sqrt,
+    torch.exp: torch_ops_exp,
     torch.mean: torch_mean_equivalent,
     torch.cat: torch_cat_equivalent,
     F.conv2d: torch_conv2d_equivalent,
@@ -976,6 +1212,9 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.layer_norm: torch_layer_norm_equivalent,
     F.gelu: torch_gelu_equivalent,
     F.silu: torch_silu_equivalent,
+    F.group_norm: torch_nn_functional_group_norm_equivalent,
+    F.scaled_dot_product_attention: torch_nn_functional_sdpa_equivalent,
+    F.interpolate: torch_nn_functional_interpolate_equivalent,
     F.softmax: torch_softmax_equivalent,
     torch._C._nn.linear: torch_linear_equivalent,
     torch.flatten: torch_flatten_equivalent,
@@ -1004,6 +1243,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.sum: torch_sum_equivalent,
     torch.matmul: operator.matmul,
     torch.full: torch_full_equivalent,
+    torch.movedim: torch_movedim_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -1032,6 +1272,9 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "reshape": torch_view_equivalent,  # reshape is equivalent to view for MAX backend
     "unbind": torch_unbind_equivalent,
     "repeat_interleave": torch_repeat_interleave_equivalent,
+    "type": torch_tensor_type_equivalent,
+    "movedim": torch_movedim_equivalent,
+    "chunk": torch_tensor_chunk_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:

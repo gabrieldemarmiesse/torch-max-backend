@@ -3698,3 +3698,112 @@ def test_silu_activation(device: str):
 
     input_tensor = torch.randn(3, 4, 5)
     check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_torch_exp(device: str):
+    def fn(x):
+        return torch.exp(x)
+
+    input_tensor = torch.randn(3, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_tensor_type(device: str):
+    def fn(x):
+        return x.type(torch.float32)
+
+    # Use float64 to float32 conversion since float16 is not supported on CPU
+    input_tensor = torch.randn(3, 4, dtype=torch.float64)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_group_norm_basic(device: str):
+    def fn(x, weight, bias):
+        return F.group_norm(x, 2, weight, bias)
+
+    input_tensor = torch.randn(2, 4, 8, 8)
+    weight = torch.randn(4)
+    bias = torch.randn(4)
+    check_functions_are_equivalent(fn, device, [input_tensor, weight, bias])
+
+
+def test_group_norm_no_affine(device: str):
+    def fn(x):
+        return F.group_norm(x, 2)
+
+    input_tensor = torch.randn(1, 6, 4, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_interpolate_nearest(device: str):
+    def fn(x):
+        return F.interpolate(x, size=(8, 8), mode="nearest")
+
+    input_tensor = torch.randn(1, 3, 4, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_interpolate_scale_factor(device: str):
+    def fn(x):
+        return F.interpolate(x, scale_factor=2, mode="nearest")
+
+    input_tensor = torch.randn(1, 2, 3, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_movedim_basic(device: str):
+    def fn(x):
+        return torch.movedim(x, 0, 2)
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_movedim_multiple(device: str):
+    def fn(x):
+        return torch.movedim(x, [0, 1], [2, 0])
+
+    input_tensor = torch.randn(3, 4, 5, 6)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_tensor_chunk_basic(device: str):
+    def fn(x):
+        chunks = x.chunk(3, dim=1)
+        return chunks[0]
+
+    input_tensor = torch.randn(2, 9, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_tensor_chunk_uneven(device: str):
+    def fn(x):
+        chunks = x.chunk(4, dim=0)
+        return chunks[0] + chunks[1]
+
+    input_tensor = torch.randn(7, 3, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_scaled_dot_product_attention_basic(device: str):
+    def fn(q, k, v):
+        return F.scaled_dot_product_attention(q, k, v)
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 8, 16
+    query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    key = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    value = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_causal(device: str):
+    def fn(q, k, v):
+        return F.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+    batch_size, num_heads, seq_len, head_dim = 1, 2, 4, 8
+    query = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    key = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    value = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
