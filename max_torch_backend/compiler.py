@@ -236,25 +236,29 @@ class _GraphFactory:
         self.tensor_book[node.name] = attr_value
 
     def handle_output(self, node: torch.fx.Node):
-        # Handle both tensor and None outputs (common in backward pass)
         output_tensors = []
-        none_indices = []
+
+        # None outputs can be required. So we remember here if
+        # we want an output tensor (and we reccord the tensor position)
+        # or if we want None.
+        output_blueprint: list[int | None] = []
 
         for x in node.args[0]:
             converted = self.tensor_book.convert_to_max(x)
             if converted is None:
-                none_indices.append(None)
+                output_blueprint.append(None)
             else:
                 # position of the output tensor
-                none_indices.append(len(output_tensors))
+                output_blueprint.append(len(output_tensors))
                 output_tensors.append(converted)
 
         # Store the none indices for runtime handling
-        self.none_indices = none_indices
         self.graph.output(*output_tensors)
         self.graph.__exit__(None, None, None)
+        return output_blueprint
 
-    def create_graph(self, gm: torch.fx.GraphModule) -> Graph:
+    def create_graph(self, gm: torch.fx.GraphModule) -> tuple[Graph, list[int | None]]:
+        output_blueprint = None
         for node_idx, node in enumerate(gm.graph.nodes):
             if node.op == "placeholder":
                 self.handle_placeholder(node)
@@ -268,10 +272,14 @@ class _GraphFactory:
             elif node.op == "get_attr":
                 self.handle_get_attr(node)
             elif node.op == "output":
-                self.handle_output(node)
+                output_blueprint = self.handle_output(node)
             else:
                 raise ValueError(f"Unsupported node type: {node.op}")
-        return self.graph
+        if output_blueprint is None:
+            raise ValueError(
+                "No output node found in the graph, this should never happen."
+            )
+        return self.graph, output_blueprint
 
 
 def get_accelerators():
@@ -303,11 +311,7 @@ class MaxCompiler:
 
         gm.graph.print_tabular()
 
-        factory = _GraphFactory()
-        graph = factory.create_graph(gm)
-
-        # Store none_indices from the factory
-        self.none_indices = factory.none_indices
+        graph, self.output_blueprint = _GraphFactory().create_graph(gm)
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
@@ -319,7 +323,7 @@ class MaxCompiler:
 
         # Reconstruct the original output structure with None values
         result = []
-        for i in self.none_indices:
+        for i in self.output_blueprint:
             if i is None:
                 result.append(None)
             else:
