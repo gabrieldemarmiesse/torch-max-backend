@@ -312,7 +312,7 @@ class MaxCompiler:
         graph = factory.create_graph(gm)
 
         # Store none_indices from the factory
-        self.none_indices = getattr(factory, "none_indices", [])
+        self.none_indices = factory.none_indices
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
@@ -323,18 +323,15 @@ class MaxCompiler:
         tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
         # Reconstruct the original output structure with None values
-        if hasattr(self, "none_indices") and self.none_indices:
-            result = []
-            tensor_idx = 0
-            for i in range(len(tensor_outputs) + len(self.none_indices)):
-                if i in self.none_indices:
-                    result.append(None)
-                else:
-                    result.append(tensor_outputs[tensor_idx])
-                    tensor_idx += 1
-            return result
-        else:
-            return tensor_outputs
+        result = []
+        tensor_idx = 0
+        for i in range(len(tensor_outputs) + len(self.none_indices)):
+            if i in self.none_indices:
+                result.append(None)
+            else:
+                result.append(tensor_outputs[tensor_idx])
+                tensor_idx += 1
+        return result
 
 
 def _MaxCompilerBackpropCompatible(
