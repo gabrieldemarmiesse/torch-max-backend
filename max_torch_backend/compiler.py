@@ -9,6 +9,7 @@ from max.driver import Accelerator, accelerator_count, CPU
 from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 import uuid
 import warnings
+import time
 
 from max.graph import DeviceRef
 
@@ -157,6 +158,7 @@ class _GraphFactory:
         func_kwargs = {
             k: self.tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
         }
+
         if node.target not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
             raise ValueError(
                 f"Failing at node {node_idx}. Function {get_fully_qualified_name(node.target)}  not supported by the Max backend yet."
@@ -232,13 +234,14 @@ def generate_input_types(
 
 
 def get_accelerators():
-    yield CPU()
     if accelerator_count() > 0:
         for i in range(accelerator_count()):
             try:
                 yield Accelerator(i)
             except ValueError as e:
                 warnings.warn(f"Failed to create accelerator {i}. {e}")
+    else:
+        yield CPU()
 
 
 def deviceref_to_torch(device_ref: DeviceRef) -> torch.device:
@@ -272,8 +275,13 @@ class MaxCompiler:
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
+        self.model._export_mef('compiled_model.mef')
+        print("MAX Model compilation done")
 
     def __call__(self, *args) -> list[torch.Tensor]:
         # Detach tensors to avoid gradient tracking issues with DLpack
+        start = time.clock_gettime_ns(0)
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
+        end = time.clock_gettime_ns(0)
+        print("Step duration: ", end - start, "nanoseconds")
         return [torch.from_dlpack(x) for x in outputs]

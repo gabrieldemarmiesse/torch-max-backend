@@ -1,13 +1,16 @@
 import operator
+from typing import Optional
 
 import max.graph.ops as max_ops
 import torch
+from torch import Tensor
 import torch.nn.functional as F
 import torch.amp.autocast_mode
+import max.nn as max_nn
 from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
 from max.dtype import DType
-from max.graph import StaticDim
+from max.graph import StaticDim, Shape
 import max.graph.type as max_type
 import numpy as np
 import math
@@ -383,11 +386,29 @@ def torch_flatten_equivalent(input, start_dim=1, end_dim=-1):
     return max_ops.flatten(input, start_dim=start_dim, end_dim=end_dim)
 
 
-def torch_dropout_equivalent(input, p=0.5, training=True, inplace=False):
-    if training:
-        raise NotImplementedError("Dropout is not implemented in the MAX backend. ")
-    else:
+def torch_dropout_equivalent(
+    input: max_ops.TensorValue, p=0.5, training=False, inplace=False
+):
+    if not training:
         return input
+    else:
+        if p == 1:
+            return input
+
+        if p == 0:
+            return max_ops.broadcast_to(
+                max_ops.constant(0, dtype=input.dtype, device=input.device), input.shape
+            )
+
+        # TODO switch to Bernoulli distribution
+        zeroed = max_ops.broadcast_to(max_ops.constant(0), input.shape)
+        mask = max_ops.random.uniform(input) > p
+
+        return max_ops.where(
+            mask,
+            input,
+            zeroed,
+        )
 
 
 def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
@@ -919,6 +940,150 @@ def no_op(*args, **kwargs):
     pass
 
 
+def torch_ops_exp(input, out: torch.Tensor | None = None):
+    if out is None:
+        return max_ops.exp(input)
+    else:
+        out.copy_(max_ops.exp(input))
+        return out
+
+
+def torch_getitem_equivalent(input: max_ops.TensorValueLike, index):
+    try:
+        if len(index) == 4:
+            pass
+    except Exception:
+        pass
+    if index is None:
+        return input.reshape(Shape([1, *input.shape]))
+    if isinstance(input, max_ops.TensorValue):
+        result = max_ops.slice_tensor(input, index)
+        return result
+    return input[index]
+
+
+def torch_nn_function_silu_equivalent(input, inplace: bool = False):
+    return max_ops.silu(input)
+
+
+def torch_nn_functional_group_norm_equivalent(
+    input: max_ops.TensorValueLike,
+    num_groups: int,
+    weight=None,
+    bias=None,
+    eps: float = 1e-5,
+):
+    norm = max_nn.GroupNorm(num_groups, int(input.shape[1]), eps=eps)
+    norm.weight = weight
+    norm.bias = bias
+    return norm(input)
+
+
+def torch_tensor_type_equivalent(
+    self: max_ops.TensorValueLike, dtype, non_blocking=False
+):
+    return max_ops.cast(self, DType.from_torch(dtype))
+
+
+def torch_movedim_equivalent(
+    input: max_ops.TensorValueLike,
+    source: int | torch._prims_common.DimsSequenceType,
+    destination: int | torch._prims_common.DimsSequenceType,
+) -> max_ops.TensorValueLike:
+    if isinstance(source, int):
+        source = (source,)
+    if isinstance(destination, int):
+        destination = (destination,)
+
+    if len(source) != len(destination):
+        raise "Sequence length mismatch for source and destination dimensions"
+
+    new_shape = {i: i for i in range(len(input.shape))}
+
+    for i in range(len(source)):
+        new_shape[destination[i]], new_shape[source[i]] = (
+            new_shape[source[i]],
+            new_shape[destination[i]],
+        )
+
+    shape_list = list(new_shape.values())
+
+    return max_ops.permute(input, shape_list)
+
+
+def torch_nn_functional_sdpa_equivalent(
+    query: max_ops.TensorValueLike,
+    key: max_ops.TensorValueLike,
+    value: max_ops.TensorValueLike,
+    attn_mask: max_ops.TensorValueLike | None = None,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    scale: float | None = None,
+    enable_gqa: bool = False,
+) -> max_ops.TensorValueLike:
+
+    L, S = int(query.shape[-2]), int(key.shape[-2])
+    scale_factor = 1 / math.sqrt(int(query.shape[-1])) if scale is None else scale
+    attn_bias = max_ops.broadcast_to(
+        max_ops.constant(0, query.dtype, query.device), [L, S]
+    )
+
+    fill_mask = max_ops.broadcast_to(
+        max_ops.constant(float("-inf"), query.dtype, query.device), [L, S]
+    )
+
+    if is_causal:
+        assert attn_mask is None
+        temp_mask = max_ops.band_part(
+            max_ops.broadcast_to(max_ops.constant(1, DType.bool, query.device), [L, S]),
+            num_upper=0,
+            exclude=True,
+        )
+
+        attn_bias = max_ops.where(temp_mask, fill_mask, attn_bias).cast(query.dtype)
+
+    if attn_mask is not None:
+        if attn_mask.dtype == DType.bool:
+            attn_bias = max_ops.where(attn_mask, attn_bias, fill_mask)
+        else:
+            attn_bias = attn_mask + attn_bias
+
+    if enable_gqa:
+        key = max_ops.repeat_interleave(key, query.size(-3) // key.size(-3), -3)
+        value = max_ops.repeat_interleave(key, query.size(-3) // value.size(-3), -3)
+
+    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_weight += attn_bias
+    attn_weight = max_ops.softmax(attn_weight)
+    attn_weight = torch_dropout_equivalent(attn_weight, dropout_p, training=True)
+    return attn_weight @ value
+
+
+def torch_tensor_chunk_equivalent(
+    input: max_ops.TensorValueLike, chunks: int, dim: int = 0
+) -> max_ops.TensorValueLike:
+    return max_ops.chunk(input, chunks, dim)
+
+
+def torch_nn_functional_interpolate_equivalent(
+    input: Tensor,
+    size: Optional[int] | Optional[list[int]] = None,
+    scale_factor: Optional[float] | Optional[list[float]] = None,
+    mode: str = "nearest",
+    align_corners: Optional[bool] = None,
+    recompute_scale_factor: Optional[bool] = None,
+    antialias: bool = False,
+) -> Tensor:
+    if size is None:
+        size = input.shape
+
+    return max_ops.resize(
+        input,
+        [input.shape[0], input.shape[1], *size], #TODO respect `scale_factor`
+        max_ops.InterpolationMode.BICUBIC #TODO respect `mode`
+    )
+
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -964,8 +1129,11 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.sin: max_ops.sin,
     torch.rsqrt: max_ops.rsqrt,
     torch.sqrt: max_ops.sqrt,
+    torch.exp: torch_ops_exp,
     torch.mean: torch_mean_equivalent,
     torch.cat: torch_cat_equivalent,
+    torch.Tensor.type: torch_tensor_type_equivalent,
+    "type": torch_tensor_type_equivalent,
     F.conv2d: torch_conv2d_equivalent,
     F.embedding: torch_embedding_equivalent,
     F.linear: torch_linear_equivalent,
@@ -977,6 +1145,10 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.gelu: torch_gelu_equivalent,
     F.silu: torch_silu_equivalent,
     F.softmax: torch_softmax_equivalent,
+    torch.nn.functional.silu: torch_nn_function_silu_equivalent,
+    torch.nn.functional.group_norm: torch_nn_functional_group_norm_equivalent,
+    torch.nn.functional.scaled_dot_product_attention: torch_nn_functional_sdpa_equivalent,
+    torch.nn.functional.interpolate: torch_nn_functional_interpolate_equivalent,
     torch._C._nn.linear: torch_linear_equivalent,
     torch.flatten: torch_flatten_equivalent,
     # TODO: Use noop function
@@ -1032,6 +1204,9 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "reshape": torch_view_equivalent,  # reshape is equivalent to view for MAX backend
     "unbind": torch_unbind_equivalent,
     "repeat_interleave": torch_repeat_interleave_equivalent,
+    "movedim": torch_movedim_equivalent,
+    "reshape": lambda tensor, *shape: max_ops.reshape(tensor, shape),
+    "chunk": torch_tensor_chunk_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
