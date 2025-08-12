@@ -1063,6 +1063,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.mm: operator.matmul,
     aten.sum: torch_sum_equivalent,
     aten.view: torch_view_equivalent,
+    aten.argmax: torch_argmax_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
     "unsqueeze": torch_unsqueeze_equivalent,
