@@ -267,7 +267,7 @@ class _GraphFactory:
 
     def create_graph(self, gm: torch.fx.GraphModule) -> Graph:
         # First, apply decompositions to transform unsupported operations
-        decomposed_gm = apply_decompositions(gm)
+        decomposed_gm = gm
 
         for node_idx, node in enumerate(decomposed_gm.graph.nodes):
             if node.op == "placeholder":
@@ -349,7 +349,7 @@ class MaxCompiler:
         #    graph.output(*outputs)
 
         factory = _GraphFactory()
-        graph = factory.create_graph(gm)
+        graph = factory.create_graph(apply_decompositions(gm))
 
         # Store none_indices from the factory
         self.none_indices = getattr(factory, "none_indices", [])
