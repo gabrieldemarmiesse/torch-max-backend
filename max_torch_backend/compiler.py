@@ -287,13 +287,11 @@ class MaxCompiler:
         return [torch.from_dlpack(x) for x in outputs]
 
 
-class _MaxCompilerGradCompatible:
-    def __init__(
-        self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
-    ):
-        super().__init__(gm, example_inputs)
-        self._max_compiler = MaxCompiler(gm, example_inputs)
-        self.__call__ = make_boxed_func(self._max_compiler.__call__)
+def _MaxCompilerGradCompatible(
+    gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
+):
+    _max_compiler = MaxCompiler(gm, example_inputs)
+    return make_boxed_func(_max_compiler.__call__)
 
 
 MaxCompilerGradCompatible = aot_autograd(fw_compiler=_MaxCompilerGradCompatible)
