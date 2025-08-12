@@ -95,19 +95,30 @@ def torch_embedding_equivalent(
             "sparse gradients are not supported yet in this embedding implementation"
         )
 
-    # Handle scalar indices by reshaping to have at least one dimension
-    # PyTorch embedding returns the selected row directly for scalar input
-    # but MAX gather may need proper shape handling
-    original_shape = input.shape
-    if len(original_shape) == 0:  # Scalar tensor
-        input_reshaped = max_ops.unsqueeze(input, axis=0)
-        result = max_ops.gather(weight, input_reshaped, axis=0)
-        # Remove the added dimension: [1, embedding_dim] -> [embedding_dim]
-        return max_ops.squeeze(result, axis=0)
+    # Ensure indices are integers - cast if needed
+    from max.dtype import DType
+
+    if input.dtype != DType.int64 and input.dtype != DType.int32:
+        input = max_ops.cast(input, dtype=DType.int64)
+
+    # Handle both scalar and tensor indices with gather
+    # The gather signature is: gather(input_tensor, indices, axis)
+    if len(input.shape) == 0:  # Scalar tensor
+        # Convert scalar to 1D tensor [index] -> gather -> squeeze back to remove dimension
+        input_expanded = max_ops.unsqueeze(input, axis=0)  # [] -> [1]
+        result = max_ops.gather(
+            weight, input_expanded, axis=0
+        )  # [vocab, dim] -> [1, dim]
+        result = max_ops.squeeze(result, axis=0)  # [1, dim] -> [dim]
     else:
-        # Use gather to select rows from weight matrix based on input indices
-        # axis=0 means we're gathering along the first dimension (vocab dimension)
-        return max_ops.gather(weight, input, axis=0)
+        # For 1D indices tensor, gather directly
+        result = max_ops.gather(weight, input, axis=0)
+
+    # Ensure the result has the same dtype as the weight matrix (typically float32)
+    if result.dtype != weight.dtype:
+        result = max_ops.cast(result, dtype=weight.dtype)
+
+    return result
 
 
 def torch_autocast_equivalent(*args, **kwargs):
@@ -995,6 +1006,36 @@ def torch_addmm_equivalent(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     return operator.add(scaled_input, matmul_result)
 
 
+def torch_add_equivalent(input, other, *, alpha=1):
+    """
+    Equivalent to torch.add with dtype compatibility handling
+    """
+    # Handle dtype mismatches by casting to a common type
+    if (
+        hasattr(input, "dtype")
+        and hasattr(other, "dtype")
+        and input.dtype != other.dtype
+    ):
+        # Promote to float if one operand is float and the other is int
+        from max.dtype import DType
+
+        if input.dtype in [DType.int32, DType.int64] and other.dtype in [
+            DType.float32,
+            DType.float64,
+        ]:
+            input = max_ops.cast(input, dtype=other.dtype)
+        elif other.dtype in [DType.int32, DType.int64] and input.dtype in [
+            DType.float32,
+            DType.float64,
+        ]:
+            other = max_ops.cast(other, dtype=input.dtype)
+
+    if alpha != 1:
+        other = operator.mul(other, alpha)
+
+    return operator.add(input, other)
+
+
 def torch_div_equivalent(input, other, *, rounding_mode=None):
     if rounding_mode is None:
         return operator.truediv(input, other)
@@ -1007,6 +1048,39 @@ def torch_div_equivalent(input, other, *, rounding_mode=None):
         return operator.floordiv(input, other)
     else:
         raise ValueError(f"Unsupported rounding_mode: {rounding_mode}")
+
+
+def torch_convolution_equivalent(
+    input,
+    weight,
+    bias=None,
+    stride=1,
+    padding=0,
+    dilation=1,
+    transposed=False,
+    output_padding=0,
+    groups=1,
+):
+    """
+    Equivalent to aten.convolution - wrapper for conv2d that handles all the aten parameters
+    """
+    if transposed:
+        raise NotImplementedError("Transposed convolution is not supported yet.")
+
+    # Convert list padding to tuple for conv2d_equivalent
+    if isinstance(padding, list):
+        padding = tuple(padding)
+
+    # Call the existing conv2d implementation
+    return torch_conv2d_equivalent(
+        input=input,
+        weight=weight,
+        bias=bias,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+    )
 
 
 def no_op(*args, **kwargs):
@@ -1148,6 +1222,10 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.unsqueeze: torch_unsqueeze_equivalent,
     aten.argmin: torch_argmin_equivalent,
     aten.argmax: torch_argmax_equivalent,
+    aten.relu: relu_equivalent,
+    aten.convolution: torch_convolution_equivalent,
+    aten.embedding: torch_embedding_equivalent,
+    aten.add: torch_add_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
     "unsqueeze": torch_unsqueeze_equivalent,
