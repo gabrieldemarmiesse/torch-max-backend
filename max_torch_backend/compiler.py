@@ -288,12 +288,6 @@ class _GraphFactory:
         return self.graph
 
 
-def generate_graph(gm: torch.fx.GraphModule) -> Graph:
-    """Generates a MAX graph from a PyTorch FX GraphModule."""
-    factory = _GraphFactory()
-    return factory.create_graph(gm)
-
-
 def generate_input_types(
     example_inputs: list[torch.Tensor],
 ) -> list[max.graph.value.TensorType]:
