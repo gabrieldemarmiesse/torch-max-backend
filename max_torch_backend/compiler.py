@@ -7,7 +7,6 @@ import max.graph.value
 from max import engine
 from max.driver import Accelerator, accelerator_count, CPU
 from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
-import uuid
 import warnings
 from torch._dynamo.backends.common import aot_autograd
 
@@ -35,8 +34,6 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
 
     if not needs_decomposition:
         return gm
-
-    print("Applying decompositions to unsupported operations...")
 
     # Create a wrapper function that applies decompositions using make_fx
     def decompose_with_make_fx(*args):
@@ -67,9 +64,6 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
     decomposed_gm = make_fx(
         decompose_with_make_fx, decomposition_table=decomposition_table
     )(*example_inputs)
-    print("Decomposition successful!")
-    print("Decomposed graph:")
-    decomposed_gm.graph.print_tabular()
     return decomposed_gm
 
 
@@ -288,29 +282,6 @@ class _GraphFactory:
         return self.graph
 
 
-def generate_input_types(
-    example_inputs: list[torch.Tensor],
-) -> list[max.graph.value.TensorType]:
-    result = []
-    for inp in example_inputs:
-        if not isinstance(inp, torch.Tensor):
-            continue
-        shape = []
-        for dim_idx, dim in enumerate(inp.shape):
-            if dim_idx in getattr(inp, "_dynamo_dynamic_indices", {}):
-                shape.append("a" + str(uuid.uuid4()).replace("-", "_"))
-            else:
-                shape.append(int(dim))
-        result.append(
-            max.graph.value.TensorType(
-                dtype=DType.from_torch(inp.dtype),
-                shape=shape,
-                device=max_device_ref(inp.device),
-            )
-        )
-    return result
-
-
 def get_accelerators():
     yield CPU()
     if accelerator_count() > 0:
@@ -339,15 +310,7 @@ class MaxCompiler:
         gm = apply_decompositions(gm)
 
         gm.graph.print_tabular()
-        # analyze_dynamic_shapes(example_inputs)
-        # print(f"number of nodes: {len(gm.graph.nodes)}")
-        # print(f"Number of inputs for the examples: {len(example_inputs)}")
 
-        # max_input_specs = generate_input_types(keep_only_tensors(example_inputs))
-        ## print(f"max_input_specs: {max_input_specs}")
-        # with Graph("some_graph", input_types=max_input_specs) as graph:
-        #    outputs = GraphFunction(self.gm)(*graph.inputs)
-        #    graph.output(*outputs)
         factory = _GraphFactory()
         graph = factory.create_graph(gm)
 
