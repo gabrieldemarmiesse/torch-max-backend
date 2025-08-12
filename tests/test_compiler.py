@@ -48,6 +48,38 @@ def test_basic_addition(device: str):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
+def test_basic_training(device: str):
+    class MyModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(3, 2)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    model = MyModel().to(device)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+    def train_step(x, y):
+        model.train()
+        optimizer.zero_grad()
+        output = model(x)
+        loss = F.mse_loss(output, y)
+        loss.backward()
+        optimizer.step()
+        return loss
+
+    a = torch.randn(5, 3).to(device)
+    b = torch.randn(5, 2).to(device)
+
+    # We need to reset the parameters before each test
+    # to check the model weights afterwards
+    model.linear.weight.data.fill_(0.01)
+    model.linear.bias.data.fill_(0.01)
+
+    torch.compile(backend=MaxCompiler)(train_step)(a, b)
+
+
 def test_iadd(device: str):
     def fn(x, y):
         x += y
