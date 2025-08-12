@@ -934,6 +934,26 @@ def torch_mse_loss_equivalent(
         raise ValueError(f"Unsupported reduction type: {reduction}")
 
 
+def torch_t_equivalent(input):
+    return torch_transpose_equivalent(input, 0, 1)
+
+
+def torch_addmm_equivalent(input, mat1, mat2, *, beta=1.0, alpha=1.0):
+    # addmm computes: beta * input + alpha * mat1 @ mat2
+    matmul_result = operator.matmul(mat1, mat2)
+
+    # Apply scaling factors
+    if alpha != 1.0:
+        matmul_result = operator.mul(matmul_result, alpha)
+
+    if beta != 1.0:
+        scaled_input = operator.mul(input, beta)
+    else:
+        scaled_input = input
+
+    return operator.add(scaled_input, matmul_result)
+
+
 def no_op(*args, **kwargs):
     pass
 
@@ -1023,7 +1043,9 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.stack: torch_stack_equivalent,
     torch.sum: torch_sum_equivalent,
     torch.matmul: operator.matmul,
+    torch.addmm: torch_addmm_equivalent,
     torch.full: torch_full_equivalent,
+    torch.t: torch_t_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -1053,6 +1075,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "reshape": torch_view_equivalent,  # reshape is equivalent to view for MAX backend
     "unbind": torch_unbind_equivalent,
     "repeat_interleave": torch_repeat_interleave_equivalent,
+    "t": torch_t_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
