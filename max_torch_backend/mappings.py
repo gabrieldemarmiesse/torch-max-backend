@@ -915,6 +915,24 @@ def torch_masked_fill_equivalent(input, mask, value):
     return max_ops.where(mask, value, input)
 
 
+def torch_mse_loss_equivalent(
+    input, target, size_average=None, reduce=None, reduction="mean"
+):
+    # Compute squared differences
+    diff = input - target
+    squared_diff = diff * diff
+
+    # Handle reduction types
+    if reduction == "none":
+        return squared_diff
+    elif reduction == "mean":
+        return torch_mean_equivalent(squared_diff)
+    elif reduction == "sum":
+        return torch_sum_equivalent(squared_diff)
+    else:
+        raise ValueError(f"Unsupported reduction type: {reduction}")
+
+
 def no_op(*args, **kwargs):
     pass
 
@@ -977,6 +995,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.gelu: torch_gelu_equivalent,
     F.silu: torch_silu_equivalent,
     F.softmax: torch_softmax_equivalent,
+    F.mse_loss: torch_mse_loss_equivalent,
     torch._C._nn.linear: torch_linear_equivalent,
     torch.flatten: torch_flatten_equivalent,
     # TODO: Use noop function
