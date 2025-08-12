@@ -1022,8 +1022,8 @@ def torch_nn_functional_sdpa_equivalent(
     enable_gqa: bool = False,
 ) -> max_ops.TensorValueLike:
 
-    L, S = int(query.shape[-2]), int(key.shape[-2])
-    scale_factor = 1 / math.sqrt(int(query.shape[-1])) if scale is None else scale
+    L, S = query.shape[-2], key.shape[-2]
+    scale_factor = 1 / max_ops.sqrt(query.shape[-1]) if scale is None else scale
     attn_bias = max_ops.broadcast_to(
         max_ops.constant(0, query.dtype, query.device), [L, S]
     )
@@ -1049,10 +1049,10 @@ def torch_nn_functional_sdpa_equivalent(
             attn_bias = attn_mask + attn_bias
 
     if enable_gqa:
-        key = max_ops.repeat_interleave(key, query.size(-3) // key.size(-3), -3)
-        value = max_ops.repeat_interleave(key, query.size(-3) // value.size(-3), -3)
+        key = torch_repeat_interleave_equivalent(key, query.size(-3) // key.size(-3), -3)
+        value = torch_repeat_interleave_equivalent(key, query.size(-3) // value.size(-3), -3)
 
-    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_weight = query @ key.transpose(-2, -1) * scale_factor.cast(key.dtype)
     attn_weight += attn_bias
     attn_weight = max_ops.softmax(attn_weight)
     attn_weight = torch_dropout_equivalent(attn_weight, dropout_p, training=True)

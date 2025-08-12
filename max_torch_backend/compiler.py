@@ -255,11 +255,15 @@ def deviceref_to_torch(device_ref: DeviceRef) -> torch.device:
 
 
 class MaxCompiler:
+    last_call_end = 0
+    cpu_device_ref = CPU()
+
     def __init__(
-        self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
+        self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None, debug=True
     ):
         self.gm = gm
         self.example_inputs = example_inputs
+        self.debug = debug
         # gm.graph.print_tabular()
         # analyze_dynamic_shapes(example_inputs)
         # print(f"number of nodes: {len(gm.graph.nodes)}")
@@ -275,13 +279,29 @@ class MaxCompiler:
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
-        self.model._export_mef('compiled_model.mef')
-        print("MAX Model compilation done")
+        if debug:
+            print("MAX Model compilation done")
 
     def __call__(self, *args) -> list[torch.Tensor]:
         # Detach tensors to avoid gradient tracking issues with DLpack
-        start = time.clock_gettime_ns(0)
-        outputs = self.model.execute(*keep_only_tensors(args, detach=True))
-        end = time.clock_gettime_ns(0)
-        print("Step duration: ", end - start, "nanoseconds")
-        return [torch.from_dlpack(x) for x in outputs]
+        if self.debug:
+            start = time.clock_gettime_ns(0)
+            print("MAX: Start step. Wait Period: ", start - self.last_call_end)
+        outputs: list[max.graph.ops.TensorValueLike] = self.model.execute(*keep_only_tensors(args, detach=True))
+        if self.debug:
+            print(outputs)
+            after_step = time.clock_gettime_ns(0)
+        on_cpu = [x.to(self.cpu_device_ref) for x in outputs]
+        if self.debug:
+            after_transfer_to_cpu = time.clock_gettime_ns(0)
+            print("Transfer to CPU:", after_transfer_to_cpu - after_step)
+        dlpacked = [torch.from_dlpack(x) for x in on_cpu]
+        if self.debug:
+            after_dlpack = time.clock_gettime_ns(0)
+            print("dlpack:", after_dlpack - after_transfer_to_cpu)
+        converted = [x.to(device='cuda') for x in dlpacked]
+        if self.debug:
+            self.last_call_end = time.clock_gettime_ns(0)
+            print("back to cuda:", self.last_call_end - after_dlpack)
+            print("Step duration: ", after_step - start, "nanoseconds. Transfer time: ", self.last_call_end - after_step)
+        return converted
