@@ -13,6 +13,8 @@ from torch._dynamo.backends.common import aot_autograd
 
 from max.graph import DeviceRef
 from functorch.compile import make_boxed_func
+from torch._decomp import core_aten_decompositions
+from torch.fx.experimental.proxy_tensor import make_fx
 
 
 class MaxCompilerError(Exception):
@@ -114,6 +116,7 @@ class _GraphFactory:
         self.graph_inputs = []
         self.graph = None
         self.tensor_book = TensorsBook()
+        self.decomposition_table = core_aten_decompositions()
 
     def initialize_graph(self):
         if self.graph is not None:
@@ -157,18 +160,75 @@ class _GraphFactory:
             )
             self.names_to_input_idx[node.name] = len(self.graph_inputs) - 1
 
+    def apply_decompositions(self, gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
+        """
+        Apply decompositions to any unsupported operations using PyTorch's make_fx.
+        This is a generic solution that works for any operation in core_aten_decompositions.
+        """
+        # Check if any nodes need decomposition
+        needs_decomposition = any(
+            node.op == "call_function" and node.target in self.decomposition_table
+            for node in gm.graph.nodes
+        )
+
+        if not needs_decomposition:
+            return gm
+
+        print("Applying decompositions to unsupported operations...")
+
+        # Create a wrapper function that applies decompositions using make_fx
+        def decompose_with_make_fx(*args):
+            # We need to create a function that represents the entire graph
+            # and then apply decompositions to it
+            return gm(*args)
+
+        # Get example inputs from the first few placeholder nodes
+        example_inputs = []
+        for node in gm.graph.nodes:
+            if node.op == "placeholder":
+                if "val" in node.meta:
+                    example_value = node.meta["val"]
+                elif "example_value" in node.meta:
+                    example_value = node.meta["example_value"]
+                else:
+                    # Create a dummy tensor - this might not work for all cases
+                    example_value = torch.tensor(0.0)
+
+                if isinstance(example_value, torch.Tensor):
+                    # Use the exact same shape as the original to avoid shape mismatches
+                    dummy_tensor = torch.zeros_like(example_value)
+                    example_inputs.append(dummy_tensor)
+                else:
+                    example_inputs.append(example_value)
+
+        try:
+            # Apply decompositions using make_fx
+            decomposed_gm = make_fx(
+                decompose_with_make_fx, decomposition_table=self.decomposition_table
+            )(*example_inputs)
+            print("Decomposition successful!")
+            print("Decomposed graph:")
+            decomposed_gm.graph.print_tabular()
+            return decomposed_gm
+        except Exception as e:
+            print(f"Failed to apply decompositions: {e}")
+            print("Falling back to original graph")
+            return gm
+
     def handle_call_function(self, node_idx: int, node: torch.fx.Node):
         func_args = [self.tensor_book.convert_to_max(x) for x in node.args]
         func_kwargs = {
             k: self.tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
         }
         key = node.target
-        if key.namespace == "aten":
+        if hasattr(key, "namespace") and key.namespace == "aten":
             key = key.overloadpacket
+
         if key not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
             raise ValueError(
                 f"Failing at node {node_idx}. Function {get_fully_qualified_name(node.target)}  not supported by the Max backend yet."
             )
+
         try:
             func_output = MAPPING_TORCH_TO_MOJO_FUNCTIONS[key](
                 *func_args, **func_kwargs
@@ -186,12 +246,34 @@ class _GraphFactory:
         self.tensor_book[node.name] = attr_value
 
     def handle_output(self, node: torch.fx.Node):
-        output_tensors = tuple(self.tensor_book.convert_to_max(x) for x in node.args[0])
-        self.graph.output(*output_tensors)
+        # Handle both tensor and None outputs (common in backward pass)
+        output_tensors = []
+        none_indices = []
+
+        for i, x in enumerate(node.args[0]):
+            converted = self.tensor_book.convert_to_max(x)
+            if converted is None:
+                none_indices.append(i)
+            else:
+                output_tensors.append(converted)
+
+        # Store the none indices for runtime handling
+        self.none_indices = none_indices
+
+        if output_tensors:  # Only output if we have actual tensors
+            self.graph.output(*output_tensors)
+        else:
+            raise ValueError(
+                f"Node {node.name} has no valid outputs. All outputs were None."
+            )
+
         self.graph.__exit__(None, None, None)
 
     def create_graph(self, gm: torch.fx.GraphModule) -> Graph:
-        for node_idx, node in enumerate(gm.graph.nodes):
+        # First, apply decompositions to transform unsupported operations
+        decomposed_gm = self.apply_decompositions(gm)
+
+        for node_idx, node in enumerate(decomposed_gm.graph.nodes):
             if node.op == "placeholder":
                 self.handle_placeholder(node)
                 continue
@@ -276,7 +358,11 @@ class MaxCompiler:
         #    outputs = GraphFunction(self.gm)(*graph.inputs)
         #    graph.output(*outputs)
 
-        graph = generate_graph(gm)
+        factory = _GraphFactory()
+        graph = factory.create_graph(gm)
+
+        # Store none_indices from the factory
+        self.none_indices = getattr(factory, "none_indices", [])
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
@@ -284,7 +370,21 @@ class MaxCompiler:
     def __call__(self, *args) -> list[torch.Tensor]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
-        return [torch.from_dlpack(x) for x in outputs]
+        tensor_outputs = [torch.from_dlpack(x) for x in outputs]
+
+        # Reconstruct the original output structure with None values
+        if hasattr(self, "none_indices") and self.none_indices:
+            result = []
+            tensor_idx = 0
+            for i in range(len(tensor_outputs) + len(self.none_indices)):
+                if i in self.none_indices:
+                    result.append(None)
+                else:
+                    result.append(tensor_outputs[tensor_idx])
+                    tensor_idx += 1
+            return result
+        else:
+            return tensor_outputs
 
 
 def _MaxCompilerGradCompatible(
