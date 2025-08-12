@@ -518,37 +518,77 @@ def torch_repeat_interleave_equivalent(
     return result
 
 
-def torch_amax_equivalent(input, dim, keepdim=False, *, out=None):
+def torch_select_equivalent(input: max_ops.TensorType, dim: int, index: int):
+    """
+    Equivalent to torch.select - selects elements from tensor along a dimension.
+    """
+    # Handle negative dim
+    if dim < 0:
+        dim = len(input.shape) + dim
+
+    # Use getitem with proper indexing
+    # Create a slice that selects the specific index in the given dimension
+    slices = [slice(None)] * len(input.shape)
+    slices[dim] = index
+
+    # Apply the slice and squeeze the selected dimension
+    selected = input[tuple(slices)]
+
+    # Only squeeze if the result still has the dimension we want to remove
+    if len(selected.shape) > dim:
+        return max_ops.squeeze(selected, axis=dim)
+    else:
+        # The dimension was already removed by the indexing operation
+        return selected
+
+
+def torch_amax_equivalent(input, dim=None, keepdim=False, *, out=None):
     # If only input is provided, we find the maximum along the specified dimension
-    if dim is None:
+    if dim is None or (isinstance(dim, list) and len(dim) == 0):
         dim = [i for i in range(len(input.shape))]
     elif isinstance(dim, int):
         dim = [dim]
+    elif isinstance(dim, list | tuple):
+        dim = list(dim)
+
+    # Convert negative dimensions to positive
+    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
 
     # Similar to mean, we can only reduce dimensions one at a time
+    # Sort dimensions in descending order to avoid index shifting issues
     result = input
-    for axis in dim:
+    for axis in sorted(dim, reverse=True):
         result = max_ops.max(result, axis=axis)
+
     if not keepdim:
         # Squeeze the reduced dimensions
+        # Since we reduced in reverse order, squeeze in reverse order too
         for axis in sorted(dim, reverse=True):
             result = max_ops.squeeze(result, axis=axis)
     return result
 
 
-def torch_amin_equivalent(input, dim, keepdim=False, *, out=None):
+def torch_amin_equivalent(input, dim=None, keepdim=False, *, out=None):
     # If only input is provided, we find the minimum along the specified dimension
-    if dim is None:
+    if dim is None or (isinstance(dim, list) and len(dim) == 0):
         dim = [i for i in range(len(input.shape))]
     elif isinstance(dim, int):
         dim = [dim]
+    elif isinstance(dim, list | tuple):
+        dim = list(dim)
+
+    # Convert negative dimensions to positive
+    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
 
     # Similar to mean, we can only reduce dimensions one at a time
+    # Sort dimensions in descending order to avoid index shifting issues
     result = input
-    for axis in dim:
+    for axis in sorted(dim, reverse=True):
         result = max_ops.min(result, axis=axis)
+
     if not keepdim:
         # Squeeze the reduced dimensions
+        # Since we reduced in reverse order, squeeze in reverse order too
         for axis in sorted(dim, reverse=True):
             result = max_ops.squeeze(result, axis=axis)
     return result
@@ -791,6 +831,7 @@ def torch_full_equivalent(
     layout=torch.strided,
     device=None,
     requires_grad=False,
+    pin_memory=False,
 ):
     if dtype is None:
         dtype = torch.float32
@@ -954,6 +995,20 @@ def torch_addmm_equivalent(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     return operator.add(scaled_input, matmul_result)
 
 
+def torch_div_equivalent(input, other, *, rounding_mode=None):
+    if rounding_mode is None:
+        return operator.truediv(input, other)
+    elif rounding_mode == "floor":
+        return operator.floordiv(input, other)
+    elif rounding_mode == "trunc":
+        # Truncation towards zero: floor(x/y) if x/y > 0, ceil(x/y) if x/y < 0
+        # For now, let's use floordiv - this is an approximation
+        # TODO: Implement proper truncation division
+        return operator.floordiv(input, other)
+    else:
+        raise ValueError(f"Unsupported rounding_mode: {rounding_mode}")
+
+
 def no_op(*args, **kwargs):
     pass
 
@@ -1063,6 +1118,35 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.mm: operator.matmul,
     aten.sum: torch_sum_equivalent,
     aten.view: torch_view_equivalent,
+    aten.argmax: torch_argmax_equivalent,
+    aten.full: torch_full_equivalent,
+    aten.div: torch_div_equivalent,
+    aten.remainder: operator.mod,
+    aten.abs: max_ops.abs,
+    aten.cos: max_ops.cos,
+    aten.sin: max_ops.sin,
+    aten.cat: torch_cat_equivalent,
+    aten.stack: torch_stack_equivalent,
+    aten.min: torch_min_equivalent,
+    aten.max: torch_max_equivalent,
+    aten.amax: torch_amax_equivalent,
+    aten.amin: torch_amin_equivalent,
+    aten.clamp: torch_clamp_equivalent,
+    aten.arange: torch_arange_equivalent,
+    aten.layer_norm: torch_layer_norm_equivalent,
+    aten.gelu: torch_gelu_equivalent,
+    aten.softmax: torch_softmax_equivalent,
+    aten.masked_fill: torch_masked_fill_equivalent,
+    aten.split: torch_split_equivalent,
+    aten.tril: torch_tril_equivalent,
+    aten.triu: torch_triu_equivalent,
+    aten.unbind: torch_unbind_equivalent,
+    aten.repeat_interleave: torch_repeat_interleave_equivalent,
+    aten.select: torch_select_equivalent,
+    aten.minimum: max_ops.min,
+    aten.maximum: max_ops.max,
+    aten.unsqueeze: torch_unsqueeze_equivalent,
+    aten.argmin: torch_argmin_equivalent,
     aten.argmax: torch_argmax_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
