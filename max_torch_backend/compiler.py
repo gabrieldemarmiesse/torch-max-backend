@@ -116,7 +116,6 @@ class _GraphFactory:
         self.graph_inputs = []
         self.graph = None
         self.tensor_book = TensorsBook()
-        self.decomposition_table = core_aten_decompositions()
 
     def initialize_graph(self):
         if self.graph is not None:
@@ -165,9 +164,10 @@ class _GraphFactory:
         Apply decompositions to any unsupported operations using PyTorch's make_fx.
         This is a generic solution that works for any operation in core_aten_decompositions.
         """
+        decomposition_table = core_aten_decompositions()
         # Check if any nodes need decomposition
         needs_decomposition = any(
-            node.op == "call_function" and node.target in self.decomposition_table
+            node.op == "call_function" and node.target in decomposition_table
             for node in gm.graph.nodes
         )
 
@@ -203,7 +203,7 @@ class _GraphFactory:
 
         # Apply decompositions using make_fx
         decomposed_gm = make_fx(
-            decompose_with_make_fx, decomposition_table=self.decomposition_table
+            decompose_with_make_fx, decomposition_table=decomposition_table
         )(*example_inputs)
         print("Decomposition successful!")
         print("Decomposed graph:")
