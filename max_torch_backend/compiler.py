@@ -3,6 +3,7 @@ from max.dtype import DType
 
 from max.graph import Graph
 from max.torch.torch import max_device_ref
+import max.torch as max_torch
 import max.graph.value
 from max import engine
 from max.driver import Accelerator, accelerator_count, CPU
@@ -291,17 +292,19 @@ class MaxCompiler:
         if self.debug:
             print(outputs)
             after_step = time.clock_gettime_ns(0)
-        on_cpu = [x.to(self.cpu_device_ref) for x in outputs]
-        if self.debug:
-            after_transfer_to_cpu = time.clock_gettime_ns(0)
-            print("Transfer to CPU:", after_transfer_to_cpu - after_step)
-        dlpacked = [torch.from_dlpack(x) for x in on_cpu]
-        if self.debug:
-            after_dlpack = time.clock_gettime_ns(0)
-            print("dlpack:", after_dlpack - after_transfer_to_cpu)
-        converted = [x.to(device='cuda') for x in dlpacked]
+        converted = [torch.from_dlpack(x) for x in outputs]
+        # on_cpu = [x.to(self.cpu_device_ref) for x in outputs]
+        # if self.debug:
+        #     after_transfer_to_cpu = time.clock_gettime_ns(0)
+        #     print("Transfer to CPU:", after_transfer_to_cpu - after_step)
+        # dlpacked = [torch.from_dlpack(x) for x in on_cpu]
+        # if self.debug:
+        #     after_dlpack = time.clock_gettime_ns(0)
+        #     print("dlpack:", after_dlpack - after_transfer_to_cpu)
+        # converted = [x.to(device='cuda') for x in dlpacked]
+
         if self.debug:
             self.last_call_end = time.clock_gettime_ns(0)
-            print("back to cuda:", self.last_call_end - after_dlpack)
+            # print("back to cuda:", self.last_call_end - after_dlpack)
             print("Step duration: ", after_step - start, "nanoseconds. Transfer time: ", self.last_call_end - after_step)
         return converted

@@ -1,9 +1,11 @@
 import operator
-from typing import Optional
+from typing import Optional, Sequence
 
+import einops
 import max.graph.ops as max_ops
 import torch
 from torch import Tensor
+from torch import Size
 import torch.nn.functional as F
 import torch.amp.autocast_mode
 import max.nn as max_nn
@@ -1084,6 +1086,38 @@ def torch_nn_functional_interpolate_equivalent(
     )
 
 
+def torch_vf_zeros_equivalent(
+    *size: Sequence[int | torch.SymInt],
+    out: Tensor | None = None,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device = None,
+    pin_memory: bool | None = False,
+    requires_grad: bool | None = False,
+) -> max_ops.TensorValueLike:
+    return max_ops.broadcast_to(max_ops.constant(
+        0, DType.from_torch(dtype), max_device_ref(device)
+    ), size)
+
+def torch_tensor_repeat_equivalent(
+    self: max_ops.TensorValueLike, *repeats: int | torch.SymInt
+):
+    return max_ops.tile(self, repeats)
+
+def torch_tensor_reshape_equivalent(
+    tensor, *shape
+):
+    if isinstance(shape, tuple) and len(shape) == 1:
+        shape = shape[0]
+    return max_ops.reshape(tensor, shape)
+
+def torch_tensor_permute_equivalent(
+    tensor, *dims: int
+):
+    if isinstance(dims, tuple) and len(dims) == 1:
+        dims = dims[0]
+    return max_ops.permute(tensor, dims)
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -1176,6 +1210,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.sum: torch_sum_equivalent,
     torch.matmul: operator.matmul,
     torch.full: torch_full_equivalent,
+    torch._VF.zeros: torch_vf_zeros_equivalent,
+    torch.Tensor.repeat: torch_tensor_repeat_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -1205,8 +1241,10 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     "unbind": torch_unbind_equivalent,
     "repeat_interleave": torch_repeat_interleave_equivalent,
     "movedim": torch_movedim_equivalent,
-    "reshape": lambda tensor, *shape: max_ops.reshape(tensor, shape),
+    "reshape": torch_tensor_reshape_equivalent,
     "chunk": torch_tensor_chunk_equivalent,
+    'repeat': torch_tensor_repeat_equivalent,
+    'permute': torch_tensor_permute_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
