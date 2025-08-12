@@ -336,6 +336,8 @@ class MaxCompiler:
         self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
     ):
         self.example_inputs = example_inputs
+        gm = apply_decompositions(gm)
+
         gm.graph.print_tabular()
         # analyze_dynamic_shapes(example_inputs)
         # print(f"number of nodes: {len(gm.graph.nodes)}")
@@ -346,7 +348,6 @@ class MaxCompiler:
         # with Graph("some_graph", input_types=max_input_specs) as graph:
         #    outputs = GraphFunction(self.gm)(*graph.inputs)
         #    graph.output(*outputs)
-        gm = apply_decompositions(gm)
         factory = _GraphFactory()
         graph = factory.create_graph(gm)
 
