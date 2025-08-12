@@ -21,6 +21,58 @@ class MaxCompilerError(Exception):
     pass
 
 
+def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
+    """
+    Apply decompositions to any unsupported operations using PyTorch's make_fx.
+    This is a generic solution that works for any operation in core_aten_decompositions.
+    """
+    decomposition_table = core_aten_decompositions()
+    # Check if any nodes need decomposition
+    needs_decomposition = any(
+        node.op == "call_function" and node.target in decomposition_table
+        for node in gm.graph.nodes
+    )
+
+    if not needs_decomposition:
+        return gm
+
+    print("Applying decompositions to unsupported operations...")
+
+    # Create a wrapper function that applies decompositions using make_fx
+    def decompose_with_make_fx(*args):
+        # We need to create a function that represents the entire graph
+        # and then apply decompositions to it
+        return gm(*args)
+
+    # Get example inputs from the first few placeholder nodes
+    example_inputs = []
+    for node in gm.graph.nodes:
+        if node.op == "placeholder":
+            if "val" in node.meta:
+                example_value = node.meta["val"]
+            elif "example_value" in node.meta:
+                example_value = node.meta["example_value"]
+            else:
+                # Create a dummy tensor - this might not work for all cases
+                example_value = torch.tensor(0.0)
+
+            if isinstance(example_value, torch.Tensor):
+                # Use the exact same shape as the original to avoid shape mismatches
+                dummy_tensor = torch.zeros_like(example_value)
+                example_inputs.append(dummy_tensor)
+            else:
+                example_inputs.append(example_value)
+
+    # Apply decompositions using make_fx
+    decomposed_gm = make_fx(
+        decompose_with_make_fx, decomposition_table=decomposition_table
+    )(*example_inputs)
+    print("Decomposition successful!")
+    print("Decomposed graph:")
+    decomposed_gm.graph.print_tabular()
+    return decomposed_gm
+
+
 def analyze_dynamic_shapes(example_inputs):
     for i, inp in enumerate(example_inputs):
         if isinstance(inp, torch.SymInt):
@@ -159,57 +211,6 @@ class _GraphFactory:
             )
             self.names_to_input_idx[node.name] = len(self.graph_inputs) - 1
 
-    def apply_decompositions(self, gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
-        """
-        Apply decompositions to any unsupported operations using PyTorch's make_fx.
-        This is a generic solution that works for any operation in core_aten_decompositions.
-        """
-        decomposition_table = core_aten_decompositions()
-        # Check if any nodes need decomposition
-        needs_decomposition = any(
-            node.op == "call_function" and node.target in decomposition_table
-            for node in gm.graph.nodes
-        )
-
-        if not needs_decomposition:
-            return gm
-
-        print("Applying decompositions to unsupported operations...")
-
-        # Create a wrapper function that applies decompositions using make_fx
-        def decompose_with_make_fx(*args):
-            # We need to create a function that represents the entire graph
-            # and then apply decompositions to it
-            return gm(*args)
-
-        # Get example inputs from the first few placeholder nodes
-        example_inputs = []
-        for node in gm.graph.nodes:
-            if node.op == "placeholder":
-                if "val" in node.meta:
-                    example_value = node.meta["val"]
-                elif "example_value" in node.meta:
-                    example_value = node.meta["example_value"]
-                else:
-                    # Create a dummy tensor - this might not work for all cases
-                    example_value = torch.tensor(0.0)
-
-                if isinstance(example_value, torch.Tensor):
-                    # Use the exact same shape as the original to avoid shape mismatches
-                    dummy_tensor = torch.zeros_like(example_value)
-                    example_inputs.append(dummy_tensor)
-                else:
-                    example_inputs.append(example_value)
-
-        # Apply decompositions using make_fx
-        decomposed_gm = make_fx(
-            decompose_with_make_fx, decomposition_table=decomposition_table
-        )(*example_inputs)
-        print("Decomposition successful!")
-        print("Decomposed graph:")
-        decomposed_gm.graph.print_tabular()
-        return decomposed_gm
-
     def handle_call_function(self, node_idx: int, node: torch.fx.Node):
         func_args = [self.tensor_book.convert_to_max(x) for x in node.args]
         func_kwargs = {
@@ -266,7 +267,7 @@ class _GraphFactory:
 
     def create_graph(self, gm: torch.fx.GraphModule) -> Graph:
         # First, apply decompositions to transform unsupported operations
-        decomposed_gm = self.apply_decompositions(gm)
+        decomposed_gm = apply_decompositions(gm)
 
         for node_idx, node in enumerate(decomposed_gm.graph.nodes):
             if node.op == "placeholder":
