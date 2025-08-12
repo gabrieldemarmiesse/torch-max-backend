@@ -346,9 +346,9 @@ class MaxCompiler:
         # with Graph("some_graph", input_types=max_input_specs) as graph:
         #    outputs = GraphFunction(self.gm)(*graph.inputs)
         #    graph.output(*outputs)
-
+        gm = apply_decompositions(gm)
         factory = _GraphFactory()
-        graph = factory.create_graph(apply_decompositions(gm))
+        graph = factory.create_graph(gm)
 
         # Store none_indices from the factory
         self.none_indices = getattr(factory, "none_indices", [])
