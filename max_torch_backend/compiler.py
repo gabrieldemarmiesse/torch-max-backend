@@ -201,19 +201,14 @@ class _GraphFactory:
                 else:
                     example_inputs.append(example_value)
 
-        try:
-            # Apply decompositions using make_fx
-            decomposed_gm = make_fx(
-                decompose_with_make_fx, decomposition_table=self.decomposition_table
-            )(*example_inputs)
-            print("Decomposition successful!")
-            print("Decomposed graph:")
-            decomposed_gm.graph.print_tabular()
-            return decomposed_gm
-        except Exception as e:
-            print(f"Failed to apply decompositions: {e}")
-            print("Falling back to original graph")
-            return gm
+        # Apply decompositions using make_fx
+        decomposed_gm = make_fx(
+            decompose_with_make_fx, decomposition_table=self.decomposition_table
+        )(*example_inputs)
+        print("Decomposition successful!")
+        print("Decomposed graph:")
+        decomposed_gm.graph.print_tabular()
+        return decomposed_gm
 
     def handle_call_function(self, node_idx: int, node: torch.fx.Node):
         func_args = [self.tensor_book.convert_to_max(x) for x in node.args]
