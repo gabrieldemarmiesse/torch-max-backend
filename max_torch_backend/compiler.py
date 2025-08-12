@@ -317,13 +317,11 @@ class MaxCompiler:
 
         # Reconstruct the original output structure with None values
         result = []
-        tensor_idx = 0
         for i in range(len(tensor_outputs) + len(self.none_indices)):
             if i in self.none_indices:
                 result.append(None)
             else:
-                result.append(tensor_outputs[tensor_idx])
-                tensor_idx += 1
+                result.append(tensor_outputs[len(result)])
         return result
 
 
