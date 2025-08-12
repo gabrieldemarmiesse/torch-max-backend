@@ -260,10 +260,7 @@ class _GraphFactory:
         self.graph.__exit__(None, None, None)
 
     def create_graph(self, gm: torch.fx.GraphModule) -> Graph:
-        # First, apply decompositions to transform unsupported operations
-        decomposed_gm = gm
-
-        for node_idx, node in enumerate(decomposed_gm.graph.nodes):
+        for node_idx, node in enumerate(gm.graph.nodes):
             if node.op == "placeholder":
                 self.handle_placeholder(node)
                 continue
