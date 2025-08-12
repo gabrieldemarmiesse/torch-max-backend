@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from collections.abc import Callable
-from max_torch_backend import MaxCompiler, MaxCompilerBackpropCompatible
+from max_torch_backend import MaxCompiler, MaxCompilerBackpropCompatible, compiler
 import pytest
 from torch._dynamo import mark_dynamic
 import io
@@ -17,7 +17,7 @@ def check_functions_are_equivalent(
     rtol=5e-2,
     atol=5e-3,
 ):
-    fn_compiled = fn_compiled or torch.compile(backend=MaxCompiler)(fn)
+    fn_compiled = fn_compiled or torch.compile(backend=compiler.default_compiler)(fn)
     if device is not None:
         inputs = [input_tensor.to(device) for input_tensor in inputs]
 

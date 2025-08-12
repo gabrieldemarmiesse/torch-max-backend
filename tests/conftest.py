@@ -1,6 +1,10 @@
 import pytest
 import torch
-from max_torch_backend import get_accelerators, MaxCompiler
+from max_torch_backend import (
+    get_accelerators,
+    MaxCompiler,
+    MaxCompilerBackpropCompatible,
+)
 from max_torch_backend import compiler
 
 
@@ -28,7 +32,7 @@ def reset_compiler():
     yield
 
 
-@pytest.fixture(params=[MaxCompiler, MaxCompiler], autouse=True)
+@pytest.fixture(params=[MaxCompiler, MaxCompilerBackpropCompatible], autouse=True)
 def compiler_to_use(request):
     compiler.default_compiler = request.param
     yield
