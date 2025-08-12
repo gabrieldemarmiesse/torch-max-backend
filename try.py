@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch.nn import functional as F
-from max_torch_backend import MaxCompilerGradCompatible
+from max_torch_backend import MaxCompilerBackpropCompatible
 
 device = "cpu"
 
@@ -45,7 +45,7 @@ model.linear.weight.data.fill_(0.01)
 model.linear.bias.data.fill_(0.01)
 
 loss_compiled = (
-    torch.compile(backend=MaxCompilerGradCompatible)(train_step)(a, b)
+    torch.compile(backend=MaxCompilerBackpropCompatible)(train_step)(a, b)
     .cpu()
     .detach()
     .numpy()

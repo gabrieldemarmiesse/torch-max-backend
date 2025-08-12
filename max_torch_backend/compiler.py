@@ -340,11 +340,11 @@ class MaxCompiler:
             return tensor_outputs
 
 
-def _MaxCompilerGradCompatible(
+def _MaxCompilerBackpropCompatible(
     gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
 ):
     _max_compiler = MaxCompiler(gm, example_inputs)
     return make_boxed_func(_max_compiler.__call__)
 
 
-MaxCompilerGradCompatible = aot_autograd(fw_compiler=_MaxCompilerGradCompatible)
+MaxCompilerBackpropCompatible = aot_autograd(fw_compiler=_MaxCompilerBackpropCompatible)
