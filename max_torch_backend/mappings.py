@@ -955,6 +955,20 @@ def torch_addmm_equivalent(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     return operator.add(scaled_input, matmul_result)
 
 
+def torch_div_equivalent(input, other, *, rounding_mode=None):
+    # Handle torch.div with different rounding modes
+    if rounding_mode is None:
+        return operator.truediv(input, other)
+    elif rounding_mode == "floor":
+        return operator.floordiv(input, other)
+    elif rounding_mode == "trunc":
+        # Truncation towards zero (not implemented in operator, need custom logic)
+        result = operator.truediv(input, other)
+        return max_ops.trunc(result)
+    else:
+        raise ValueError(f"Unsupported rounding_mode: {rounding_mode}")
+
+
 def torch_foreach_add_equivalent(tensors, others, alpha=1.0):
     """
     Equivalent to torch._foreach_add.List - element-wise addition of two lists of tensors.
@@ -1079,6 +1093,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.sub: operator.sub,
     aten.mul: operator.mul,
     aten.add: operator.add,
+    aten.div: torch_div_equivalent,
+    aten.floordiv: operator.floordiv,
     aten.permute: max_ops.permute,
     aten.pow: operator.pow,
     aten.mean: torch_mean_equivalent,

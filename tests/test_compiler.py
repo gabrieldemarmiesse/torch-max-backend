@@ -216,24 +216,24 @@ def test_multiplication_int32(device: str, tensor_shapes: tuple, compiler_to_use
     check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_division(device: str, tensor_shapes: tuple):
+def test_division(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return x / y
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes) + 1.0  # Avoid division by zero
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_floor_division(device: str, tensor_shapes: tuple):
+def test_floor_division(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return x // y
 
     a = torch.randn(tensor_shapes) * 10
     b = torch.randn(tensor_shapes).abs() + 1.0  # Avoid division by zero
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
 def test_power(device: str, tensor_shapes: tuple, compiler_to_use):
@@ -473,23 +473,23 @@ def test_minimum_maximum(device: str, tensor_shapes: tuple, func):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_relu(device: str, tensor_shapes: tuple):
+def test_relu(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x):
         return F.relu(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_functions_are_equivalent(fn, device, [a], compiler=compiler_to_use)
 
 
-def test_cat(device: str, tensor_shapes: tuple):
+def test_cat(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return torch.cat([x, y], dim=0)
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
 def test_combination_add_mul(device: str, tensor_shapes: tuple, compiler_to_use):
@@ -503,7 +503,7 @@ def test_combination_add_mul(device: str, tensor_shapes: tuple, compiler_to_use)
     check_functions_are_equivalent(fn, device, [a, b, c], compiler=compiler_to_use)
 
 
-def test_combination_sub_div(device: str, tensor_shapes: tuple):
+def test_combination_sub_div(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y, z):
         return (x - y) / z
 
@@ -511,7 +511,7 @@ def test_combination_sub_div(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes) + 1.0  # Avoid division by zero
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_functions_are_equivalent(fn, device, [a, b, c], compiler=compiler_to_use)
 
 
 def test_combination_trig_arithmetic(
