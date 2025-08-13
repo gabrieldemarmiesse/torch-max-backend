@@ -1389,7 +1389,7 @@ def test_tensor_pow_with_other_methods(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_change_device_to_cpu(device: str):
+def test_change_device_to_cpu(device: str, compiler_to_use):
     """Test changing device to CPU"""
 
     def fn(x):
@@ -1397,10 +1397,10 @@ def test_change_device_to_cpu(device: str):
 
     x = torch.randn(1, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_change_device_to_cpu_by_device(device: str):
+def test_change_device_to_cpu_by_device(device: str, compiler_to_use):
     """Test changing device to CPU"""
 
     def fn(x):
@@ -1408,7 +1408,7 @@ def test_change_device_to_cpu_by_device(device: str):
 
     x = torch.randn(1, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
 def test_change_device_to_cuda(device: str, gpu_available: bool):
@@ -1563,7 +1563,7 @@ def test_to_device_transfer_with_computation(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_autocast_enter_exit():
+def test_autocast_enter_exit(compiler_to_use):
     """Test autocast enter and exit functionality"""
 
     def fn(x):
@@ -1573,7 +1573,7 @@ def test_autocast_enter_exit():
     x = torch.randn(2, 3)
 
     # Test on CPU device only as autocast behavior may vary
-    check_functions_are_equivalent(fn, "cpu", [x])
+    check_functions_are_equivalent(fn, "cpu", [x], compiler=compiler_to_use)
 
 
 def test_complex_to_operations(device: str):
@@ -1922,7 +1922,7 @@ def test_sqrt_combined_with_arithmetic(device: str):
     check_functions_are_equivalent(fn, device, [x, y])
 
 
-def test_chained_sqrt_rsqrt_operations(device: str):
+def test_chained_sqrt_rsqrt_operations(device: str, compiler_to_use):
     """Test chained sqrt and rsqrt operations"""
 
     def fn(x):
@@ -1931,7 +1931,7 @@ def test_chained_sqrt_rsqrt_operations(device: str):
 
     x = torch.randn(3, 4).abs() + 0.1
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
 def test_rsqrt_with_trigonometric_functions(device: str):
@@ -3007,7 +3007,7 @@ def test_max_pool2d_various_sizes(device: str):
         check_functions_are_equivalent(fn, device, [x])
 
 
-def test_adaptive_avg_pool2d_global(device: str):
+def test_adaptive_avg_pool2d_global(device: str, compiler_to_use):
     """Test adaptive_avg_pool2d with (1, 1) output (global pooling)"""
 
     def fn(x):
@@ -3016,10 +3016,10 @@ def test_adaptive_avg_pool2d_global(device: str):
     batch_size, channels, height, width = 2, 3, 8, 8
     x = torch.randn(batch_size, channels, height, width)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_adaptive_avg_pool2d_7x7(device: str):
+def test_adaptive_avg_pool2d_7x7(device: str, compiler_to_use):
     """Test adaptive_avg_pool2d with (7, 7) output like in VGG"""
 
     def fn(x):
@@ -3028,10 +3028,10 @@ def test_adaptive_avg_pool2d_7x7(device: str):
     batch_size, channels, height, width = 2, 512, 14, 14
     x = torch.randn(batch_size, channels, height, width)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_adaptive_avg_pool2d_various_outputs(device: str):
+def test_adaptive_avg_pool2d_various_outputs(device: str, compiler_to_use):
     """Test adaptive_avg_pool2d with various output sizes"""
 
     def fn_2x2(x):
@@ -3043,8 +3043,8 @@ def test_adaptive_avg_pool2d_various_outputs(device: str):
     batch_size, channels, height, width = 2, 64, 16, 16
     x = torch.randn(batch_size, channels, height, width)
 
-    check_functions_are_equivalent(fn_2x2, device, [x])
-    check_functions_are_equivalent(fn_4x4, device, [x])
+    check_functions_are_equivalent(fn_2x2, device, [x], compiler=compiler_to_use)
+    check_functions_are_equivalent(fn_4x4, device, [x], compiler=compiler_to_use)
 
 
 def test_flatten_basic(device: str):

@@ -166,6 +166,7 @@ def torch_to_equivalent(tensor, *args, **kwargs):
         )
     device = kwargs.pop("device", None)
     dtype = kwargs.pop("dtype", None)
+    kwargs.pop("layout", None)  # Ignore layout for now
     if dtype is not None:
         dtype = DType.from_torch(dtype)
 
@@ -487,6 +488,31 @@ def torch_unbind_equivalent(
         result.append(squeezed)
 
     return result
+
+
+def torch_select_equivalent(input: max_ops.TensorType, dim: int, index: int):
+    """
+    Equivalent to torch.select - selects a slice of the tensor along the given dimension at the given index.
+    """
+    # Handle negative dim
+    if dim < 0:
+        dim = len(input.shape) + dim
+
+    # Handle negative index
+    if index < 0:
+        index = int(input.shape[dim]) + index
+
+    # Create slice bounds for all dimensions
+    start = [0] * len(input.shape)
+    end = [int(s) for s in input.shape]  # Use the full size for other dimensions
+
+    # Set the specific dimension to select just one index
+    start[dim] = index
+    end[dim] = index + 1
+
+    # Use slice_tensor to get the specific index, then squeeze to remove the dimension
+    sliced = max_ops.slice_tensor(input, start, end)
+    return max_ops.squeeze(sliced, axis=dim)
 
 
 def torch_repeat_interleave_equivalent(
@@ -1161,6 +1187,9 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.relu: relu_equivalent,
     aten.embedding: torch_embedding_equivalent,
     aten.convolution: torch_aten_convolution_equivalent,
+    aten._adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,
+    aten.select: torch_select_equivalent,
+    aten._to_copy: torch_to_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
     "unsqueeze": torch_unsqueeze_equivalent,
