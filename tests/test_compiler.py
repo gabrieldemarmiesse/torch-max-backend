@@ -1611,21 +1611,22 @@ def test_complex_to_operations(device: str):
 
 
 class MaxCompilerCallCount:
-    def __init__(self):
+    def __init__(self, compiler):
         self.call_count = 0
+        self.compiler = compiler
 
     def __call__(self, *args, **kwargs):
         self.call_count += 1
-        return MaxCompiler(*args, **kwargs)
+        return self.compiler(*args, **kwargs)
 
 
-def test_dynamic_shapes(device: str):
+def test_dynamic_shapes(device: str, compiler_to_use):
     """Testing the behavior with mark_dynamic()."""
 
     def fn(x, y):
         return x + y
 
-    counter = MaxCompilerCallCount()
+    counter = MaxCompilerCallCount(compiler_to_use)
     fn_compiled = torch.compile(backend=counter)(fn)
 
     a = torch.randn(20, 2).to(device)
@@ -1645,13 +1646,13 @@ def test_dynamic_shapes(device: str):
     assert counter.call_count == 1
 
 
-def test_recompilation(device: str):
+def test_recompilation(device: str, compiler_to_use):
     """Testing the behavior without mark_dynamic()."""
 
     def fn(x, y):
         return x + y
 
-    counter = MaxCompilerCallCount()
+    counter = MaxCompilerCallCount(compiler_to_use)
     fn_compiled = torch.compile(backend=counter)(fn)
 
     a = torch.randn(20, 2).to(device)
