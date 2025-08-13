@@ -1,6 +1,10 @@
 import pytest
 import torch
-from max_torch_backend import get_accelerators
+from max_torch_backend import (
+    get_accelerators,
+    MaxCompiler,
+    MaxCompilerBackpropCompatible,
+)
 
 
 @pytest.fixture(params=["cpu", "cuda"])
@@ -25,3 +29,8 @@ def tensor_shapes(request):
 def reset_compiler():
     torch.compiler.reset()
     yield
+
+
+@pytest.fixture(params=[MaxCompiler, MaxCompilerBackpropCompatible])
+def compiler_to_use(request):
+    yield request.param

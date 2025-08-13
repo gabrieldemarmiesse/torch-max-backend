@@ -130,6 +130,8 @@ class TensorsBook:
             return something
         elif isinstance(something, torch.dtype):
             return something
+        elif isinstance(something, torch.layout):
+            return something
         elif something is None:
             return None
         elif something == ...:

@@ -16,8 +16,9 @@ def check_functions_are_equivalent(
     fn_compiled: Callable | None = None,
     rtol=5e-2,
     atol=5e-3,
+    compiler=MaxCompiler,
 ):
-    fn_compiled = fn_compiled or torch.compile(backend=MaxCompiler)(fn)
+    fn_compiled = fn_compiled or torch.compile(backend=compiler)(fn)
     if device is not None:
         inputs = [input_tensor.to(device) for input_tensor in inputs]
 
@@ -39,14 +40,14 @@ def check_functions_are_equivalent(
         assert torch.allclose(original, compiled, rtol=rtol, atol=atol)
 
 
-def test_basic_addition(device: str):
+def test_basic_addition(device: str, compiler_to_use):
     def fn(x, y):
         return x + y
 
     a = torch.randn(3)
     b = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
 def test_basic_training(device: str):
@@ -119,7 +120,7 @@ def test_basic_training(device: str):
     np.testing.assert_allclose(bias_not_compiled, bias_compiled, rtol=5e-2, atol=5e-3)
 
 
-def test_iadd(device: str):
+def test_iadd(device: str, compiler_to_use):
     def fn(x, y):
         x += y
         return x
@@ -127,7 +128,7 @@ def test_iadd(device: str):
     a = torch.randn(3)
     b = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
 def test_t_method(device: str):
