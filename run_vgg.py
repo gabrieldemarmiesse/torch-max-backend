@@ -6,7 +6,7 @@ from io import BytesIO
 from max_torch_backend import MaxCompiler
 import time
 
-device = "cuda"
+device = "cpu"
 
 model = models.vgg11(pretrained=True).to(device)
 model.eval()
