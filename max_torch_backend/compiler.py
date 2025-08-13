@@ -167,6 +167,49 @@ class _GraphFactory:
         self.graph = None
         self.tensor_book = TensorsBook()
 
+    def find_live_nodes(self, gm: torch.fx.GraphModule) -> set[torch.fx.Node]:
+        """
+        Find all nodes that contribute to the final outputs using backward traversal.
+        This eliminates dead branches that don't affect any outputs.
+        """
+        live_nodes = set()
+
+        # Find output nodes first
+        output_nodes = [node for node in gm.graph.nodes if node.op == "output"]
+
+        def mark_live(node: torch.fx.Node):
+            if node in live_nodes:
+                return
+            live_nodes.add(node)
+
+            # Mark all input nodes as live
+            for arg in node.args:
+                if isinstance(arg, torch.fx.Node):
+                    mark_live(arg)
+                elif isinstance(arg, list | tuple):
+                    for item in arg:
+                        if isinstance(item, torch.fx.Node):
+                            mark_live(item)
+
+            for kwarg in node.kwargs.values():
+                if isinstance(kwarg, torch.fx.Node):
+                    mark_live(kwarg)
+                elif isinstance(kwarg, list | tuple):
+                    for item in kwarg:
+                        if isinstance(item, torch.fx.Node):
+                            mark_live(item)
+
+        # Start from output nodes and work backwards
+        for output_node in output_nodes:
+            mark_live(output_node)
+
+        # Always include placeholder nodes as they represent inputs
+        for node in gm.graph.nodes:
+            if node.op == "placeholder":
+                live_nodes.add(node)
+
+        return live_nodes
+
     def initialize_graph(self):
         if self.graph is not None:
             raise RuntimeError("Graph has already been initialized.")
@@ -265,8 +308,23 @@ class _GraphFactory:
         return output_blueprint
 
     def create_graph(self, gm: torch.fx.GraphModule) -> tuple[Graph, list[int | None]]:
+        # First, identify live nodes to eliminate dead branches
+        live_nodes = self.find_live_nodes(gm)
+
+        # Count dead nodes for reporting
+        total_nodes = len(list(gm.graph.nodes))
+        dead_nodes = total_nodes - len(live_nodes)
+        if dead_nodes > 0:
+            print(
+                f"Dead branch elimination: Skipping {dead_nodes} dead nodes out of {total_nodes} total nodes"
+            )
+
         output_blueprint = None
         for node_idx, node in enumerate(gm.graph.nodes):
+            # Skip dead nodes
+            if node not in live_nodes:
+                continue
+
             if node.op == "placeholder":
                 self.handle_placeholder(node)
                 continue
