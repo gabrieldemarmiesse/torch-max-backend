@@ -578,7 +578,7 @@ def test_broadcasting_compatible(device: str, compiler_to_use):
     check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_conv2d_basic(device: str):
+def test_conv2d_basic(device: str, compiler_to_use):
     """Test basic conv2d with default parameters"""
 
     def fn(x, w):
@@ -590,10 +590,10 @@ def test_conv2d_basic(device: str):
     x = torch.randn(batch_size, in_channels, height, width)
     w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
 
-    check_functions_are_equivalent(fn, device, [x, w])
+    check_functions_are_equivalent(fn, device, [x, w], compiler=compiler_to_use)
 
 
-def test_conv2d_with_bias(device: str):
+def test_conv2d_with_bias(device: str, compiler_to_use):
     """Test conv2d with bias"""
 
     def fn(x, w, b):
@@ -606,7 +606,7 @@ def test_conv2d_with_bias(device: str):
     w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
     b = torch.randn(out_channels)
 
-    check_functions_are_equivalent(fn, device, [x, w, b])
+    check_functions_are_equivalent(fn, device, [x, w, b], compiler=compiler_to_use)
 
 
 def test_conv2d_stride_int(device: str):
@@ -1775,7 +1775,7 @@ def test_mean_combined_with_arithmetic(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a, y])
 
 
-def test_rsqrt_function(device: str):
+def test_rsqrt_function(device: str, compiler_to_use):
     """Test torch.rsqrt() function"""
 
     def fn(x):
@@ -1783,10 +1783,10 @@ def test_rsqrt_function(device: str):
 
     x = torch.randn(3, 4).abs() + 0.1  # Ensure positive values for rsqrt
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_sqrt_function(device: str):
+def test_sqrt_function(device: str, compiler_to_use):
     """Test torch.sqrt() function"""
 
     def fn(x):
@@ -1794,10 +1794,10 @@ def test_sqrt_function(device: str):
 
     x = torch.randn(3, 4).abs() + 0.01  # Ensure positive values for sqrt
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_tensor_rsqrt_method(device: str):
+def test_tensor_rsqrt_method(device: str, compiler_to_use):
     """Test tensor.rsqrt() method"""
 
     def fn(x):
@@ -1805,10 +1805,10 @@ def test_tensor_rsqrt_method(device: str):
 
     x = torch.randn(3, 4).abs() + 0.1  # Ensure positive values
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_tensor_sqrt_method(device: str):
+def test_tensor_sqrt_method(device: str, compiler_to_use):
     """Test tensor.sqrt() method"""
 
     def fn(x):
@@ -1816,10 +1816,10 @@ def test_tensor_sqrt_method(device: str):
 
     x = torch.randn(3, 4).abs() + 0.01  # Ensure positive values
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_rsqrt_different_shapes(device: str, tensor_shapes: tuple):
+def test_rsqrt_different_shapes(device: str, tensor_shapes: tuple, compiler_to_use):
     """Test rsqrt with different tensor shapes"""
 
     def fn(x):
@@ -1827,10 +1827,10 @@ def test_rsqrt_different_shapes(device: str, tensor_shapes: tuple):
 
     x = torch.randn(tensor_shapes).abs() + 0.1
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_sqrt_different_shapes(device: str, tensor_shapes: tuple):
+def test_sqrt_different_shapes(device: str, tensor_shapes: tuple, compiler_to_use):
     """Test sqrt with different tensor shapes"""
 
     def fn(x):
@@ -1838,10 +1838,10 @@ def test_sqrt_different_shapes(device: str, tensor_shapes: tuple):
 
     x = torch.randn(tensor_shapes).abs() + 0.01
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_rsqrt_with_ones(device: str):
+def test_rsqrt_with_ones(device: str, compiler_to_use):
     """Test rsqrt with tensor of ones (should return ones)"""
 
     def fn(x):
@@ -1849,10 +1849,10 @@ def test_rsqrt_with_ones(device: str):
 
     x = torch.ones(2, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
-def test_sqrt_with_ones(device: str):
+def test_sqrt_with_ones(device: str, compiler_to_use):
     """Test sqrt with tensor of ones (should return ones)"""
 
     def fn(x):
@@ -1860,7 +1860,7 @@ def test_sqrt_with_ones(device: str):
 
     x = torch.ones(2, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_functions_are_equivalent(fn, device, [x], compiler=compiler_to_use)
 
 
 def test_rsqrt_with_powers_of_two(device: str):
@@ -1995,7 +1995,7 @@ def test_sqrt_rsqrt_broadcasting(device: str):
     check_functions_are_equivalent(fn, device, [x, y])
 
 
-def test_linear_basic(device: str):
+def test_linear_basic(device: str, compiler_to_use):
     """Test basic linear function without bias"""
 
     def fn(input, weight):
@@ -2007,10 +2007,12 @@ def test_linear_basic(device: str):
     input = torch.randn(batch_size, in_features)
     weight = torch.randn(out_features, in_features)
 
-    check_functions_are_equivalent(fn, device, [input, weight])
+    check_functions_are_equivalent(
+        fn, device, [input, weight], compiler=compiler_to_use
+    )
 
 
-def test_linear_with_bias(device: str):
+def test_linear_with_bias(device: str, compiler_to_use):
     """Test linear function with bias"""
 
     def fn(input, weight, bias):
@@ -2023,7 +2025,9 @@ def test_linear_with_bias(device: str):
     weight = torch.randn(out_features, in_features)
     bias = torch.randn(out_features)
 
-    check_functions_are_equivalent(fn, device, [input, weight, bias])
+    check_functions_are_equivalent(
+        fn, device, [input, weight, bias], compiler=compiler_to_use
+    )
 
 
 def test_linear_small_dimensions(device: str):

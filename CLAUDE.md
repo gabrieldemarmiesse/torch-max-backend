@@ -132,3 +132,5 @@ The project implements a custom PyTorch compiler backend (`my_compiler`) that:
 - The directory `../pytorch/` contains the PyTorch source code. It might be helpful to look inside as 
   many things in `torch.compile` are not documented correctly.
   
+
+The signature of all aten ops are in ressources/aten_ops.txt. Feel free to look inside if you need.

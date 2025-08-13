@@ -40,9 +40,15 @@ def torch_conv2d_equivalent(
         padding = (padding, padding, padding, padding)
     elif isinstance(padding, str):
         raise ValueError("Padding must be an int or a tuple of ints.")
-    elif isinstance(padding, tuple):
-        # PyTorch padding=(pad_h, pad_w) -> MAX padding=(pad_h_before, pad_h_after, pad_w_before, pad_w_after)
-        padding = (padding[0], padding[0], padding[1], padding[1])
+    elif isinstance(padding, tuple | list):
+        if len(padding) == 2:
+            # PyTorch padding=(pad_h, pad_w) -> MAX padding=(pad_h_before, pad_h_after, pad_w_before, pad_w_after)
+            padding = (padding[0], padding[0], padding[1], padding[1])
+        elif len(padding) == 4:
+            # Already in MAX format
+            padding = tuple(padding)
+        else:
+            raise ValueError(f"Unsupported padding length: {len(padding)}")
     if isinstance(dilation, int):
         dilation = (dilation, dilation)
 
@@ -955,6 +961,27 @@ def torch_addmm_equivalent(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     return operator.add(scaled_input, matmul_result)
 
 
+def torch_aten_convolution_equivalent(
+    input, weight, bias, stride, padding, dilation, transposed, output_padding, groups
+):
+    # aten.convolution is more general than F.conv2d
+    # For now, we only support the 2D case that maps to F.conv2d
+    if transposed:
+        raise NotImplementedError("Transposed convolution is not supported yet")
+    if any(p != 0 for p in output_padding):
+        raise NotImplementedError("Output padding is not supported yet")
+
+    return torch_conv2d_equivalent(
+        input=input,
+        weight=weight,
+        bias=bias,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+    )
+
+
 def torch_div_equivalent(input, other, *, rounding_mode=None):
     # Handle torch.div with different rounding modes
     if rounding_mode is None:
@@ -1107,6 +1134,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.abs: max_ops.abs,
     aten.cos: max_ops.cos,
     aten.sin: max_ops.sin,
+    aten.rsqrt: max_ops.rsqrt,
+    aten.sqrt: max_ops.sqrt,
     aten.cat: torch_cat_equivalent,
     aten.stack: torch_stack_equivalent,
     aten.min: torch_min_equivalent,
@@ -1131,6 +1160,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.argmax: torch_argmax_equivalent,
     aten.relu: relu_equivalent,
     aten.embedding: torch_embedding_equivalent,
+    aten.convolution: torch_aten_convolution_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
     "unsqueeze": torch_unsqueeze_equivalent,
