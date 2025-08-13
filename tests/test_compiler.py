@@ -167,23 +167,23 @@ def test_new_ones_device(device: str):
     check_functions_are_equivalent(fn, "cpu", [a])
 
 
-def test_new_ones_dtype(device: str):
+def test_new_ones_dtype(device: str, compiler_to_use):
     def fn(x):
         return x.new_ones((3, 3), dtype=torch.uint8)
 
     a = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_functions_are_equivalent(fn, device, [a], compiler=compiler_to_use)
 
 
-def test_operator_add(device: str, tensor_shapes: tuple):
+def test_operator_add(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return x + y
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
 def test_subtraction(device: str, tensor_shapes: tuple):

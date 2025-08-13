@@ -791,6 +791,7 @@ def torch_full_equivalent(
     layout=torch.strided,
     device=None,
     requires_grad=False,
+    pin_memory=False,
 ):
     if dtype is None:
         dtype = torch.float32
