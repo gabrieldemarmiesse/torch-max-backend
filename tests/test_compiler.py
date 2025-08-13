@@ -186,34 +186,34 @@ def test_operator_add(device: str, tensor_shapes: tuple, compiler_to_use):
     check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_subtraction(device: str, tensor_shapes: tuple):
+def test_subtraction(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return x - y
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_multiplication(device: str, tensor_shapes: tuple):
+def test_multiplication(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return x * y
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_multiplication_int32(device: str, tensor_shapes: tuple):
+def test_multiplication_int32(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return x * y
 
     a = torch.randint(0, 10, size=tensor_shapes, dtype=torch.int32)
     b = torch.randint(0, 10, size=tensor_shapes, dtype=torch.int32)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
 def test_division(device: str, tensor_shapes: tuple):
@@ -236,51 +236,51 @@ def test_floor_division(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_power(device: str, tensor_shapes: tuple):
+def test_power(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return x**y
 
     a = torch.randn(tensor_shapes).abs() + 0.1  # Avoid negative base
     b = torch.randn(tensor_shapes) * 2  # Keep exponent reasonable
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_modulo(device: str, tensor_shapes: tuple):
+def test_modulo(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return x % y
 
     a = torch.randn(tensor_shapes) * 10
     b = torch.randn(tensor_shapes).abs() + 1.0  # Avoid division by zero
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_abs(device: str, tensor_shapes: tuple):
+def test_abs(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x):
         return torch.abs(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_functions_are_equivalent(fn, device, [a], compiler=compiler_to_use)
 
 
-def test_cos(device: str, tensor_shapes: tuple):
+def test_cos(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x):
         return torch.cos(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_functions_are_equivalent(fn, device, [a], compiler=compiler_to_use)
 
 
-def test_sin(device: str, tensor_shapes: tuple):
+def test_sin(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x):
         return torch.sin(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_functions_are_equivalent(fn, device, [a], compiler=compiler_to_use)
 
 
 def test_outer(device: str):
@@ -511,7 +511,7 @@ def test_cat(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_combination_add_mul(device: str, tensor_shapes: tuple):
+def test_combination_add_mul(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y, z):
         return (x + y) * z
 
@@ -519,7 +519,7 @@ def test_combination_add_mul(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_functions_are_equivalent(fn, device, [a, b, c], compiler=compiler_to_use)
 
 
 def test_combination_sub_div(device: str, tensor_shapes: tuple):
@@ -533,17 +533,19 @@ def test_combination_sub_div(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a, b, c])
 
 
-def test_combination_trig_arithmetic(device: str, tensor_shapes: tuple):
+def test_combination_trig_arithmetic(
+    device: str, tensor_shapes: tuple, compiler_to_use
+):
     def fn(x, y):
         return torch.sin(x) + torch.cos(y)
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_combination_abs_mul_add(device: str, tensor_shapes: tuple):
+def test_combination_abs_mul_add(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y, z):
         return torch.abs(x) * y + z
 
@@ -551,20 +553,20 @@ def test_combination_abs_mul_add(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_functions_are_equivalent(fn, device, [a, b, c], compiler=compiler_to_use)
 
 
-def test_combination_pow_mod(device: str, tensor_shapes: tuple):
+def test_combination_pow_mod(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y):
         return (x**2) % y
 
     a = torch.randn(tensor_shapes).abs() + 0.1
     b = torch.randn(tensor_shapes).abs() + 1.0
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
-def test_complex_combination(device: str, tensor_shapes: tuple):
+def test_complex_combination(device: str, tensor_shapes: tuple, compiler_to_use):
     def fn(x, y, z):
         return torch.abs(torch.sin(x) * y + torch.cos(z))
 
@@ -572,17 +574,17 @@ def test_complex_combination(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_functions_are_equivalent(fn, device, [a, b, c], compiler=compiler_to_use)
 
 
-def test_scalar_shapes(device: str):
+def test_scalar_shapes(device: str, compiler_to_use):
     def fn(x, y):
         return x + y * 2
 
     a = torch.randn(())  # Scalar tensor
     b = torch.randn(())
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b], compiler=compiler_to_use)
 
 
 def test_broadcasting_compatible(device: str):
