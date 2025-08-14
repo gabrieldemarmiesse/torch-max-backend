@@ -1185,27 +1185,27 @@ def torch_any_equivalent(input, dim=None, keepdim=False, *, out=None):
     """
     # Convert input to boolean first (non-zero values become True)
     input_bool = max_ops.not_equal(input, 0)
-    
+
     if dim is None:
         # Return True if any element is True (reduce all dimensions)
         dim = tuple(range(len(input.shape)))
     elif isinstance(dim, int):
         dim = (dim,)
-    
+
     # Handle negative dimensions
     dim = [x if x >= 0 else len(input.shape) + x for x in dim]
-    
+
     result = input_bool
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
         result = max_ops.max(result, axis=axis)
-    
+
     # Handle keepdim=False
     if not keepdim:
         # Squeeze the reduced dimensions
         for axis in sorted(dim, reverse=True):
             result = max_ops.squeeze(result, axis=axis)
-    
+
     return result
 
 

@@ -4033,7 +4033,7 @@ def test_any_basic(device: str):
     a = torch.tensor([0, 0, 1, 0])
     check_functions_are_equivalent(fn, device, [a])
 
-    # Test with tensor containing all zeros (should return False)  
+    # Test with tensor containing all zeros (should return False)
     b = torch.tensor([0, 0, 0, 0])
     check_functions_are_equivalent(fn, device, [b])
 
@@ -4047,7 +4047,7 @@ def test_any_with_dim(device: str, dim: int):
 
     # Test with 2D tensor
     a = torch.tensor([[1, 0], [0, 0], [0, 1]])
-    
+
     check_functions_are_equivalent(fn, device, [a])
 
 
@@ -4059,7 +4059,7 @@ def test_any_keepdim(device: str):
 
     # Test with 2D tensor and keepdim=True
     a = torch.tensor([[1, 0], [0, 0], [0, 1]])
-    
+
     check_functions_are_equivalent(fn, device, [a])
 
 
@@ -4072,11 +4072,14 @@ def test_any_shapes(device: str, shapes):
 
     # Test with various shapes and random binary values
     a = torch.randint(0, 2, shapes, dtype=torch.int32)
-    
+
     check_functions_are_equivalent(fn, device, [a])
 
 
-@pytest.mark.parametrize("dtype", [torch.int8, torch.int32, torch.int64, torch.float32, torch.float64, torch.bool])
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.int8, torch.int32, torch.int64, torch.float32, torch.float64, torch.bool],
+)
 def test_any_dtypes(device: str, dtype):
     """Test torch.any with different data types"""
 
@@ -4092,7 +4095,7 @@ def test_any_dtypes(device: str, dtype):
     else:
         # For integer dtypes, use mix of zero and non-zero values
         a = torch.tensor([0, 1, 0, -2], dtype=dtype)
-    
+
     check_functions_are_equivalent(fn, device, [a])
 
 
@@ -4113,5 +4116,5 @@ def test_any_dtypes_with_dim(device: str, dtype, dim):
     else:
         # For integer dtype
         a = torch.tensor([[1, 0], [0, 0], [2, -1]], dtype=dtype)
-    
+
     check_functions_are_equivalent(fn, device, [a])
