@@ -301,6 +301,69 @@ def test_outer(device: str):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
+def test_isnan_basic(device: str):
+    """Test basic isnan functionality"""
+
+    def fn(x):
+        return torch.isnan(x)
+
+    # Create tensor with mix of normal values and NaNs
+    a = torch.tensor([1.0, float("nan"), 3.0, float("nan"), 5.0])
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_isnan_no_nan(device: str):
+    """Test isnan with tensor containing no NaNs"""
+
+    def fn(x):
+        return torch.isnan(x)
+
+    # Regular tensor with no NaNs
+    a = torch.randn(3, 4)
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_isnan_all_nan(device: str):
+    """Test isnan with tensor containing all NaNs"""
+
+    def fn(x):
+        return torch.isnan(x)
+
+    # Tensor with all NaNs
+    a = torch.full((2, 3), float("nan"))
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_isnan_edge_cases(device: str):
+    """Test isnan with various edge cases"""
+
+    def fn(x):
+        return torch.isnan(x)
+
+    # Test with inf, -inf, 0, negative numbers, and NaN
+    test_cases = [
+        torch.tensor([0.0, -0.0, float("inf"), float("-inf"), float("nan")]),
+        torch.tensor([[1.0, float("nan")], [float("inf"), -2.5]]),
+        torch.tensor(
+            [1e10, -1e10, 1e-10, float("nan")]
+        ),  # Very large and small numbers
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_tensor_isnan_method(device: str):
+    """Test tensor.isnan() method"""
+
+    def fn(x):
+        return x.isnan()
+
+    # Mix of NaN and regular values
+    x = torch.tensor([1.0, float("nan"), -3.5, float("nan"), 0.0])
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_stack_1d(device: str):
     # Test 1D tensors
     def fn_1d(a, b):

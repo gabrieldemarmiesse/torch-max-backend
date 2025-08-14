@@ -863,6 +863,12 @@ def aten_index(input, indices=None):
 # index_select(Tensor self, int dim, Tensor index) -> Tensor
 # isinf(Tensor self) -> Tensor
 # isnan(Tensor self) -> Tensor
+@map_to(aten.isnan)
+def aten_isnan(input):
+    """
+    Returns a new tensor with boolean elements representing if each element is NaN or not.
+    """
+    return max_ops.is_nan(input)
 
 
 # le.Scalar(Tensor self, Scalar other) -> Tensor
