@@ -1276,11 +1276,15 @@ def torch_any_equivalent(input, dim=None, keepdim=False, *, out=None):
 def torch_aten_index_equivalent(input, indices=None):
     if not indices:
         raise NotImplementedError("We don't yet support aten.index without indices")
-    if len(indices) != 1:
+    if len([i for i in indices if i is not None]) != 1:
         raise NotImplementedError(
-            "We only support aten.index with a single index for now"
+            "We only support aten.index with a single non-None index"
         )
-    return max_ops.gather(input, indices[0], axis=0)
+
+    for i, index in enumerate(indices):
+        if index is None:
+            continue
+        return max_ops.gather(input, index, axis=i)
 
 
 IDENTICAL_FUNCTIONS = [

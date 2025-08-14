@@ -4538,3 +4538,28 @@ def test_aten_index_select_basic(device: str):
     idx = torch.tensor([1, 2, 3], device=device, dtype=torch.int32)
 
     check_functions_are_equivalent(fn, device, [x, idx])
+
+
+def test_aten_index_select_second_dim(device: str):
+    """Test basic torch.index_select operation"""
+
+    def fn(x, indices):
+        return x[:, indices]
+
+    x = torch.randn(5, 10, device=device)
+    idx = torch.tensor([1, 2, 3], device=device, dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, idx])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+def test_aten_index_select_multiple_dtypes(device: str, dtype):
+    """Test basic torch.index_select operation"""
+
+    def fn(x, indices):
+        return x[:, indices]
+
+    x = torch.randn(5, 10, device=device)
+    idx = torch.tensor([1, 2, 3], device=device, dtype=dtype)
+
+    check_functions_are_equivalent(fn, device, [x, idx])
