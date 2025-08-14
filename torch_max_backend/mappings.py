@@ -973,10 +973,6 @@ def identity(x):
     return x
 
 
-def torch_clone_equivalent(input, memory_format=None):
-    return input
-
-
 def torch_squeeze_equivalent(input, dim):
     if isinstance(dim, int):
         dim = [dim]
@@ -999,89 +995,6 @@ def torch_bmm_equivalent(input, mat2):
     """
     # MAX's matmul handles batch dimensions automatically through broadcasting
     return max_ops.matmul(input, mat2)
-
-
-def torch_exp_equivalent(input):
-    return max_ops.exp(input)
-
-
-def torch_logical_not_equivalent(input):
-    """
-    Equivalent to torch.logical_not.
-    PyTorch's logical_not treats any non-zero value as True and returns the logical negation.
-    MAX's logical_not requires boolean input, so we need to convert first.
-    """
-    # Convert input to boolean (non-zero -> True, zero -> False)
-    input_bool = max_ops.not_equal(input, 0)
-    # Apply logical not
-    return max_ops.logical_not(input_bool)
-
-
-def torch_logical_and_equivalent(input, other):
-    """
-    Equivalent to torch.logical_and.
-    Computes element-wise logical AND of two tensors.
-    Both inputs are converted to boolean first if they aren't already.
-    """
-    # Convert both inputs to boolean if they aren't already
-    if input.dtype != max_type.DType.bool:
-        input_bool = max_ops.not_equal(input, 0)
-    else:
-        input_bool = input
-
-    if other.dtype != max_type.DType.bool:
-        other_bool = max_ops.not_equal(other, 0)
-    else:
-        other_bool = other
-
-    # Apply logical and
-    return max_ops.logical_and(input_bool, other_bool)
-
-
-def torch_any_equivalent(input, dim=None, keepdim=False, *, out=None):
-    """
-    Equivalent to torch.any.
-    Tests if any elements in the input are True (non-zero).
-    Uses max() on boolean tensor since True > False.
-    """
-    # Convert input to boolean first (non-zero values become True)
-    input_bool = max_ops.not_equal(input, 0)
-
-    if dim is None:
-        # Return True if any element is True (reduce all dimensions)
-        dim = tuple(range(len(input.shape)))
-    elif isinstance(dim, int):
-        dim = (dim,)
-
-    # Handle negative dimensions
-    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
-
-    result = input_bool
-    # Use max() to implement any() since True > False
-    for axis in sorted(dim, reverse=True):
-        result = max_ops.max(result, axis=axis)
-
-    # Handle keepdim=False
-    if not keepdim:
-        # Squeeze the reduced dimensions
-        for axis in sorted(dim, reverse=True):
-            result = max_ops.squeeze(result, axis=axis)
-
-    return result
-
-
-def torch_aten_index_equivalent(input, indices=None):
-    if not indices:
-        raise NotImplementedError("We don't yet support aten.index without indices")
-    if len([i for i in indices if i is not None]) != 1:
-        raise NotImplementedError(
-            "We only support aten.index with a single non-None index"
-        )
-
-    for i, index in enumerate(indices):
-        if index is None:
-            continue
-        return max_ops.gather(input, index, axis=i)
 
 
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
@@ -1151,10 +1064,4 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.where: torch_aten_where_equivalent,
     aten.sigmoid: max_ops.sigmoid,
     aten.max_pool2d_with_indices: torch_max_pool2d_with_indices_equivalent,
-    aten.clone: torch_clone_equivalent,
-    aten.exp: torch_exp_equivalent,
-    aten.logical_not: torch_logical_not_equivalent,
-    aten.logical_and: torch_logical_and_equivalent,
-    aten.any: torch_any_equivalent,
-    aten.index: torch_aten_index_equivalent,
 }

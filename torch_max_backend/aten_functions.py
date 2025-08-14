@@ -121,6 +121,41 @@ def torch_adaptive_avg_pool2d_equivalent(input, output_size):
 # amax(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 # amin(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 # any(Tensor self) -> Tensor
+
+
+@map_to(aten.any)
+def aten_any(input, dim=None, keepdim=False, *, out=None):
+    """
+    Equivalent to torch.any.
+    Tests if any elements in the input are True (non-zero).
+    Uses max() on boolean tensor since True > False.
+    """
+    # Convert input to boolean first (non-zero values become True)
+    input_bool = max_ops.not_equal(input, 0)
+
+    if dim is None:
+        # Return True if any element is True (reduce all dimensions)
+        dim = tuple(range(len(input.shape)))
+    elif isinstance(dim, int):
+        dim = (dim,)
+
+    # Handle negative dimensions
+    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
+
+    result = input_bool
+    # Use max() to implement any() since True > False
+    for axis in sorted(dim, reverse=True):
+        result = max_ops.max(result, axis=axis)
+
+    # Handle keepdim=False
+    if not keepdim:
+        # Squeeze the reduced dimensions
+        for axis in sorted(dim, reverse=True):
+            result = max_ops.squeeze(result, axis=axis)
+
+    return result
+
+
 # any.dim(Tensor self, int dim, bool keepdim=False) -> Tensor
 # any.dims(Tensor self, int[]? dim=None, bool keepdim=False) -> Tensor
 # arange.start_step(Scalar start, Scalar end, Scalar step=1, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
@@ -149,7 +184,14 @@ def torch_adaptive_avg_pool2d_equivalent(input, output_size):
 # ceil(Tensor self) -> Tensor
 # clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor
 # clamp.Tensor(Tensor self, Tensor? min=None, Tensor? max=None) -> Tensor
+
+
 # clone(Tensor self, *, MemoryFormat? memory_format=None) -> Tensor
+@map_to(aten.clone)
+def aten_clone(input, *, memory_format=None):
+    return input
+
+
 # col2im(Tensor self, SymInt[2] output_size, int[2] kernel_size, int[2] dilation, int[2] padding, int[2] stride) -> Tensor
 # constant_pad_nd(Tensor self, SymInt[] pad, Scalar value=0) -> Tensor
 # convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor
@@ -171,7 +213,14 @@ def torch_adaptive_avg_pool2d_equivalent(input, output_size):
 # eq.Scalar(Tensor self, Scalar other) -> Tensor
 # eq.Tensor(Tensor self, Tensor other) -> Tensor
 # erf(Tensor self) -> Tensor
+
+
 # exp(Tensor self) -> Tensor
+@map_to(aten.exp)
+def aten_exp(input):
+    return max_ops.exp(input)
+
+
 # expand(Tensor(a) self, SymInt[] size, *, bool implicit=False) -> Tensor(a)
 # expm1(Tensor self) -> Tensor
 # fill.Scalar(Tensor self, Scalar value) -> Tensor
@@ -189,7 +238,24 @@ def torch_adaptive_avg_pool2d_equivalent(input, output_size):
 # gt.Scalar(Tensor self, Scalar other) -> Tensor
 # gt.Tensor(Tensor self, Tensor other) -> Tensor
 # hardtanh(Tensor self, Scalar min_val=-1, Scalar max_val=1) -> Tensor
+
+
 # index.Tensor(Tensor self, Tensor?[] indices) -> Tensor
+@map_to(aten.index)
+def aten_index(input, indices=None):
+    if not indices:
+        raise NotImplementedError("We don't yet support aten.index without indices")
+    if len([i for i in indices if i is not None]) != 1:
+        raise NotImplementedError(
+            "We only support aten.index with a single non-None index"
+        )
+
+    for i, index in enumerate(indices):
+        if index is None:
+            continue
+        return max_ops.gather(input, index, axis=i)
+
+
 # index_put(Tensor self, Tensor?[] indices, Tensor values, bool accumulate=False) -> Tensor
 # index_select(Tensor self, int dim, Tensor index) -> Tensor
 # isinf(Tensor self) -> Tensor
@@ -201,8 +267,43 @@ def torch_adaptive_avg_pool2d_equivalent(input, output_size):
 # log10(Tensor self) -> Tensor
 # log1p(Tensor self) -> Tensor
 # log2(Tensor self) -> Tensor
+
+
 # logical_and(Tensor self, Tensor other) -> Tensor
+@map_to(aten.logical_and)
+def aten_logical_and(input, other):
+    """
+    Computes element-wise logical AND of two tensors.
+    Both inputs are converted to boolean first if they aren't already.
+    """
+    # Convert both inputs to boolean if they aren't already
+    if input.dtype != DType.bool:
+        input_bool = max_ops.not_equal(input, 0)
+    else:
+        input_bool = input
+
+    if other.dtype != DType.bool:
+        other_bool = max_ops.not_equal(other, 0)
+    else:
+        other_bool = other
+
+    # Apply logical and
+    return max_ops.logical_and(input_bool, other_bool)
+
+
 # logical_not(Tensor self) -> Tensor
+@map_to(aten.logical_not)
+def aten_logical_not(input):
+    """
+    PyTorch's logical_not treats any non-zero value as True and returns the logical negation.
+    MAX's logical_not requires boolean input, so we need to convert first.
+    """
+    # Convert input to boolean (non-zero -> True, zero -> False)
+    input_bool = max_ops.not_equal(input, 0)
+    # Apply logical not
+    return max_ops.logical_not(input_bool)
+
+
 # logical_or(Tensor self, Tensor other) -> Tensor
 # logical_xor(Tensor self, Tensor other) -> Tensor
 # lt.Scalar(Tensor self, Scalar other) -> Tensor
