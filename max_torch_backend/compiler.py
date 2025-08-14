@@ -71,15 +71,6 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
     return decomposed_gm
 
 
-def analyze_dynamic_shapes(example_inputs):
-    for i, inp in enumerate(example_inputs):
-        if isinstance(inp, torch.SymInt):
-            print(f"Input {i} is a symbolic integer: {inp}")
-        if hasattr(inp, "_dynamo_dynamic_indices"):
-            for dim_idx in inp._dynamo_dynamic_indices:
-                print(f"Input {i} Dynamic dimension at index {dim_idx} for input {inp}")
-
-
 def get_fully_qualified_name(func):
     if isinstance(func, str):
         return f"torch.Tensor.{func}"
@@ -322,7 +313,7 @@ class _GraphFactory:
         # Count dead nodes for reporting
         total_nodes = len(list(gm.graph.nodes))
         dead_nodes = total_nodes - len(live_nodes)
-        if dead_nodes > 0:
+        if verbose_enabled():
             print(
                 f"Dead branch elimination: Skipping {dead_nodes} dead nodes out of {total_nodes} total nodes"
             )
