@@ -165,40 +165,33 @@ class _GraphFactory:
         self.expression_to_node_name: dict[str, str] = {}
 
     def find_live_nodes(self, gm: torch.fx.GraphModule) -> set[torch.fx.Node]:
-        """
-        Find all nodes that contribute to the final outputs using backward traversal.
-        This eliminates dead branches that don't affect any outputs.
-        """
         live_nodes = set()
 
         # Find output nodes first
         output_nodes = [node for node in gm.graph.nodes if node.op == "output"]
 
-        def mark_live(node: torch.fx.Node):
-            if node in live_nodes:
-                return
-            live_nodes.add(node)
+        # Use a stack for explicit DFS
+        stack = list(output_nodes)
 
-            # Mark all input nodes as live
-            for arg in node.args:
+        def add_to_stack(iterable):
+            for arg in iterable:
                 if isinstance(arg, torch.fx.Node):
-                    mark_live(arg)
+                    stack.append(arg)
                 elif isinstance(arg, list | tuple):
                     for item in arg:
                         if isinstance(item, torch.fx.Node):
-                            mark_live(item)
+                            stack.append(item)
 
-            for kwarg in node.kwargs.values():
-                if isinstance(kwarg, torch.fx.Node):
-                    mark_live(kwarg)
-                elif isinstance(kwarg, list | tuple):
-                    for item in kwarg:
-                        if isinstance(item, torch.fx.Node):
-                            mark_live(item)
+        while stack:
+            node = stack.pop()
 
-        # Start from output nodes and work backwards
-        for output_node in output_nodes:
-            mark_live(output_node)
+            if node in live_nodes:
+                continue
+            live_nodes.add(node)
+
+            # Process args
+            add_to_stack(node.args)
+            add_to_stack(node.kwargs.values())
 
         # Always include placeholder nodes as they represent inputs
         for node in gm.graph.nodes:
