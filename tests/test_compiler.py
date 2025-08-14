@@ -4118,3 +4118,86 @@ def test_any_dtypes_with_dim(device: str, dtype, dim):
         a = torch.tensor([[1, 0], [0, 0], [2, -1]], dtype=dtype)
 
     check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("tensor_shapes", [(2, 3), (1, 5), (4,), (2, 3, 4)])
+def test_full_like_basic(device: str, tensor_shapes: tuple):
+    """Test torch.full_like with different shapes and fill values"""
+
+    def fn(x):
+        return torch.full_like(x, 5.0)
+
+    x = torch.randn(tensor_shapes, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("fill_value", [0, 1, -1, 3.14, -2.5])
+def test_full_like_different_values(device: str, fill_value):
+    """Test torch.full_like with different fill values"""
+
+    def fn(x):
+        return torch.full_like(x, fill_value)
+
+    x = torch.randn(3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.int32, torch.int64]
+)
+def test_full_like_dtype(device: str, dtype):
+    """Test torch.full_like with different dtype specifications"""
+
+    def fn(x):
+        return torch.full_like(x, 7, dtype=dtype)
+
+    x = torch.randn(2, 3, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_full_like_scalar_tensor(device: str):
+    """Test torch.full_like with scalar tensor"""
+
+    def fn(x):
+        return torch.full_like(x, 42.0)
+
+    x = torch.tensor(1.0, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_full_like_zero_fill(device: str):
+    """Test torch.full_like with zero fill value"""
+
+    def fn(x):
+        return torch.full_like(x, 0)
+
+    x = torch.randn(2, 5, 3, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_full_like_negative_fill(device: str):
+    """Test torch.full_like with negative fill value"""
+
+    def fn(x):
+        return torch.full_like(x, -10)
+
+    x = torch.randn(4, 2, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("tensor_shapes", [(1, 1), (10,), (2, 2, 2, 2)])
+def test_full_like_edge_cases(device: str, tensor_shapes: tuple):
+    """Test torch.full_like with edge case shapes"""
+
+    def fn(x):
+        return torch.full_like(x, 100)
+
+    x = torch.ones(tensor_shapes, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])

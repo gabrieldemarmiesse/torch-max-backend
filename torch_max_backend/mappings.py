@@ -810,6 +810,41 @@ def torch_full_equivalent(
     return max_ops.broadcast_to(scalar, size)
 
 
+def torch_full_like_equivalent(
+    input,
+    fill_value,
+    *,
+    dtype=None,
+    layout=torch.strided,
+    device=None,
+    requires_grad=False,
+    pin_memory=False,
+    memory_format=None,
+):
+    # If dtype is not specified, use the input tensor's dtype
+    if dtype is None:
+        target_dtype = input.dtype
+    else:
+        target_dtype = DType.from_torch(dtype)
+
+    # If device is not specified, use the input tensor's device
+    if device is None:
+        target_device = input.device
+    else:
+        target_device = max_device_ref(device)
+
+    # Get the shape from the input tensor
+    target_shape = input.shape
+
+    # Create a scalar constant with the fill value
+    scalar = max_ops.constant(
+        np.array(fill_value), dtype=target_dtype, device=target_device
+    )
+
+    # Broadcast the scalar to the target shape
+    return max_ops.broadcast_to(scalar, target_shape)
+
+
 def torch_native_layer_norm_equivalent(input, normalized_shape, weight, bias, eps):
     # expects a tuple or list for some reason
     # surely for the backward pass,
@@ -1267,6 +1302,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.view: torch_view_equivalent,
     aten.argmax: torch_argmax_equivalent,
     aten.full: torch_full_equivalent,
+    aten.full_like: torch_full_like_equivalent,
     aten.remainder: operator.mod,
     aten.abs: max_ops.abs,
     aten.cos: max_ops.cos,
