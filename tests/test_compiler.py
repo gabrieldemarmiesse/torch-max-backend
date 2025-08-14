@@ -381,6 +381,12 @@ def test_log_edge_cases(device: str):
         torch.tensor([math.e]),  # log(e) = 1
         torch.tensor([1e-5, 1e5]),  # Very small and very large positive values
         torch.tensor([0.001, 1000.0]),  # Range of magnitudes
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
 def test_isnan_basic(device: str):
     """Test basic isnan functionality"""
 
@@ -441,6 +447,10 @@ def test_tensor_log_method(device: str):
 
     # Positive values for log domain
     x = torch.rand(3, 4) * 5 + 0.5  # Range (0.5, 5.5)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_tensor_isnan_method(device: str):
     """Test tensor.isnan() method"""
 
