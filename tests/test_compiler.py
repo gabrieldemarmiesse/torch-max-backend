@@ -263,6 +263,43 @@ def test_abs(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_floor(device: str, tensor_shapes: tuple):
+    def fn(x):
+        return torch.floor(x)
+
+    # Use a mix of positive and negative values to test floor properly
+    a = torch.randn(tensor_shapes) * 10  # Scale to get larger values
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_floor_edge_cases(device: str):
+    """Test floor with specific edge cases"""
+
+    def fn(x):
+        return torch.floor(x)
+
+    # Test with specific values to ensure floor behavior is correct
+    test_cases = [
+        torch.tensor([2.7, -2.7, 3.0, -3.0, 0.5, -0.5, 0.0]),  # Mixed cases
+        torch.tensor([1.9999, -1.9999, 10.1, -10.1]),  # Near integers
+        torch.tensor([100.9, -100.9, 0.1, -0.1]),  # Large and small values
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_tensor_floor_method(device: str):
+    """Test tensor.floor() method"""
+
+    def fn(x):
+        return x.floor()
+
+    x = torch.randn(3, 4) * 5  # Scale values for better floor testing
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_cos(device: str, tensor_shapes: tuple):
     def fn(x):
         return torch.cos(x)
@@ -344,6 +381,52 @@ def test_log_edge_cases(device: str):
         torch.tensor([math.e]),  # log(e) = 1
         torch.tensor([1e-5, 1e5]),  # Very small and very large positive values
         torch.tensor([0.001, 1000.0]),  # Range of magnitudes
+def test_isnan_basic(device: str):
+    """Test basic isnan functionality"""
+
+    def fn(x):
+        return torch.isnan(x)
+
+    # Create tensor with mix of normal values and NaNs
+    a = torch.tensor([1.0, float("nan"), 3.0, float("nan"), 5.0])
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_isnan_no_nan(device: str):
+    """Test isnan with tensor containing no NaNs"""
+
+    def fn(x):
+        return torch.isnan(x)
+
+    # Regular tensor with no NaNs
+    a = torch.randn(3, 4)
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_isnan_all_nan(device: str):
+    """Test isnan with tensor containing all NaNs"""
+
+    def fn(x):
+        return torch.isnan(x)
+
+    # Tensor with all NaNs
+    a = torch.full((2, 3), float("nan"))
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_isnan_edge_cases(device: str):
+    """Test isnan with various edge cases"""
+
+    def fn(x):
+        return torch.isnan(x)
+
+    # Test with inf, -inf, 0, negative numbers, and NaN
+    test_cases = [
+        torch.tensor([0.0, -0.0, float("inf"), float("-inf"), float("nan")]),
+        torch.tensor([[1.0, float("nan")], [float("inf"), -2.5]]),
+        torch.tensor(
+            [1e10, -1e10, 1e-10, float("nan")]
+        ),  # Very large and small numbers
     ]
 
     for test_tensor in test_cases:
@@ -358,6 +441,14 @@ def test_tensor_log_method(device: str):
 
     # Positive values for log domain
     x = torch.rand(3, 4) * 5 + 0.5  # Range (0.5, 5.5)
+def test_tensor_isnan_method(device: str):
+    """Test tensor.isnan() method"""
+
+    def fn(x):
+        return x.isnan()
+
+    # Mix of NaN and regular values
+    x = torch.tensor([1.0, float("nan"), -3.5, float("nan"), 0.0])
     check_functions_are_equivalent(fn, device, [x])
 
 
@@ -3127,6 +3218,72 @@ def test_adaptive_avg_pool2d_various_outputs(device: str):
 
     check_functions_are_equivalent(fn_2x2, device, [x])
     check_functions_are_equivalent(fn_4x4, device, [x])
+
+
+def test_avg_pool2d_basic(device: str):
+    """Test basic avg_pool2d with 2x2 kernel"""
+
+    def fn(x):
+        return F.avg_pool2d(x, kernel_size=2)
+
+    batch_size, channels, height, width = 1, 3, 8, 8
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_avg_pool2d_with_stride(device: str):
+    """Test avg_pool2d with custom stride"""
+
+    def fn(x):
+        return F.avg_pool2d(x, kernel_size=3, stride=2)
+
+    batch_size, channels, height, width = 2, 16, 10, 10
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_avg_pool2d_with_padding(device: str):
+    """Test avg_pool2d with padding"""
+
+    def fn(x):
+        return F.avg_pool2d(x, kernel_size=2, stride=2, padding=1)
+
+    batch_size, channels, height, width = 1, 8, 6, 6
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_avg_pool2d_asymmetric_kernel(device: str):
+    """Test avg_pool2d with asymmetric kernel size"""
+
+    def fn(x):
+        return F.avg_pool2d(x, kernel_size=(2, 3), stride=(1, 2))
+
+    batch_size, channels, height, width = 1, 4, 8, 9
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_avg_pool2d_various_sizes(device: str):
+    """Test avg_pool2d with various input sizes and parameters"""
+
+    def fn_small(x):
+        return F.avg_pool2d(x, kernel_size=2, stride=1)
+
+    def fn_large(x):
+        return F.avg_pool2d(x, kernel_size=4, stride=4)
+
+    # Small input
+    x_small = torch.randn(1, 8, 5, 5)
+    check_functions_are_equivalent(fn_small, device, [x_small])
+
+    # Larger input
+    x_large = torch.randn(2, 32, 16, 16)
+    check_functions_are_equivalent(fn_large, device, [x_large])
 
 
 def test_flatten_basic(device: str):
