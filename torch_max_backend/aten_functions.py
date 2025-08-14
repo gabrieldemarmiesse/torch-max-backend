@@ -68,82 +68,82 @@ def map_to(func: callable) -> callable:
 
 # Add direct mappings with decorators
 @map_to(aten.abs)
-def abs_equivalent(x):
+def aten_abs(x):
     return max_ops.abs(x)
 
 
 @map_to(aten.cos)
-def cos_equivalent(x):
+def aten_cos(x):
     return max_ops.cos(x)
 
 
 @map_to(aten.sin)
-def sin_equivalent(x):
+def aten_sin(x):
     return max_ops.sin(x)
 
 
 @map_to(aten.sqrt)
-def sqrt_equivalent(x):
+def aten_sqrt(x):
     return max_ops.sqrt(x)
 
 
 @map_to(aten.rsqrt)
-def rsqrt_equivalent(x):
+def aten_rsqrt(x):
     return max_ops.rsqrt(x)
 
 
 @map_to(aten.eq)
-def eq_equivalent(x, y):
+def aten_eq(x, y):
     return operator.eq(x, y)
 
 
 @map_to(aten.ne)
-def ne_equivalent(x, y):
+def aten_ne(x, y):
     return operator.ne(x, y)
 
 
 @map_to(aten.gt)
-def gt_equivalent(x, y):
+def aten_gt(x, y):
     return operator.gt(x, y)
 
 
 @map_to(aten.floordiv)
-def floordiv_equivalent(x, y):
+def aten_floordiv(x, y):
     return operator.floordiv(x, y)
 
 
 @map_to(aten.neg)
-def neg_equivalent(x):
+def aten_neg(x):
     return operator.neg(x)
 
 
 @map_to(aten.pow)
-def pow_equivalent(x, y):
+def aten_pow(x, y):
     return operator.pow(x, y)
 
 
 @map_to(aten.remainder)
-def remainder_equivalent(x, y):
+def aten_remainder(x, y):
     return operator.mod(x, y)
 
 
 @map_to(aten.mm)
-def mm_equivalent(x, y):
+def aten_mm(x, y):
     return operator.matmul(x, y)
 
 
 @map_to(aten.permute)
-def permute_equivalent(x, dims):
+def aten_permute(x, dims):
     return max_ops.permute(x, dims)
 
 
 @map_to(aten.maximum)
-def maximum_equivalent(x, y):
+def aten_maximum(x, y):
     return max_ops.max(x, y)
 
 
 @map_to(aten.minimum)
-def minimum_equivalent(x, y):
+def aten_minimum(x, y):
     return max_ops.min(x, y)
 
 
@@ -276,7 +276,7 @@ def aten_add(input, other, *, alpha=1):
 
 # addmm(Tensor self, Tensor mat1, Tensor mat2, *, Scalar beta=1, Scalar alpha=1) -> Tensor
 @map_to(aten.addmm)
-def torch_addmm_equivalent(input, mat1, mat2, *, beta=1.0, alpha=1.0):
+def aten_addmm(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     # addmm computes: beta * input + alpha * mat1 @ mat2
     matmul_result = operator.matmul(mat1, mat2)
 
@@ -300,7 +300,7 @@ def aten_alias(input):
 
 # amax(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 @map_to(aten.amax)
-def torch_amax_equivalent(input, dim=None, keepdim=False, *, out=None):
+def aten_amax(input, dim=None, keepdim=False, *, out=None):
     # If only input is provided, we find the maximum along the specified dimension
     if not dim:
         dim = [i for i in range(len(input.shape))]
@@ -320,7 +320,7 @@ def torch_amax_equivalent(input, dim=None, keepdim=False, *, out=None):
 
 # amin(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 @map_to(aten.amin)
-def torch_amin_equivalent(input, dim=None, keepdim=False, *, out=None):
+def aten_amin(input, dim=None, keepdim=False, *, out=None):
     # If only input is provided, we find the minimum along the specified dimension
     if not dim:
         dim = [i for i in range(len(input.shape))]
@@ -378,7 +378,7 @@ def aten_any(input, dim=None, keepdim=False, *, out=None):
 # any.dims(Tensor self, int[]? dim=None, bool keepdim=False) -> Tensor
 # arange.start_step(Scalar start, Scalar end, Scalar step=1, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 @map_to(aten.arange)
-def torch_arange_equivalent(
+def aten_arange(
     start,
     end=None,
     step=1,
@@ -431,7 +431,7 @@ def torch_arange_equivalent(
 
 # argmax(Tensor self, int? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.argmax)
-def torch_argmax_equivalent(input, dim=None, keepdim=False, *, out=None):
+def aten_argmax(input, dim=None, keepdim=False, *, out=None):
     # If dim is None, return argmax of flattened tensor
     if dim is None:
         # Flatten the tensor and compute argmax along axis 0
@@ -455,7 +455,7 @@ def torch_argmax_equivalent(input, dim=None, keepdim=False, *, out=None):
 
 # argmin(Tensor self, int? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.argmin)
-def torch_argmin_equivalent(input, dim=None, keepdim=False, *, out=None):
+def aten_argmin(input, dim=None, keepdim=False, *, out=None):
     # If dim is None, return argmin of flattened tensor
     if dim is None:
         # Flatten the tensor and compute argmin along axis 0
@@ -497,7 +497,7 @@ def torch_argmin_equivalent(input, dim=None, keepdim=False, *, out=None):
 # bitwise_xor.Tensor(Tensor self, Tensor other) -> Tensor
 # bmm(Tensor self, Tensor mat2) -> Tensor
 @map_to(aten.bmm)
-def torch_bmm_equivalent(input, mat2):
+def aten_bmm(input, mat2):
     """
     Batch matrix multiplication equivalent to torch.bmm.
 
@@ -514,7 +514,7 @@ def torch_bmm_equivalent(input, mat2):
 
 # cat(Tensor[] tensors, int dim=0) -> Tensor
 @map_to(aten.cat)
-def torch_cat_equivalent(tensors: list, dim=0):
+def aten_cat(tensors: list, dim=0):
     return max_ops.concat(tensors, axis=dim)
 
 
@@ -522,7 +522,7 @@ def torch_cat_equivalent(tensors: list, dim=0):
 # clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor
 # clamp.Tensor(Tensor self, Tensor? min=None, Tensor? max=None) -> Tensor
 @map_to(aten.clamp)
-def torch_clamp_equivalent(input, min=None, max=None, *, out=None):
+def aten_clamp(input, min=None, max=None, *, out=None):
     """
     Implements torch.clamp by clamping all elements in input to the range [min, max].
     Uses max_ops.max and max_ops.min to implement clamp as:
@@ -618,7 +618,7 @@ def aten_convolution(
 # div.Tensor(Tensor self, Tensor other) -> Tensor
 # div.Tensor_mode(Tensor self, Tensor other, *, str? rounding_mode) -> Tensor
 @map_to(aten.div)
-def torch_div_equivalent(input, other, *, rounding_mode=None):
+def aten_div(input, other, *, rounding_mode=None):
     # Handle torch.div with different rounding modes
     if rounding_mode is None:
         return operator.truediv(input, other)
@@ -635,7 +635,7 @@ def torch_div_equivalent(input, other, *, rounding_mode=None):
 # elu(Tensor self, Scalar alpha=1, Scalar scale=1, Scalar input_scale=1) -> Tensor
 # embedding(Tensor weight, Tensor indices, SymInt padding_idx=-1, bool scale_grad_by_freq=False, bool sparse=False) -> Tensor
 @map_to(aten.embedding)
-def torch_aten_embedding_equivalent(
+def aten_embedding(
     input,
     weight,
     padding_idx=None,
@@ -709,7 +709,7 @@ def aten_exp(input):
 
 # expand(Tensor(a) self, SymInt[] size, *, bool implicit=False) -> Tensor(a)
 @map_to(aten.expand)
-def torch_aten_expand_equivalent(tensor, size: list[int]):
+def aten_expand(tensor, size: list[int]):
     target_shape = []
 
     # Get current tensor shape - we need this to handle -1 values
@@ -746,7 +746,7 @@ def torch_aten_expand_equivalent(tensor, size: list[int]):
 # fmod.Tensor(Tensor self, Tensor other) -> Tensor
 # full(SymInt[] size, Scalar fill_value, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 @map_to(aten.full)
-def torch_full_equivalent(
+def aten_full(
     size,
     fill_value,
     *,
@@ -774,7 +774,7 @@ def torch_full_equivalent(
 
 # full_like(Tensor self, Scalar fill_value, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
 @map_to(aten.full_like)
-def torch_full_like_equivalent(
+def aten_full_like(
     input,
     fill_value,
     *,
@@ -821,7 +821,7 @@ def aten_ge(input, other):
 
 # gelu(Tensor self, *, str approximate='none') -> Tensor
 @map_to(aten.gelu)
-def torch_gelu_equivalent(input, approximate="none"):
+def aten_gelu(input, approximate="none"):
     if approximate == "tanh":
         # Approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
         coeff = math.sqrt(2.0 / math.pi)
@@ -926,7 +926,7 @@ def aten_lt(input, other):
 # masked_scatter(Tensor self, Tensor mask, Tensor source) -> Tensor
 # max.dim(Tensor self, int dim, bool keepdim=False) -> (Tensor values, Tensor indices)
 @map_to(aten.max)
-def torch_max_equivalent(*args, **kwargs):
+def aten_max(*args, **kwargs):
     """
     Implements torch.max with 3 variants:
     1. torch.max(input) - single maximum value
@@ -941,11 +941,11 @@ def torch_max_equivalent(*args, **kwargs):
             dim = kwargs["dim"]
             keepdim = kwargs.get("keepdim", False)
             # Get both values and indices
-            values = torch_amax_equivalent(input_tensor, dim=dim, keepdim=keepdim)
-            indices = torch_argmax_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+            values = aten_amax(input_tensor, dim=dim, keepdim=keepdim)
+            indices = aten_argmax(input_tensor, dim=dim, keepdim=keepdim)
             return (values, indices)
         else:
-            return torch_amax_equivalent(input_tensor, dim=None, keepdim=False)
+            return aten_amax(input_tensor, dim=None, keepdim=False)
 
     elif len(args) == 2:
         input_tensor, second_arg = args
@@ -960,8 +960,8 @@ def torch_max_equivalent(*args, **kwargs):
             keepdim = kwargs.get("keepdim", False)
 
             # Get both values and indices
-            values = torch_amax_equivalent(input_tensor, dim=dim, keepdim=keepdim)
-            indices = torch_argmax_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+            values = aten_amax(input_tensor, dim=dim, keepdim=keepdim)
+            indices = aten_argmax(input_tensor, dim=dim, keepdim=keepdim)
 
             # Return as tuple (PyTorch returns namedtuple, but tuple should work)
             return (values, indices)
@@ -969,8 +969,8 @@ def torch_max_equivalent(*args, **kwargs):
     elif len(args) == 3:
         # Variant 2: torch.max(input, dim, keepdim)
         input_tensor, dim, keepdim = args
-        values = torch_amax_equivalent(input_tensor, dim=dim, keepdim=keepdim)
-        indices = torch_argmax_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+        values = aten_amax(input_tensor, dim=dim, keepdim=keepdim)
+        indices = aten_argmax(input_tensor, dim=dim, keepdim=keepdim)
         return (values, indices)
 
     else:
@@ -1055,7 +1055,7 @@ def aten_mean(input, dim=None, keepdim=False, *, dtype=None):
 
 # min.dim(Tensor self, int dim, bool keepdim=False) -> (Tensor values, Tensor indices)
 @map_to(aten.min)
-def torch_min_equivalent(*args, **kwargs):
+def aten_min(*args, **kwargs):
     """
     Implements torch.min with 3 variants:
     1. torch.min(input) - single minimum value
@@ -1070,11 +1070,11 @@ def torch_min_equivalent(*args, **kwargs):
             dim = kwargs["dim"]
             keepdim = kwargs.get("keepdim", False)
             # Get both values and indices
-            values = torch_amin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
-            indices = torch_argmin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+            values = aten_amin(input_tensor, dim=dim, keepdim=keepdim)
+            indices = aten_argmin(input_tensor, dim=dim, keepdim=keepdim)
             return (values, indices)
         else:
-            return torch_amin_equivalent(input_tensor, dim=None, keepdim=False)
+            return aten_amin(input_tensor, dim=None, keepdim=False)
 
     elif len(args) == 2:
         input_tensor, second_arg = args
@@ -1089,8 +1089,8 @@ def torch_min_equivalent(*args, **kwargs):
             keepdim = kwargs.get("keepdim", False)
 
             # Get both values and indices
-            values = torch_amin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
-            indices = torch_argmin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+            values = aten_amin(input_tensor, dim=dim, keepdim=keepdim)
+            indices = aten_argmin(input_tensor, dim=dim, keepdim=keepdim)
 
             # Return as tuple (PyTorch returns namedtuple, but tuple should work)
             return (values, indices)
@@ -1098,8 +1098,8 @@ def torch_min_equivalent(*args, **kwargs):
     elif len(args) == 3:
         # Variant 2: torch.min(input, dim, keepdim)
         input_tensor, dim, keepdim = args
-        values = torch_amin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
-        indices = torch_argmin_equivalent(input_tensor, dim=dim, keepdim=keepdim)
+        values = aten_amin(input_tensor, dim=dim, keepdim=keepdim)
+        indices = aten_argmin(input_tensor, dim=dim, keepdim=keepdim)
         return (values, indices)
 
     else:
@@ -1252,7 +1252,7 @@ def aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
 # reflection_pad3d(Tensor self, SymInt[6] padding) -> Tensor
 # relu(Tensor self) -> Tensor
 @map_to(aten.relu)
-def relu_equivalent(tensor, inplace: bool = False):
+def aten_relu(tensor, inplace: bool = False):
     # inplace has no meaning in max since it's graph-based
     return max_ops.relu(tensor)
 
@@ -1376,7 +1376,7 @@ def aten_sub(input, other, *, alpha=1):
 
 # where.self(Tensor condition, Tensor self, Tensor other) -> Tensor
 @map_to(aten.where)
-def torch_aten_where_equivalent(input, condition, other):
+def aten_where(input, condition, other):
     return max_ops.where(input, condition, other)
 
 
@@ -1415,17 +1415,17 @@ def torch_transpose_equivalent(tensor, dim0, dim1):
 
 
 @map_to(aten.stack)
-def torch_stack_equivalent(tensors: list, dim=0):
+def aten_stack(tensors: list, dim=0):
     return max_ops.stack(tensors, axis=dim)
 
 
 @map_to(aten.unsqueeze)
-def torch_unsqueeze_equivalent(tensor, dim):
+def aten_unsqueeze(tensor, dim):
     return max_ops.unsqueeze(tensor, axis=dim)
 
 
 @map_to(aten.view)
-def torch_view_equivalent(tensor, *shape):
+def aten_view(tensor, *shape):
     if len(shape) == 1 and isinstance(shape[0], tuple | list):
         target_shape = list(shape[0])
     else:
@@ -1434,7 +1434,7 @@ def torch_view_equivalent(tensor, *shape):
 
 
 @map_to(aten.tril)
-def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
+def aten_tril(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
     # Max doesn't have tril built-in, so we get around this. It should be pretty
     # easy to implement on cpu and gpu though.
     shape = input.shape
@@ -1453,7 +1453,7 @@ def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=N
 
 
 @map_to(aten.triu)
-def torch_triu_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
+def aten_triu(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
     # For dynamic shapes, we can't pre-compute a mask. Instead we use a different approach.
     # For now, let's check if we can handle static dims, otherwise return input unchanged
     # TODO: Implement dynamic triu using coordinate-based masking
@@ -1483,7 +1483,7 @@ def torch_triu_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=N
 
 
 @map_to(aten.split)
-def torch_split_equivalent(
+def aten_split(
     input: max_ops.TensorType, split_size: int | list[int], dim: int = 0
 ) -> list[max_ops.TensorType]:
     if isinstance(split_size, int):
@@ -1497,9 +1497,7 @@ def torch_split_equivalent(
 
 
 @map_to(aten.unbind)
-def torch_unbind_equivalent(
-    input: max_ops.TensorType, dim: int = 0
-) -> list[max_ops.TensorType]:
+def aten_unbind(input: max_ops.TensorType, dim: int = 0) -> list[max_ops.TensorType]:
     """
     Equivalent to torch.unbind - removes a tensor dimension and returns a tuple of all slices along that dimension.
     """
@@ -1524,7 +1522,7 @@ def torch_unbind_equivalent(
 
 
 @map_to(aten.repeat_interleave)
-def torch_repeat_interleave_equivalent(
+def aten_repeat_interleave(
     input: max_ops.TensorType, repeats: int, dim: int = 0
 ) -> max_ops.TensorType:
     """
@@ -1560,7 +1558,7 @@ def torch_repeat_interleave_equivalent(
 
 
 @map_to(aten.sum)
-def torch_sum_equivalent(input, dim=None, keepdim=False, *, dtype=None):
+def aten_sum(input, dim=None, keepdim=False, *, dtype=None):
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
         input = max_ops.cast(input, dtype=max_dtype)
@@ -1588,16 +1586,16 @@ def torch_sum_equivalent(input, dim=None, keepdim=False, *, dtype=None):
 
 
 @map_to(aten._softmax)
-def torch_aten__softmax_equivalent(input, dim, half_to_float):
+def aten__softmax(input, dim, half_to_float):
     if half_to_float:
         dtype = torch.float32
     else:
         dtype = None
-    return torch_softmax_equivalent(input, dim=dim, dtype=dtype)
+    return aten_softmax(input, dim=dim, dtype=dtype)
 
 
 @map_to(aten.softmax)
-def torch_softmax_equivalent(input, dim=-1, dtype=None):
+def aten_softmax(input, dim=-1, dtype=None):
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
         input = max_ops.cast(input, dtype=max_dtype)
@@ -1608,7 +1606,7 @@ def torch_softmax_equivalent(input, dim=-1, dtype=None):
 
     # Manual implementation
     # Compute max along the specified axis for numerical stability, keeping dimensions
-    x_max = torch_amax_equivalent(input, dim=[dim], keepdim=True)
+    x_max = aten_amax(input, dim=[dim], keepdim=True)
 
     # Subtract max for numerical stability
     x_shifted = input - x_max
@@ -1617,19 +1615,19 @@ def torch_softmax_equivalent(input, dim=-1, dtype=None):
     x_exp = max_ops.exp(x_shifted)
 
     # Sum along the axis, keeping dimensions for broadcasting
-    x_sum = torch_sum_equivalent(x_exp, dim=[dim], keepdim=True)
+    x_sum = aten_sum(x_exp, dim=[dim], keepdim=True)
 
     # Divide to get softmax
     return x_exp / x_sum
 
 
 @map_to(aten.t)
-def torch_t_equivalent(input):
+def aten_t(input):
     return torch_transpose_equivalent(input, 0, 1)
 
 
 @map_to(aten._foreach_add)
-def torch_foreach_add_equivalent(tensors, others, alpha=1.0):
+def aten__foreach_add(tensors, others, alpha=1.0):
     """
     Equivalent to torch._foreach_add.List - element-wise addition of two lists of tensors.
     Computes: tensors[i] + alpha * others[i] for each i
@@ -1650,7 +1648,7 @@ def torch_foreach_add_equivalent(tensors, others, alpha=1.0):
 
 
 @map_to(aten.squeeze)
-def torch_squeeze_equivalent(input, dim):
+def aten_squeeze(input, dim):
     if isinstance(dim, int):
         dim = [dim]
     result = input
@@ -1660,5 +1658,5 @@ def torch_squeeze_equivalent(input, dim):
 
 
 @map_to(aten.masked_fill)
-def torch_masked_fill_equivalent(input, mask, value):
+def aten_masked_fill(input, mask, value):
     return max_ops.where(mask, value, input)
