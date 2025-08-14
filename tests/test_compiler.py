@@ -3047,6 +3047,72 @@ def test_adaptive_avg_pool2d_various_outputs(device: str):
     check_functions_are_equivalent(fn_4x4, device, [x])
 
 
+def test_avg_pool2d_basic(device: str):
+    """Test basic avg_pool2d with 2x2 kernel"""
+
+    def fn(x):
+        return F.avg_pool2d(x, kernel_size=2)
+
+    batch_size, channels, height, width = 1, 3, 8, 8
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_avg_pool2d_with_stride(device: str):
+    """Test avg_pool2d with custom stride"""
+
+    def fn(x):
+        return F.avg_pool2d(x, kernel_size=3, stride=2)
+
+    batch_size, channels, height, width = 2, 16, 10, 10
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_avg_pool2d_with_padding(device: str):
+    """Test avg_pool2d with padding"""
+
+    def fn(x):
+        return F.avg_pool2d(x, kernel_size=2, stride=2, padding=1)
+
+    batch_size, channels, height, width = 1, 8, 6, 6
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_avg_pool2d_asymmetric_kernel(device: str):
+    """Test avg_pool2d with asymmetric kernel size"""
+
+    def fn(x):
+        return F.avg_pool2d(x, kernel_size=(2, 3), stride=(1, 2))
+
+    batch_size, channels, height, width = 1, 4, 8, 9
+    x = torch.randn(batch_size, channels, height, width)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_avg_pool2d_various_sizes(device: str):
+    """Test avg_pool2d with various input sizes and parameters"""
+
+    def fn_small(x):
+        return F.avg_pool2d(x, kernel_size=2, stride=1)
+
+    def fn_large(x):
+        return F.avg_pool2d(x, kernel_size=4, stride=4)
+
+    # Small input
+    x_small = torch.randn(1, 8, 5, 5)
+    check_functions_are_equivalent(fn_small, device, [x_small])
+
+    # Larger input
+    x_large = torch.randn(2, 32, 16, 16)
+    check_functions_are_equivalent(fn_large, device, [x_large])
+
+
 def test_flatten_basic(device: str):
     """Test basic flatten operation"""
 

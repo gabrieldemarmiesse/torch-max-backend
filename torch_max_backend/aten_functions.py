@@ -450,6 +450,72 @@ def aten_argmin(input, dim=None, keepdim=False, *, out=None):
 # atanh(Tensor self) -> Tensor
 # avg_pool1d(Tensor self, int[1] kernel_size, int[1] stride=[], int[1] padding=0, bool ceil_mode=False, bool count_include_pad=True) -> Tensor
 # avg_pool2d(Tensor self, int[2] kernel_size, int[2] stride=[], int[2] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None) -> Tensor
+@map_to(aten.avg_pool2d)
+def aten_avg_pool2d(
+    input,
+    kernel_size,
+    stride=None,
+    padding=0,
+    ceil_mode=False,
+    count_include_pad=True,
+    divisor_override=None,
+):
+    """
+    Applies a 2D average pooling over an input signal composed of several input planes.
+
+    Args:
+        input: input tensor (N, C, H_in, W_in)
+        kernel_size: size of the pooling window
+        stride: stride of the pooling window. Default value is kernel_size
+        padding: implicit zero padding to be added on both sides
+        ceil_mode: when True, will use ceil instead of floor to compute output shape
+        count_include_pad: when True, will include the zero-padding in the averaging calculation
+        divisor_override: if specified, it will be used as divisor, otherwise size of the pooling region will be used
+    """
+    if divisor_override is not None:
+        raise NotImplementedError("divisor_override is not supported yet in avg_pool2d")
+
+    # Handle default stride
+    if stride is None:
+        stride = kernel_size
+
+    # Ensure kernel_size, stride, and padding are tuples
+    if isinstance(kernel_size, int):
+        kernel_size = (kernel_size, kernel_size)
+    elif isinstance(kernel_size, list):
+        kernel_size = tuple(kernel_size)
+
+    if isinstance(stride, int):
+        stride = (stride, stride)
+    elif isinstance(stride, list):
+        stride = tuple(stride)
+
+    if isinstance(padding, int):
+        padding = (padding, padding)
+    elif isinstance(padding, list):
+        padding = tuple(padding)
+
+    # Convert padding from PyTorch format (pad_h, pad_w) to MAX format (pad_h_before, pad_h_after, pad_w_before, pad_w_after)
+    if len(padding) == 2:
+        padding = (padding[0], padding[0], padding[1], padding[1])
+
+    # Convert input from NCHW (PyTorch default) to NHWC (MAX requirement)
+    input_nhwc = input.permute([0, 2, 3, 1])
+
+    # Apply average pooling using MAX
+    result = max_ops.avg_pool2d(
+        input_nhwc,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        ceil_mode=ceil_mode,
+        count_boundary=count_include_pad,
+    )
+
+    # Convert result back from NHWC to NCHW for PyTorch compatibility
+    return result.permute([0, 3, 1, 2])
+
+
 # avg_pool2d_backward(Tensor grad_output, Tensor self, int[2] kernel_size, int[2] stride, int[2] padding, bool ceil_mode, bool count_include_pad, int? divisor_override) -> Tensor
 # avg_pool3d(Tensor self, int[3] kernel_size, int[3] stride=[], int[3] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None) -> Tensor
 # bitwise_and.Scalar(Tensor self, Scalar other) -> Tensor
