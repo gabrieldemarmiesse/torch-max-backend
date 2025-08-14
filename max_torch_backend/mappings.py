@@ -824,6 +824,7 @@ def torch_arange_equivalent(
         dtype=dtype,
     )
     # TODO: Remove this when the bug is addressed in MAX, range doesn't produce the correct dtype
+    # https://github.com/modular/modular/issues/5178
     return max_ops.cast(result, dtype=dtype)
 
 
