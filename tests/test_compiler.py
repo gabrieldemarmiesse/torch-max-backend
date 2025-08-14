@@ -7,6 +7,7 @@ from torch._dynamo import mark_dynamic
 import io
 from unittest.mock import patch
 import numpy as np
+import math
 
 
 def check_functions_are_equivalent(
@@ -299,6 +300,81 @@ def test_outer(device: str):
     b = torch.randn(3)
 
     check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_log1p_basic(device: str):
+    """Test basic log1p functionality"""
+
+    def fn(x):
+        return torch.log1p(x)
+
+    # log1p domain is x > -1, use values in range (-0.5, 2.0) for safety
+    a = torch.rand(3, 4) * 2.5 - 0.5  # Range (-0.5, 2.0)
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_log1p_small_values(device: str):
+    """Test log1p with small values where it's most beneficial"""
+
+    def fn(x):
+        return torch.log1p(x)
+
+    # Test with very small values where log1p is numerically superior to log(1+x)
+    test_cases = [
+        torch.tensor([0.0, 0.1, 0.01, 0.001]),  # Small positive values
+        torch.tensor([-0.1, -0.01, -0.001, -0.0001]),  # Small negative values
+        torch.tensor([1e-6, -1e-6, 1e-10, -1e-10]),  # Very small values
+        torch.rand(2, 3) * 0.2 - 0.1,  # Random small values in (-0.1, 0.1)
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_log1p_various_ranges(device: str):
+    """Test log1p with various value ranges"""
+
+    def fn(x):
+        return torch.log1p(x)
+
+    test_cases = [
+        torch.tensor([0.0, 1.0, 2.0, 10.0]),  # Simple values
+        torch.tensor([math.e - 1, 0.0, math.e**2 - 1]),  # Values with known results
+        torch.tensor([-0.5, -0.9, -0.99, -0.999]),  # Negative values approaching -1
+        torch.rand(2, 3) * 5 - 0.5,  # Random values in (-0.5, 4.5)
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_log1p_edge_cases(device: str):
+    """Test log1p with edge cases"""
+
+    def fn(x):
+        return torch.log1p(x)
+
+    # Test with edge values (avoiding -1 which gives -inf)
+    test_cases = [
+        torch.tensor([0.0]),  # log1p(0) = 0
+        torch.tensor([math.e - 1]),  # log1p(e-1) = 1
+        torch.tensor([-0.9999, 0.9999]),  # Close to domain boundary and symmetric
+        torch.tensor([100.0, 1000.0]),  # Large positive values
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_tensor_log1p_method(device: str):
+    """Test tensor.log1p() method"""
+
+    def fn(x):
+        return x.log1p()
+
+    # Use range where log1p is well-defined (x > -1)
+    x = torch.rand(3, 4) * 3 - 0.5  # Range (-0.5, 2.5)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_stack_1d(device: str):
