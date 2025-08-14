@@ -447,25 +447,12 @@ def aten_argmin(input, dim=None, keepdim=False, *, out=None):
 # atan(Tensor self) -> Tensor
 # atan2(Tensor self, Tensor other) -> Tensor
 # atan2.out(Tensor self, Tensor other, *, Tensor(a!) out) -> Tensor(a!)
+
+
 # atanh(Tensor self) -> Tensor
 @map_to(aten.atanh)
 def aten_atanh(x):
-    # atanh(x) = 0.5 * ln((1 + x) / (1 - x))
-    # Using the identity: atanh(x) = 0.5 * (ln(1 + x) - ln(1 - x))
-    # Since MAX has natural log, we can implement this directly
-
-    # Clamp x to avoid numerical issues at boundaries
-    # atanh is defined for |x| < 1, but we'll handle edge cases
-    x_clamped = max_ops.max(max_ops.min(x, 0.999), -0.999)
-
-    # Calculate using the formula: atanh(x) = 0.5 * ln((1 + x) / (1 - x))
-    one_plus_x = 1.0 + x_clamped
-    one_minus_x = 1.0 - x_clamped
-
-    # Use log for natural logarithm
-    result = 0.5 * (max_ops.log(one_plus_x) - max_ops.log(one_minus_x))
-
-    return result
+    return max_ops.atanh(x)
 
 
 # avg_pool1d(Tensor self, int[1] kernel_size, int[1] stride=[], int[1] padding=0, bool ceil_mode=False, bool count_include_pad=True) -> Tensor
