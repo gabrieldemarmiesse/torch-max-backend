@@ -3,7 +3,7 @@ from torchvision import models, transforms
 from PIL import Image
 import requests
 from io import BytesIO
-from max_torch_backend import MaxCompiler
+from torch_max_backend import max_backend
 import os
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
@@ -13,7 +13,7 @@ device = "cpu"
 
 model = models.vgg11(pretrained=True).to(device)
 model.eval()
-model = torch.compile(model, backend=MaxCompiler)
+model = torch.compile(model, backend=max_backend)
 
 preprocess = transforms.Compose(
     [

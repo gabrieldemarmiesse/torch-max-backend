@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from collections.abc import Callable
-from max_torch_backend import MaxCompiler
+from torch_max_backend import max_backend
 import pytest
 from torch._dynamo import mark_dynamic
 import io
@@ -16,7 +16,7 @@ def check_functions_are_equivalent(
     fn_compiled: Callable | None = None,
     rtol=5e-2,
     atol=5e-3,
-    compiler=MaxCompiler,
+    compiler=max_backend,
 ):
     fn_compiled = fn_compiled or torch.compile(backend=compiler)(fn)
     if device is not None:
@@ -105,7 +105,7 @@ def test_basic_training(device: str):
     model.linear.bias.data.fill_(0.01)
 
     loss_compiled = (
-        torch.compile(backend=MaxCompiler)(train_step)(a, b).cpu().detach().numpy()
+        torch.compile(backend=max_backend)(train_step)(a, b).cpu().detach().numpy()
     )
     weight_compiled = model.linear.weight.data.cpu().numpy()
     bias_compiled = model.linear.bias.data.cpu().numpy()
@@ -1594,7 +1594,7 @@ def test_complex_to_operations(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-class MaxCompilerCallCount:
+class max_backendCallCount:
     def __init__(self, compiler):
         self.call_count = 0
         self.compiler = compiler
@@ -1610,7 +1610,7 @@ def test_dynamic_shapes(device: str):
     def fn(x, y):
         return x + y
 
-    counter = MaxCompilerCallCount(MaxCompiler)
+    counter = max_backendCallCount(max_backend)
     fn_compiled = torch.compile(backend=counter)(fn)
 
     a = torch.randn(20, 2).to(device)
@@ -1626,7 +1626,7 @@ def test_dynamic_shapes(device: str):
         mark_dynamic(a, 0)
 
         check_functions_are_equivalent(fn, None, [a, b], fn_compiled)
-        # Ensure only one instance of the MaxCompiler is created
+        # Ensure only one instance of the max_backend is created
     assert counter.call_count == 1
 
 
@@ -1636,7 +1636,7 @@ def test_recompilation(device: str):
     def fn(x, y):
         return x + y
 
-    counter = MaxCompilerCallCount(MaxCompiler)
+    counter = max_backendCallCount(max_backend)
     fn_compiled = torch.compile(backend=counter)(fn)
 
     a = torch.randn(20, 2).to(device)
@@ -1648,7 +1648,7 @@ def test_recompilation(device: str):
     b = torch.randn(2).to(device)
 
     check_functions_are_equivalent(fn, None, [a, b], fn_compiled)
-    # Ensure a second instance of the MaxCompiler is created
+    # Ensure a second instance of the max_backend is created
     assert counter.call_count == 2
 
     # TODO: Make it work if called with more shapes (dynamo doesn't recompile)

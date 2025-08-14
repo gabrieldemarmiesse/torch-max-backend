@@ -13,7 +13,7 @@ from torch._dynamo.backends.common import aot_autograd
 from functorch.compile import make_boxed_func
 from torch._decomp import core_aten_decompositions
 from torch.fx.experimental.proxy_tensor import make_fx
-from max_torch_backend.flags import profiling_enabled, verbose_enabled
+from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 
 
@@ -211,7 +211,7 @@ class _GraphFactory:
         if self.graph is not None:
             raise RuntimeError("Graph has already been initialized.")
         self.graph = Graph(
-            "max_torch_backend", input_types=self.graph_inputs
+            "torch_max_backend", input_types=self.graph_inputs
         ).__enter__()
         # Let's fill the tensor book
         for tensor_name, idx in self.names_to_input_idx.items():
@@ -415,4 +415,4 @@ def _MaxCompilerBackpropCompatible(
     return make_boxed_func(_max_compiler.__call__)
 
 
-MaxCompiler = aot_autograd(fw_compiler=_MaxCompilerBackpropCompatible)
+max_backend = aot_autograd(fw_compiler=_MaxCompilerBackpropCompatible)

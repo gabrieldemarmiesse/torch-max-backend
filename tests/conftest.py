@@ -1,6 +1,6 @@
 import pytest
 import torch
-from max_torch_backend import get_accelerators
+from torch_max_backend import get_accelerators
 
 
 @pytest.fixture(params=["cpu", "cuda"])

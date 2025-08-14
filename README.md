@@ -13,7 +13,7 @@ pip install git+https://github.com/gabrieldemarmiesse/max-torch-backend.git
 ### Basic Usage
 
 ```python
-from max_torch_backend import MaxCompiler
+from torch_max_backend import MaxCompiler
 import torch
 
 # Compile your model with MAX backend
@@ -28,7 +28,7 @@ output = compiled_model(input_tensor)
 
 ```python
 import torch
-from max_torch_backend import MaxCompiler
+from torch_max_backend import MaxCompiler
 
 @torch.compile(backend=MaxCompiler)
 def simple_math(x, y):
@@ -45,7 +45,7 @@ print(simple_math(a, b))  # Accelerated execution
 Training works as expected 
 
 ```python
-from max_torch_backend import MaxCompiler
+from torch_max_backend import MaxCompiler
 import torch
 import torch.nn
 import torch.optim
@@ -86,7 +86,7 @@ So you'll need to ask MAX first if your GPU is supported before
 using the gpu.
 
 ```python
-from max_torch_backend import get_accelerators
+from torch_max_backend import get_accelerators
 
 # Check available accelerators
 # The CPU is necessarily included in the list of accelerators
@@ -98,7 +98,7 @@ model = model.to(device)
 
 ## Supported Operations
 
-The backend currently supports every op listed in [`mappings.py`](https://github.com/gabrieldemarmiesse/max-torch-backend/blob/main/max_torch_backend/mappings.py)
+The backend currently supports every op listed in [`mappings.py`](https://github.com/gabrieldemarmiesse/max-torch-backend/blob/main/torch_max_backend/mappings.py)
 
 ## Performance Tips
 

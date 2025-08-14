@@ -38,7 +38,7 @@ uv run ruff format .
 
 ```
 max-torch-backend/
-├── max_torch_backend/       # Main package
+├── torch_max_backend/       # Main package
 │   ├── __init__.py         # Package exports
 │   ├── compiler.py         # Core compiler implementation
 │   ├── mappings.py         # PyTorch to MAX/Mojo operation mappings
@@ -64,7 +64,7 @@ The project implements a custom PyTorch compiler backend (`my_compiler`) that:
 
 ### Key Components
 
-#### `max_torch_backend/compiler.py`
+#### `torch_max_backend/compiler.py`
 - **`my_compiler`**: Main compiler function that:
   - Accepts FX GraphModule and example inputs
   - Prints graph structure for debugging
@@ -72,13 +72,13 @@ The project implements a custom PyTorch compiler backend (`my_compiler`) that:
   - Creates runtime function `max_add_i_want_to_use` that executes graph nodes
   - Returns wrapped function compatible with PyTorch
 
-#### `max_torch_backend/ops.py`
+#### `torch_max_backend/ops.py`
 - **`MyMaxOp`**: Custom MAX operation class that:
   - Extends `MaxOp` from `max.torch.torch`
   - Dynamically generates torch signatures based on input/output counts
   - Uses inspect.Signature to define parameter structure
 
-#### `max_torch_backend/mappings.py`
+#### `torch_max_backend/mappings.py`
 - **`MAPPING_TORCH_TO_MOJO_FUNCTIONS`**: Dictionary mapping PyTorch ops to MAX/Mojo equivalents
 - **Supported Operations**:
   - Arithmetic: `add`, `sub`, `mul`, `truediv`, `floordiv`, `pow`, `mod`

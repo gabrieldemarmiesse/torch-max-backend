@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["max_torch_backend"]
+packages = ["torch_max_backend"]
 
 [[tool.uv.index]]
 url = "https://dl.modular.com/public/nightly/python/simple/"
