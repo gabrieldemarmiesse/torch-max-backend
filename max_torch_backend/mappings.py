@@ -290,16 +290,6 @@ def torch_mean_equivalent(input, dim=None, keepdim=False, *, dtype=None):
     return result
 
 
-def torch_linear_equivalent(input, weight, bias=None):
-    weight_t = max_ops.permute(weight, [1, 0])  # Transpose weight
-    result = max_ops.matmul(input, weight_t)
-
-    if bias is not None:
-        result = result + bias
-
-    return result
-
-
 def torch_contiguous_equivalent(tensor):
     return tensor
 
@@ -314,15 +304,6 @@ def torch_view_equivalent(tensor, *shape):
 
 def torch_unsqueeze_equivalent(tensor, dim):
     return max_ops.unsqueeze(tensor, axis=dim)
-
-
-def torch_log_api_usage_once_equivalent(*args, **kwargs):
-    """
-    No-op function for torch._C.PyCapsule._log_api_usage_once.
-    This is an internal PyTorch function used for API usage logging
-    that we can safely ignore in the MAX backend.
-    """
-    pass
 
 
 def relu_equivalent(tensor, inplace: bool = False):
@@ -427,17 +408,6 @@ def torch_adaptive_avg_pool2d_equivalent(input, output_size):
         return result.permute([0, 3, 1, 2])
 
 
-def torch_flatten_equivalent(input, start_dim=1, end_dim=-1):
-    return max_ops.flatten(input, start_dim=start_dim, end_dim=end_dim)
-
-
-def torch_dropout_equivalent(input, p=0.5, training=True, inplace=False):
-    if training:
-        raise NotImplementedError("Dropout is not implemented in the MAX backend. ")
-    else:
-        return input
-
-
 def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
     # Max doesn't have tril built-in, so we get around this. It should be pretty
     # easy to implement on cpu and gpu though.
@@ -483,12 +453,6 @@ def torch_triu_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=N
     except Exception:
         # Fallback: return input unchanged
         return input
-
-
-def torch_type_as_equivalent(
-    input: max_ops.TensorType, other: max_ops.TensorType
-) -> max_ops.TensorType:
-    return max_ops.cast(input, dtype=other.dtype)
 
 
 def torch_split_equivalent(
@@ -827,29 +791,6 @@ def torch_arange_equivalent(
     return max_ops.cast(result, dtype=dtype)
 
 
-def torch_new_ones_equivalent(
-    input: max_ops.TensorType,
-    size: tuple,
-    *,
-    dtype=None,
-    device=None,
-    requires_grad=False,
-    layout=torch.strided,
-    pin_memory=False,
-):
-    if dtype is None:
-        dtype = input.dtype
-    else:
-        dtype = DType.from_torch(dtype)
-
-    if device is None:
-        device = input.device
-    else:
-        device = max_device_ref(device)
-
-    return max_ops.constant(np.ones(size), dtype=dtype, device=device)
-
-
 def torch_full_equivalent(
     size,
     fill_value,
@@ -929,14 +870,6 @@ def torch_gelu_equivalent(input, approximate="none"):
         coeff = math.sqrt(2.0 / math.pi)
         inner = coeff * (input + 0.044715 * input * input * input)
         return 0.5 * input * (1.0 + max_ops.tanh(inner))
-
-
-def torch_silu_equivalent(input):
-    # SiLU (Sigmoid Linear Unit): x * sigmoid(x)
-    # sigmoid(x) = 1 / (1 + exp(-x))
-    # So SiLU(x) = x / (1 + exp(-x))
-    sigmoid_x = 1.0 / (1.0 + max_ops.exp(-input))
-    return input * sigmoid_x
 
 
 def torch_sum_equivalent(input, dim=None, keepdim=False, *, dtype=None):
@@ -1129,10 +1062,6 @@ def torch_aten_where_equivalent(input, condition, other):
 
 def identity(x):
     return x
-
-
-def no_op(*args, **kwargs):
-    pass
 
 
 def torch_clone_equivalent(input, memory_format=None):
