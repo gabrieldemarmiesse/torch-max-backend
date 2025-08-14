@@ -4154,6 +4154,81 @@ def test_logical_not_shapes(device: str, shapes):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_logical_xor_bool(device: str):
+    """Test torch.logical_xor with boolean tensors"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test with boolean tensors - various XOR combinations
+    a = torch.tensor([True, False, True, False])
+    b = torch.tensor([True, True, False, False])
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_logical_xor_numeric(device: str):
+    """Test torch.logical_xor with numeric tensors"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test with numeric tensors (non-zero treated as True)
+    a = torch.tensor([0, 1, 2, -1, 0.0])
+    b = torch.tensor([0, 0, 1, -1, 3.0])
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_logical_xor_mixed_types(device: str):
+    """Test torch.logical_xor with mixed boolean and numeric tensors"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test boolean tensor with numeric tensor
+    a = torch.tensor([True, False, True, False])
+    b = torch.tensor([0, 1, 0, 2])
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.parametrize("shapes", [(3, 4), (2, 3, 4), (5,)])
+def test_logical_xor_shapes(device: str, shapes):
+    """Test torch.logical_xor with different tensor shapes"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test with various shapes
+    a = torch.randint(0, 2, shapes, dtype=torch.int32)
+    b = torch.randint(0, 2, shapes, dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_logical_xor_edge_cases(device: str):
+    """Test torch.logical_xor with edge cases"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test with specific edge case values
+    test_cases = [
+        # All False XOR All False = All False
+        (torch.tensor([False, False, False]), torch.tensor([False, False, False])),
+        # All True XOR All False = All True
+        (torch.tensor([True, True, True]), torch.tensor([False, False, False])),
+        # All True XOR All True = All False
+        (torch.tensor([True, True, True]), torch.tensor([True, True, True])),
+        # Mixed numeric values
+        (torch.tensor([0.0, -1.0, 2.5]), torch.tensor([0.0, 1.0, 0.0])),
+    ]
+
+    for a, b in test_cases:
+        check_functions_are_equivalent(fn, device, [a, b])
+
+
 def test_any_basic(device: str):
     """Test torch.any basic functionality"""
 
