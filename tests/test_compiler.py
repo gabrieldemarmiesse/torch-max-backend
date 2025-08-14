@@ -4201,3 +4201,153 @@ def test_full_like_edge_cases(device: str, tensor_shapes: tuple):
     x = torch.ones(tensor_shapes, device=device)
 
     check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dims", [(0, 1), (1, 0)])
+def test_permute_2d(device: str, dims: tuple):
+    """Test torch.permute with 2D tensors"""
+
+    def fn(x):
+        return x.permute(dims)
+
+    x = torch.randn(3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dims", [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
+)
+def test_permute_3d(device: str, dims: tuple):
+    """Test torch.permute with 3D tensors - all permutations"""
+
+    def fn(x):
+        return x.permute(dims)
+
+    x = torch.randn(2, 3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_permute_4d_nchw_to_nhwc(device: str):
+    """Test common permutation: NCHW to NHWC format conversion"""
+
+    def fn(x):
+        # Convert from [N, C, H, W] to [N, H, W, C]
+        return x.permute(0, 2, 3, 1)
+
+    x = torch.randn(2, 3, 8, 8, device=device)  # Batch=2, Channels=3, Height=8, Width=8
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_permute_4d_nhwc_to_nchw(device: str):
+    """Test common permutation: NHWC to NCHW format conversion"""
+
+    def fn(x):
+        # Convert from [N, H, W, C] to [N, C, H, W]
+        return x.permute(0, 3, 1, 2)
+
+    x = torch.randn(2, 8, 8, 3, device=device)  # Batch=2, Height=8, Width=8, Channels=3
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_permute_with_negative_indices(device: str):
+    """Test torch.permute with negative dimension indices"""
+
+    def fn(x):
+        # Equivalent to (0, 2, 1) for 3D tensor
+        return x.permute(0, -1, -2)
+
+    x = torch.randn(2, 3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_permute_identity(device: str):
+    """Test permute with identity permutation (no change)"""
+
+    def fn(x):
+        return x.permute(0, 1, 2)
+
+    x = torch.randn(2, 3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_permute_reverse_order(device: str):
+    """Test permute that reverses all dimensions"""
+
+    def fn(x):
+        return x.permute(2, 1, 0)
+
+    x = torch.randn(2, 3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("tensor_shapes", [(5,), (1, 10), (2, 3, 4), (1, 2, 3, 4, 5)])
+def test_permute_different_shapes(device: str, tensor_shapes: tuple):
+    """Test permute with various tensor shapes"""
+
+    def fn(x):
+        # Create a permutation that reverses the dimensions
+        dims = tuple(range(len(x.shape) - 1, -1, -1))
+        return x.permute(dims)
+
+    x = torch.randn(tensor_shapes, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_permute_with_arithmetic(device: str):
+    """Test permute combined with arithmetic operations"""
+
+    def fn(x, y):
+        x_permuted = x.permute(1, 0, 2)
+        y_permuted = y.permute(1, 0, 2)
+        return x_permuted + y_permuted
+
+    x = torch.randn(2, 3, 4, device=device)
+    y = torch.randn(2, 3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_permute_chain(device: str):
+    """Test chaining multiple permute operations"""
+
+    def fn(x):
+        # Apply permute twice
+        step1 = x.permute(2, 1, 0)  # Reverse all dims
+        step2 = step1.permute(2, 1, 0)  # Reverse again (should be back to original)
+        return step2
+
+    x = torch.randn(2, 3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_permute_transpose_equivalent(device: str):
+    """Test that permute(1, 0) is equivalent to transpose for 2D tensors"""
+
+    def fn(x):
+        return x.permute(1, 0)
+
+    x = torch.randn(3, 4, device=device)
+
+    # This should be equivalent to x.t() or x.transpose(0, 1)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_permute_1d_identity(device: str):
+    """Test permute with 1D tensor (identity operation)"""
+
+    def fn(x):
+        # 1D tensors can only be permuted with (0,)
+        return x.permute(0)
+
+    x = torch.randn(5, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
