@@ -4021,3 +4021,97 @@ def test_logical_not_shapes(device: str, shapes):
     a = torch.randint(0, 2, shapes, dtype=torch.int32)
 
     check_functions_are_equivalent(fn, device, [a])
+
+
+def test_any_basic(device: str):
+    """Test torch.any basic functionality"""
+
+    def fn(x):
+        return torch.any(x)
+
+    # Test with tensor containing non-zero values (should return True)
+    a = torch.tensor([0, 0, 1, 0])
+    check_functions_are_equivalent(fn, device, [a])
+
+    # Test with tensor containing all zeros (should return False)  
+    b = torch.tensor([0, 0, 0, 0])
+    check_functions_are_equivalent(fn, device, [b])
+
+
+@pytest.mark.parametrize("dim", [0, 1, -1])
+def test_any_with_dim(device: str, dim: int):
+    """Test torch.any with dimension parameter"""
+
+    def fn(x):
+        return torch.any(x, dim=dim)
+
+    # Test with 2D tensor
+    a = torch.tensor([[1, 0], [0, 0], [0, 1]])
+    
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_any_keepdim(device: str):
+    """Test torch.any with keepdim parameter"""
+
+    def fn(x):
+        return torch.any(x, dim=1, keepdim=True)
+
+    # Test with 2D tensor and keepdim=True
+    a = torch.tensor([[1, 0], [0, 0], [0, 1]])
+    
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("shapes", [(3, 4), (2, 3, 4), (5,)])
+def test_any_shapes(device: str, shapes):
+    """Test torch.any with different tensor shapes"""
+
+    def fn(x):
+        return torch.any(x)
+
+    # Test with various shapes and random binary values
+    a = torch.randint(0, 2, shapes, dtype=torch.int32)
+    
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int32, torch.int64, torch.float32, torch.float64, torch.bool])
+def test_any_dtypes(device: str, dtype):
+    """Test torch.any with different data types"""
+
+    def fn(x):
+        return torch.any(x)
+
+    if dtype == torch.bool:
+        # For boolean dtype, create tensor with True/False values
+        a = torch.tensor([True, False, False, True], dtype=dtype)
+    elif dtype.is_floating_point:
+        # For float dtypes, use values including 0.0 and non-zero
+        a = torch.tensor([0.0, 1.5, 0.0, -2.3], dtype=dtype)
+    else:
+        # For integer dtypes, use mix of zero and non-zero values
+        a = torch.tensor([0, 1, 0, -2], dtype=dtype)
+    
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.float32, torch.bool])
+@pytest.mark.parametrize("dim", [0, 1])
+def test_any_dtypes_with_dim(device: str, dtype, dim):
+    """Test torch.any with different data types and dimensions"""
+
+    def fn(x):
+        return torch.any(x, dim=dim)
+
+    if dtype == torch.bool:
+        # For boolean dtype
+        a = torch.tensor([[True, False], [False, False], [True, True]], dtype=dtype)
+    elif dtype == torch.float32:
+        # For float dtype
+        a = torch.tensor([[1.0, 0.0], [0.0, 0.0], [2.5, -1.5]], dtype=dtype)
+    else:
+        # For integer dtype
+        a = torch.tensor([[1, 0], [0, 0], [2, -1]], dtype=dtype)
+    
+    check_functions_are_equivalent(fn, device, [a])

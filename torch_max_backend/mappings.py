@@ -1177,6 +1177,38 @@ def torch_logical_not_equivalent(input):
     return max_ops.logical_not(input_bool)
 
 
+def torch_any_equivalent(input, dim=None, keepdim=False, *, out=None):
+    """
+    Equivalent to torch.any.
+    Tests if any elements in the input are True (non-zero).
+    Uses max() on boolean tensor since True > False.
+    """
+    # Convert input to boolean first (non-zero values become True)
+    input_bool = max_ops.not_equal(input, 0)
+    
+    if dim is None:
+        # Return True if any element is True (reduce all dimensions)
+        dim = tuple(range(len(input.shape)))
+    elif isinstance(dim, int):
+        dim = (dim,)
+    
+    # Handle negative dimensions
+    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
+    
+    result = input_bool
+    # Use max() to implement any() since True > False
+    for axis in sorted(dim, reverse=True):
+        result = max_ops.max(result, axis=axis)
+    
+    # Handle keepdim=False
+    if not keepdim:
+        # Squeeze the reduced dimensions
+        for axis in sorted(dim, reverse=True):
+            result = max_ops.squeeze(result, axis=axis)
+    
+    return result
+
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -1284,6 +1316,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.exp: torch_exp_equivalent,
     aten.native_group_norm: torch_native_group_norm_equivalent,
     aten.logical_not: torch_logical_not_equivalent,
+    aten.any: torch_any_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:
