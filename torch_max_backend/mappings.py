@@ -253,36 +253,6 @@ def torch_transpose_equivalent(tensor, dim0, dim1):
     return max_ops.permute(tensor, perm)
 
 
-def torch_mean_equivalent(input, dim=None, keepdim=False, *, dtype=None):
-    if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
-        input = max_ops.cast(input, dtype=max_dtype)
-
-    result = input
-
-    if dim is None:
-        dim = tuple(range(len(input.shape)))
-    elif isinstance(dim, int):
-        dim = (dim,)
-
-    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
-
-    # Multiple dimensions reduction - reduce each dimension one by one
-    # Sort dimensions in descending order to avoid index shifting issues
-    for axis in dim:
-        result = max_ops.mean(result, axis=axis)
-
-    # Handle keepdim=False - MAX's mean keeps dimensions by default, so we need to squeeze
-    if not keepdim:
-        # Remove multiple dimensions - need to be careful about index shifting
-        # Sort original dimensions and squeeze from highest to lowest
-        dims_to_squeeze = sorted(dim, reverse=True)
-        for axis in dims_to_squeeze:
-            result = max_ops.squeeze(result, axis=axis)
-
-    return result
-
-
 def torch_contiguous_equivalent(tensor):
     return tensor
 
@@ -361,44 +331,6 @@ def torch_max_pool2d_equivalent(
 
     # Convert result back from NHWC to NCHW for PyTorch compatibility
     return result.permute([0, 3, 1, 2])
-
-
-def torch_adaptive_avg_pool2d_equivalent(input, output_size):
-    # For now, we'll implement this using global average pooling for (1, 1) output
-    # and regular avg pooling for other sizes
-    if output_size == (1, 1) or output_size == 1:
-        # Global average pooling - take mean over spatial dimensions
-        return torch_mean_equivalent(input, dim=(2, 3), keepdim=True)
-    else:
-        # For other output sizes, we'll use avg_pool2d with calculated kernel size and stride
-        # Get input spatial dimensions (assuming NCHW format)
-        input_h, input_w = input.shape[2], input.shape[3]
-
-        if isinstance(output_size, int):
-            output_h = output_w = output_size
-        else:
-            output_h, output_w = output_size
-
-        # Calculate kernel size and stride to achieve the desired output size
-        kernel_h = input_h // output_h
-        kernel_w = input_w // output_w
-        stride_h = input_h // output_h
-        stride_w = input_w // output_w
-
-        # Convert input from NCHW to NHWC for MAX
-        input_nhwc = input.permute([0, 2, 3, 1])
-
-        result = max_ops.avg_pool2d(
-            input_nhwc,
-            kernel_size=(kernel_h, kernel_w),
-            stride=(stride_h, stride_w),
-            padding=(0, 0),
-            ceil_mode=False,
-            count_boundary=True,
-        )
-
-        # Convert result back from NHWC to NCHW
-        return result.permute([0, 3, 1, 2])
 
 
 def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
@@ -845,47 +777,6 @@ def torch_full_like_equivalent(
     return max_ops.broadcast_to(scalar, target_shape)
 
 
-def torch_native_layer_norm_equivalent(input, normalized_shape, weight, bias, eps):
-    # expects a tuple or list for some reason
-    # surely for the backward pass,
-    # for the moment we only output the first one.
-    return (
-        torch_layer_norm_equivalent(
-            input, normalized_shape, weight=weight, bias=bias, eps=eps
-        ),
-    )
-
-
-def torch_layer_norm_equivalent(
-    input, normalized_shape, weight=None, bias=None, eps=1e-5
-):
-    # Layer norm normalizes over the last len(normalized_shape) dimensions
-    # Calculate mean and variance over these dimensions
-    axis_to_reduce = list(
-        range(len(input.shape) - len(normalized_shape), len(input.shape))
-    )
-
-    # Calculate mean
-    mean = torch_mean_equivalent(input, dim=axis_to_reduce, keepdim=True)
-
-    # Calculate variance: Var(X) = E[(X - mean)^2]
-    centered = input - mean
-    variance = torch_mean_equivalent(
-        centered * centered, dim=axis_to_reduce, keepdim=True
-    )
-
-    # Normalize: (x - mean) / sqrt(variance + eps)
-    normalized = centered / max_ops.sqrt(variance + eps)
-
-    # Apply scale and shift if provided
-    if weight is not None:
-        normalized = normalized * weight
-    if bias is not None:
-        normalized = normalized + bias
-
-    return normalized
-
-
 def torch_gelu_equivalent(input, approximate="none"):
     if approximate == "tanh":
         # Approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
@@ -963,24 +854,6 @@ def torch_softmax_equivalent(input, dim=-1, dtype=None):
 
 def torch_masked_fill_equivalent(input, mask, value):
     return max_ops.where(mask, value, input)
-
-
-def torch_mse_loss_equivalent(
-    input, target, size_average=None, reduce=None, reduction="mean"
-):
-    # Compute squared differences
-    diff = input - target
-    squared_diff = diff * diff
-
-    # Handle reduction types
-    if reduction == "none":
-        return squared_diff
-    elif reduction == "mean":
-        return torch_mean_equivalent(squared_diff)
-    elif reduction == "sum":
-        return torch_sum_equivalent(squared_diff)
-    else:
-        raise ValueError(f"Unsupported reduction type: {reduction}")
 
 
 def torch_t_equivalent(input):
@@ -1132,82 +1005,6 @@ def torch_exp_equivalent(input):
     return max_ops.exp(input)
 
 
-def torch_group_norm_equivalent(input, num_groups, weight=None, bias=None, eps=1e-5):
-    # input shape: [N, C, H, W]
-    N, C, H, W = input.shape
-
-    # Ensure number of channels is divisible by number of groups
-    if int(C) % num_groups != 0:
-        raise ValueError(
-            f"Number of channels ({C}) must be divisible by number of groups ({num_groups})"
-        )
-
-    channels_per_group = int(C) // num_groups
-
-    # Reshape input to [N, num_groups, channels_per_group, H, W]
-    reshaped = max_ops.reshape(
-        input, [int(N), num_groups, channels_per_group, int(H), int(W)]
-    )
-
-    # Calculate mean and variance for each group
-    # Normalize over dimensions: channels_per_group, H, W (dims 2, 3, 4)
-    axis_to_reduce = [2, 3, 4]
-
-    # Calculate mean
-    mean = torch_mean_equivalent(reshaped, dim=axis_to_reduce, keepdim=True)
-
-    # Calculate variance: Var(X) = E[(X - mean)^2]
-    centered = reshaped - mean
-    variance = torch_mean_equivalent(
-        centered * centered, dim=axis_to_reduce, keepdim=True
-    )
-
-    # Normalize: (x - mean) / sqrt(variance + eps)
-    normalized = centered / max_ops.sqrt(variance + eps)
-
-    # Reshape back to original shape [N, C, H, W]
-    normalized = max_ops.reshape(normalized, [int(N), int(C), int(H), int(W)])
-
-    # Apply scale and shift if provided
-    if weight is not None:
-        # weight shape: [C] - broadcast to [N, C, H, W]
-        weight_reshaped = max_ops.reshape(weight, [1, int(C), 1, 1])
-        normalized = normalized * weight_reshaped
-
-    if bias is not None:
-        # bias shape: [C] - broadcast to [N, C, H, W]
-        bias_reshaped = max_ops.reshape(bias, [1, int(C), 1, 1])
-        normalized = normalized + bias_reshaped
-
-    return normalized
-
-
-def torch_native_group_norm_equivalent(input, weight, bias, N, C, HxW, group, eps):
-    """
-    Equivalent to aten.native_group_norm.
-    This is the low-level operation that F.group_norm gets compiled to.
-    Returns (normalized_output, mean, rstd) tuple but we only return the first element for simplicity.
-    """
-    # Reshape input from [N*C, HxW] back to [N, C, H, W] format
-    # First, calculate H and W from HxW
-    HW = int(HxW)
-    # For simplicity, assume square spatial dimensions
-    H = W = int(HW**0.5)
-    if H * W != HW:
-        # If not square, try to factor HxW into reasonable H and W
-        # For now, use 1D spatial dimension
-        H, W = HW, 1
-
-    # Reshape input to [N, C, H, W]
-    input_reshaped = max_ops.reshape(input, [int(N), int(C), H, W])
-
-    # Use the regular group_norm implementation
-    result = torch_group_norm_equivalent(input_reshaped, group, weight, bias, eps)
-
-    # Return just the normalized output (native_group_norm returns a tuple)
-    return (result,)
-
-
 def torch_logical_not_equivalent(input):
     """
     Equivalent to torch.logical_not.
@@ -1287,42 +1084,9 @@ def torch_aten_index_equivalent(input, indices=None):
         return max_ops.gather(input, index, axis=i)
 
 
-IDENTICAL_FUNCTIONS = [
-    operator.add,
-    operator.sub,
-    operator.mul,
-    operator.truediv,
-    operator.floordiv,
-    operator.pow,
-    operator.mod,
-    operator.matmul,
-    operator.neg,
-    operator.gt,
-    operator.ge,
-    operator.lt,
-    operator.le,
-    operator.eq,
-    operator.ne,
-    operator.and_,
-    operator.or_,
-    operator.xor,
-    operator.iadd,
-    operator.isub,
-    operator.imul,
-    operator.ifloordiv,
-    operator.ipow,
-    operator.imod,
-    operator.getitem,
-    str,
-    max,
-    min,
-]
-
-
 MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.t: torch_t_equivalent,
     aten.addmm: torch_addmm_equivalent,
-    aten.mse_loss: torch_mse_loss_equivalent,
     aten._foreach_add: torch_foreach_add_equivalent,
     aten.sub: operator.sub,
     aten.mul: operator.mul,
@@ -1338,7 +1102,6 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.floordiv: operator.floordiv,
     aten.permute: max_ops.permute,
     aten.pow: operator.pow,
-    aten.mean: torch_mean_equivalent,
     aten.mm: operator.matmul,
     aten.bmm: torch_bmm_equivalent,
     aten.sum: torch_sum_equivalent,
@@ -1360,8 +1123,6 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.amin: torch_amin_equivalent,
     aten.clamp: torch_clamp_equivalent,
     aten.arange: torch_arange_equivalent,
-    aten.layer_norm: torch_layer_norm_equivalent,
-    aten.native_layer_norm: torch_native_layer_norm_equivalent,
     aten.gelu: torch_gelu_equivalent,
     aten.softmax: torch_softmax_equivalent,
     aten._softmax: torch_aten__softmax_equivalent,
@@ -1380,7 +1141,6 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.relu: relu_equivalent,
     aten.embedding: torch_aten_embedding_equivalent,
     aten.convolution: torch_aten_convolution_equivalent,
-    aten._adaptive_avg_pool2d: torch_adaptive_avg_pool2d_equivalent,
     aten.select: torch_select_equivalent,
     aten._to_copy: torch_to_equivalent,
     aten.slice: torch_slice_equivalent,
@@ -1393,12 +1153,8 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.max_pool2d_with_indices: torch_max_pool2d_with_indices_equivalent,
     aten.clone: torch_clone_equivalent,
     aten.exp: torch_exp_equivalent,
-    aten.native_group_norm: torch_native_group_norm_equivalent,
     aten.logical_not: torch_logical_not_equivalent,
     aten.logical_and: torch_logical_and_equivalent,
     aten.any: torch_any_equivalent,
     aten.index: torch_aten_index_equivalent,
 }
-
-for func in IDENTICAL_FUNCTIONS:
-    MAPPING_TORCH_TO_MOJO_FUNCTIONS[func] = func

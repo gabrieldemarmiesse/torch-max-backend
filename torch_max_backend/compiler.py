@@ -6,7 +6,7 @@ from max.torch.torch import max_device_ref
 import max.graph.value
 from max import engine
 from max.driver import Accelerator, accelerator_count, CPU
-from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
+from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
 import warnings
 from torch._dynamo.backends.common import aot_autograd
 
@@ -253,7 +253,7 @@ class _GraphFactory:
         if hasattr(key, "namespace") and key.namespace == "aten":
             key = key.overloadpacket
 
-        if key not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
+        if key not in MAPPING_TORCH_ATEN_TO_MAX:
             raise ValueError(
                 f"Failing at node {node_idx}. Function {get_fully_qualified_name(node.target)}  "
                 f"not supported by the Max backend yet. "
@@ -262,9 +262,7 @@ class _GraphFactory:
             )
 
         try:
-            func_output = MAPPING_TORCH_TO_MOJO_FUNCTIONS[key](
-                *func_args, **func_kwargs
-            )
+            func_output = MAPPING_TORCH_ATEN_TO_MAX[key](*func_args, **func_kwargs)
         except Exception as e:
             raise MaxCompilerError(
                 f"Failed to execute node {node_idx} with target {get_fully_qualified_name(node.target)}, "
