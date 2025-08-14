@@ -1077,8 +1077,16 @@ def torch_split_with_sizes_equivalent(input, split_sizes, dim=0):
 
 
 def torch_scalar_tensor_equivalent(
-    value: float | int, dtype: torch.dtype, layout: torch.layout, device: torch.device
+    value: float | int,
+    dtype: torch.dtype = None,
+    layout: torch.layout = None,
+    device: torch.device = None,
 ):
+    if dtype is None:
+        dtype = torch.float32
+    if device is None:
+        device = torch.get_default_device()
+
     return max_ops.constant(
         value, dtype=DType.from_torch(dtype), device=max_device_ref(device)
     )
@@ -1210,6 +1218,27 @@ def torch_logical_not_equivalent(input):
     input_bool = max_ops.not_equal(input, 0)
     # Apply logical not
     return max_ops.logical_not(input_bool)
+
+
+def torch_logical_and_equivalent(input, other):
+    """
+    Equivalent to torch.logical_and.
+    Computes element-wise logical AND of two tensors.
+    Both inputs are converted to boolean first if they aren't already.
+    """
+    # Convert both inputs to boolean if they aren't already
+    if input.dtype != max_type.DType.bool:
+        input_bool = max_ops.not_equal(input, 0)
+    else:
+        input_bool = input
+
+    if other.dtype != max_type.DType.bool:
+        other_bool = max_ops.not_equal(other, 0)
+    else:
+        other_bool = other
+
+    # Apply logical and
+    return max_ops.logical_and(input_bool, other_bool)
 
 
 def torch_any_equivalent(input, dim=None, keepdim=False, *, out=None):
@@ -1352,6 +1381,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.exp: torch_exp_equivalent,
     aten.native_group_norm: torch_native_group_norm_equivalent,
     aten.logical_not: torch_logical_not_equivalent,
+    aten.logical_and: torch_logical_and_equivalent,
     aten.any: torch_any_equivalent,
 }
 

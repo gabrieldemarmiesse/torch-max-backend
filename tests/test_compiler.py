@@ -4201,3 +4201,177 @@ def test_full_like_edge_cases(device: str, tensor_shapes: tuple):
     x = torch.ones(tensor_shapes, device=device)
 
     check_functions_are_equivalent(fn, device, [x])
+
+
+def test_scaled_dot_product_attention_basic(device: str):
+    """Test basic scaled dot-product attention"""
+
+    def fn(query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value)
+
+    batch_size, seq_len, embed_dim = 2, 8, 64
+    query = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    key = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    value = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_with_mask(device: str):
+    """Test scaled dot-product attention with attention mask"""
+
+    def fn(query, key, value, attn_mask):
+        return torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=attn_mask
+        )
+
+    batch_size, seq_len, embed_dim = 2, 4, 32
+    query = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    key = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    value = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+    # Create a simple causal mask (lower triangular)
+    attn_mask = torch.tril(torch.ones(seq_len, seq_len, device=device))
+    attn_mask = attn_mask.masked_fill(attn_mask == 0, float("-inf"))
+    attn_mask = attn_mask.masked_fill(attn_mask == 1, 0.0)
+
+    check_functions_are_equivalent(fn, device, [query, key, value, attn_mask])
+
+
+def test_scaled_dot_product_attention_different_kv_length(device: str):
+    """Test scaled dot-product attention with different key/value sequence length"""
+
+    def fn(query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value)
+
+    batch_size, q_len, kv_len, embed_dim = 2, 6, 10, 64
+    query = torch.randn(batch_size, q_len, embed_dim, device=device)
+    key = torch.randn(batch_size, kv_len, embed_dim, device=device)
+    value = torch.randn(batch_size, kv_len, embed_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_multihead(device: str):
+    """Test scaled dot-product attention with multiple heads"""
+
+    def fn(query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value)
+
+    batch_size, num_heads, seq_len, head_dim = 2, 8, 12, 64
+    query = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+    key = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+    value = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_with_dropout_mask(device: str):
+    """Test scaled dot-product attention with dropout mask"""
+
+    def fn(query, key, value):
+        # Note: for testing we use dropout_p=0 to ensure deterministic results
+        dropout_p = 0.0  # No dropout for deterministic testing
+        return torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, dropout_p=dropout_p
+        )
+
+    batch_size, seq_len, embed_dim = 2, 6, 32
+    query = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    key = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    value = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_small_dimensions(device: str):
+    """Test scaled dot-product attention with small dimensions"""
+
+    def fn(query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value)
+
+    batch_size, seq_len, embed_dim = 1, 3, 16
+    query = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    key = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    value = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_single_token(device: str):
+    """Test scaled dot-product attention with single token sequence"""
+
+    def fn(query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value)
+
+    batch_size, seq_len, embed_dim = 2, 1, 32
+    query = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    key = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    value = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+@pytest.mark.parametrize("embed_dim", [32, 64, 128])
+def test_scaled_dot_product_attention_different_embed_dims(device: str, embed_dim: int):
+    """Test scaled dot-product attention with different embedding dimensions"""
+
+    def fn(query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value)
+
+    batch_size, seq_len = 2, 8
+    query = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    key = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    value = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_is_causal(device: str):
+    """Test scaled dot-product attention with causal masking"""
+
+    def fn(query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, is_causal=True
+        )
+
+    batch_size, seq_len, embed_dim = 2, 6, 32
+    query = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    key = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    value = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_cross_attention(device: str):
+    """Test scaled dot-product attention for cross-attention (encoder-decoder)"""
+
+    def fn(query, key, value):
+        return torch.nn.functional.scaled_dot_product_attention(query, key, value)
+
+    batch_size = 2
+    tgt_len, src_len = 8, 12  # Different lengths for cross-attention
+    embed_dim = 64
+
+    query = torch.randn(batch_size, tgt_len, embed_dim, device=device)  # From decoder
+    key = torch.randn(batch_size, src_len, embed_dim, device=device)  # From encoder
+    value = torch.randn(batch_size, src_len, embed_dim, device=device)  # From encoder
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
+
+
+def test_scaled_dot_product_attention_with_scale(device: str):
+    """Test scaled dot-product attention with custom scale"""
+
+    def fn(query, key, value):
+        custom_scale = 0.125  # Custom scale instead of 1/sqrt(embed_dim)
+        return torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, scale=custom_scale
+        )
+
+    batch_size, seq_len, embed_dim = 2, 4, 32
+    query = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    key = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    value = torch.randn(batch_size, seq_len, embed_dim, device=device)
+
+    check_functions_are_equivalent(fn, device, [query, key, value])
