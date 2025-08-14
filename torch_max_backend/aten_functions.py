@@ -53,6 +53,7 @@ IDENTICAL_FUNCTIONS = [
     min,
 ]
 
+# Map identical functions
 for func in IDENTICAL_FUNCTIONS:
     MAPPING_TORCH_ATEN_TO_MAX[func] = func
 
@@ -63,6 +64,87 @@ def map_to(func: callable) -> callable:
         return func_to_map
 
     return decorator
+
+
+# Add direct mappings with decorators
+@map_to(aten.abs)
+def abs_equivalent(x):
+    return max_ops.abs(x)
+
+
+@map_to(aten.cos)
+def cos_equivalent(x):
+    return max_ops.cos(x)
+
+
+@map_to(aten.sin)
+def sin_equivalent(x):
+    return max_ops.sin(x)
+
+
+@map_to(aten.sqrt)
+def sqrt_equivalent(x):
+    return max_ops.sqrt(x)
+
+
+@map_to(aten.rsqrt)
+def rsqrt_equivalent(x):
+    return max_ops.rsqrt(x)
+
+
+@map_to(aten.eq)
+def eq_equivalent(x, y):
+    return operator.eq(x, y)
+
+
+@map_to(aten.ne)
+def ne_equivalent(x, y):
+    return operator.ne(x, y)
+
+
+@map_to(aten.gt)
+def gt_equivalent(x, y):
+    return operator.gt(x, y)
+
+
+@map_to(aten.floordiv)
+def floordiv_equivalent(x, y):
+    return operator.floordiv(x, y)
+
+
+@map_to(aten.neg)
+def neg_equivalent(x):
+    return operator.neg(x)
+
+
+@map_to(aten.pow)
+def pow_equivalent(x, y):
+    return operator.pow(x, y)
+
+
+@map_to(aten.remainder)
+def remainder_equivalent(x, y):
+    return operator.mod(x, y)
+
+
+@map_to(aten.mm)
+def mm_equivalent(x, y):
+    return operator.matmul(x, y)
+
+
+@map_to(aten.permute)
+def permute_equivalent(x, dims):
+    return max_ops.permute(x, dims)
+
+
+@map_to(aten.maximum)
+def maximum_equivalent(x, y):
+    return max_ops.max(x, y)
+
+
+@map_to(aten.minimum)
+def minimum_equivalent(x, y):
+    return max_ops.min(x, y)
 
 
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
@@ -1351,6 +1433,7 @@ def torch_view_equivalent(tensor, *shape):
     return max_ops.reshape(tensor, target_shape)
 
 
+@map_to(aten.tril)
 def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
     # Max doesn't have tril built-in, so we get around this. It should be pretty
     # easy to implement on cpu and gpu though.
@@ -1369,6 +1452,7 @@ def torch_tril_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=N
     return result
 
 
+@map_to(aten.triu)
 def torch_triu_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
     # For dynamic shapes, we can't pre-compute a mask. Instead we use a different approach.
     # For now, let's check if we can handle static dims, otherwise return input unchanged
@@ -1398,6 +1482,7 @@ def torch_triu_equivalent(input: max_ops.TensorType, diagonal: int = 0, *, out=N
         return input
 
 
+@map_to(aten.split)
 def torch_split_equivalent(
     input: max_ops.TensorType, split_size: int | list[int], dim: int = 0
 ) -> list[max_ops.TensorType]:
@@ -1411,6 +1496,7 @@ def torch_split_equivalent(
     return max_ops.split(input, new_split_size, dim)
 
 
+@map_to(aten.unbind)
 def torch_unbind_equivalent(
     input: max_ops.TensorType, dim: int = 0
 ) -> list[max_ops.TensorType]:
@@ -1437,6 +1523,7 @@ def torch_unbind_equivalent(
     return result
 
 
+@map_to(aten.repeat_interleave)
 def torch_repeat_interleave_equivalent(
     input: max_ops.TensorType, repeats: int, dim: int = 0
 ) -> max_ops.TensorType:
@@ -1472,6 +1559,7 @@ def torch_repeat_interleave_equivalent(
     return result
 
 
+@map_to(aten.sum)
 def torch_sum_equivalent(input, dim=None, keepdim=False, *, dtype=None):
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
@@ -1499,6 +1587,7 @@ def torch_sum_equivalent(input, dim=None, keepdim=False, *, dtype=None):
     return result
 
 
+@map_to(aten._softmax)
 def torch_aten__softmax_equivalent(input, dim, half_to_float):
     if half_to_float:
         dtype = torch.float32
@@ -1507,6 +1596,7 @@ def torch_aten__softmax_equivalent(input, dim, half_to_float):
     return torch_softmax_equivalent(input, dim=dim, dtype=dtype)
 
 
+@map_to(aten.softmax)
 def torch_softmax_equivalent(input, dim=-1, dtype=None):
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
@@ -1533,10 +1623,12 @@ def torch_softmax_equivalent(input, dim=-1, dtype=None):
     return x_exp / x_sum
 
 
+@map_to(aten.t)
 def torch_t_equivalent(input):
     return torch_transpose_equivalent(input, 0, 1)
 
 
+@map_to(aten._foreach_add)
 def torch_foreach_add_equivalent(tensors, others, alpha=1.0):
     """
     Equivalent to torch._foreach_add.List - element-wise addition of two lists of tensors.
@@ -1557,6 +1649,7 @@ def torch_foreach_add_equivalent(tensors, others, alpha=1.0):
     return result
 
 
+@map_to(aten.squeeze)
 def torch_squeeze_equivalent(input, dim):
     if isinstance(dim, int):
         dim = [dim]
@@ -1566,61 +1659,6 @@ def torch_squeeze_equivalent(input, dim):
     return result
 
 
+@map_to(aten.masked_fill)
 def torch_masked_fill_equivalent(input, mask, value):
     return max_ops.where(mask, value, input)
-
-
-# Add the complete MAPPING_TORCH_TO_MOJO_FUNCTIONS dictionary from mappings.py
-MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
-    aten._foreach_add: torch_foreach_add_equivalent,
-    aten._softmax: torch_aten__softmax_equivalent,
-    aten.abs: max_ops.abs,
-    aten.addmm: torch_addmm_equivalent,
-    aten.amax: torch_amax_equivalent,
-    aten.amin: torch_amin_equivalent,
-    aten.arange: torch_arange_equivalent,
-    aten.argmax: torch_argmax_equivalent,
-    aten.argmin: torch_argmin_equivalent,
-    aten.bmm: torch_bmm_equivalent,
-    aten.cat: torch_cat_equivalent,
-    aten.clamp: torch_clamp_equivalent,
-    aten.cos: max_ops.cos,
-    aten.div: torch_div_equivalent,
-    aten.embedding: torch_aten_embedding_equivalent,
-    aten.eq: operator.eq,
-    aten.floordiv: operator.floordiv,
-    aten.full: torch_full_equivalent,
-    aten.full_like: torch_full_like_equivalent,
-    aten.gelu: torch_gelu_equivalent,
-    aten.gt: operator.gt,
-    aten.masked_fill: torch_masked_fill_equivalent,
-    aten.max: torch_max_equivalent,
-    aten.maximum: max_ops.max,
-    aten.min: torch_min_equivalent,
-    aten.minimum: max_ops.min,
-    aten.mm: operator.matmul,
-    aten.ne: operator.ne,
-    aten.neg: operator.neg,
-    aten.permute: max_ops.permute,
-    aten.pow: operator.pow,
-    aten.relu: relu_equivalent,
-    aten.remainder: operator.mod,
-    aten.repeat_interleave: torch_repeat_interleave_equivalent,
-    aten.rsqrt: max_ops.rsqrt,
-    aten.sin: max_ops.sin,
-    aten.softmax: torch_softmax_equivalent,
-    aten.split: torch_split_equivalent,
-    aten.sqrt: max_ops.sqrt,
-    aten.squeeze: torch_squeeze_equivalent,
-    aten.stack: torch_stack_equivalent,
-    aten.sum: torch_sum_equivalent,
-    aten.t: torch_t_equivalent,
-    aten.tril: torch_tril_equivalent,
-    aten.triu: torch_triu_equivalent,
-    aten.unbind: torch_unbind_equivalent,
-    aten.unsqueeze: torch_unsqueeze_equivalent,
-    aten.view: torch_view_equivalent,
-}
-
-# Update the main mapping with the complete dictionary
-MAPPING_TORCH_ATEN_TO_MAX.update(MAPPING_TORCH_TO_MOJO_FUNCTIONS)
