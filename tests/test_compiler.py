@@ -7,6 +7,7 @@ from torch._dynamo import mark_dynamic
 import io
 from unittest.mock import patch
 import numpy as np
+import math
 
 
 def check_functions_are_equivalent(
@@ -299,6 +300,65 @@ def test_outer(device: str):
     b = torch.randn(3)
 
     check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_log_basic(device: str):
+    """Test basic log functionality"""
+
+    def fn(x):
+        return torch.log(x)
+
+    # Use positive values only since log is only defined for positive numbers
+    a = torch.rand(3, 4) + 0.1  # Range (0.1, 1.1) to avoid values too close to zero
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_log_various_ranges(device: str):
+    """Test log with various value ranges"""
+
+    def fn(x):
+        return torch.log(x)
+
+    test_cases = [
+        torch.tensor([1.0, 2.0, 10.0, 100.0]),  # Simple positive values
+        torch.tensor([0.1, 0.5, 1.5, 5.0]),  # Mixed small and medium values
+        torch.tensor(
+            [math.e, 1.0, math.e**2, math.e**0.5]
+        ),  # Values with known log results
+        torch.rand(2, 3) * 10 + 0.1,  # Random positive values in range (0.1, 10.1)
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_log_edge_cases(device: str):
+    """Test log with edge cases"""
+
+    def fn(x):
+        return torch.log(x)
+
+    # Test with edge values (avoiding zero and negative values)
+    test_cases = [
+        torch.tensor([1.0]),  # log(1) = 0
+        torch.tensor([math.e]),  # log(e) = 1
+        torch.tensor([1e-5, 1e5]),  # Very small and very large positive values
+        torch.tensor([0.001, 1000.0]),  # Range of magnitudes
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_tensor_log_method(device: str):
+    """Test tensor.log() method"""
+
+    def fn(x):
+        return x.log()
+
+    # Positive values for log domain
+    x = torch.rand(3, 4) * 5 + 0.5  # Range (0.5, 5.5)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_stack_1d(device: str):

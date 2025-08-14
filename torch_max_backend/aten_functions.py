@@ -892,6 +892,14 @@ def aten_le(input, other):
 
 # leaky_relu(Tensor self, Scalar negative_slope=0.01) -> Tensor
 # log(Tensor self) -> Tensor
+@map_to(aten.log)
+def aten_log(input):
+    """
+    Returns a new tensor with the natural logarithm of the elements of input.
+    """
+    return max_ops.log(input)
+
+
 # log10(Tensor self) -> Tensor
 # log1p(Tensor self) -> Tensor
 # log2(Tensor self) -> Tensor
