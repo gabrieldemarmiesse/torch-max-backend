@@ -67,29 +67,6 @@ def map_to(func: callable) -> callable:
 
 
 # Add direct mappings with decorators
-@map_to(aten.abs)
-def aten_abs(x):
-    return max_ops.abs(x)
-
-
-@map_to(aten.cos)
-def aten_cos(x):
-    return max_ops.cos(x)
-
-
-@map_to(aten.sin)
-def aten_sin(x):
-    return max_ops.sin(x)
-
-
-@map_to(aten.sqrt)
-def aten_sqrt(x):
-    return max_ops.sqrt(x)
-
-
-@map_to(aten.rsqrt)
-def aten_rsqrt(x):
-    return max_ops.rsqrt(x)
 
 
 @map_to(aten.eq)
@@ -112,29 +89,9 @@ def aten_floordiv(x, y):
     return operator.floordiv(x, y)
 
 
-@map_to(aten.neg)
-def aten_neg(x):
-    return operator.neg(x)
-
-
-@map_to(aten.pow)
-def aten_pow(x, y):
-    return operator.pow(x, y)
-
-
 @map_to(aten.remainder)
 def aten_remainder(x, y):
     return operator.mod(x, y)
-
-
-@map_to(aten.mm)
-def aten_mm(x, y):
-    return operator.matmul(x, y)
-
-
-@map_to(aten.permute)
-def aten_permute(x, dims):
-    return max_ops.permute(x, dims)
 
 
 @map_to(aten.maximum)
@@ -258,6 +215,11 @@ def aten__to_copy(tensor, *args, **kwargs):
 
 
 # abs(Tensor self) -> Tensor
+@map_to(aten.abs)
+def aten_abs(x):
+    return max_ops.abs(x)
+
+
 # acos(Tensor self) -> Tensor
 # acosh(Tensor self) -> Tensor
 # adaptive_avg_pool1d(Tensor self, int[1] output_size) -> Tensor
@@ -610,6 +572,11 @@ def aten_convolution(
 # convolution_backward(Tensor grad_output, Tensor input, Tensor weight, SymInt[]? bias_sizes, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
 # copy(Tensor self, Tensor src, bool non_blocking=False) -> Tensor
 # cos(Tensor self) -> Tensor
+@map_to(aten.cos)
+def aten_cos(x):
+    return max_ops.cos(x)
+
+
 # cosh(Tensor self) -> Tensor
 # cumsum(Tensor self, int dim, *, ScalarType? dtype=None) -> Tensor
 # diagonal(Tensor(a) self, int offset=0, int dim1=0, int dim2=1) -> Tensor(a)
@@ -1108,6 +1075,9 @@ def aten_min(*args, **kwargs):
 
 # minimum(Tensor self, Tensor other) -> Tensor
 # mm(Tensor self, Tensor mat2) -> Tensor
+@map_to(aten.mm)
+def aten_mm(x, y):
+    return operator.matmul(x, y)
 
 
 # mul.Scalar(Tensor self, Scalar other) -> Tensor
@@ -1236,11 +1206,26 @@ def aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
 # ne.Scalar(Tensor self, Scalar other) -> Tensor
 # ne.Tensor(Tensor self, Tensor other) -> Tensor
 # neg(Tensor self) -> Tensor
+@map_to(aten.neg)
+def aten_neg(x):
+    return operator.neg(x)
+
+
 # nonzero(Tensor self) -> Tensor
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)
+@map_to(aten.permute)
+def aten_permute(x, dims):
+    return max_ops.permute(x, dims)
+
+
 # pow.Scalar(Scalar self, Tensor exponent) -> Tensor
 # pow.Tensor_Scalar(Tensor self, Scalar exponent) -> Tensor
 # pow.Tensor_Tensor(Tensor self, Tensor exponent) -> Tensor
+@map_to(aten.pow)
+def aten_pow(x, y):
+    return operator.pow(x, y)
+
+
 # prod(Tensor self, *, ScalarType? dtype=None) -> Tensor
 # prod.dim_int(Tensor self, int dim, bool keepdim=False, *, ScalarType? dtype=None) -> Tensor
 # rand(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
@@ -1265,6 +1250,9 @@ def aten_relu(tensor, inplace: bool = False):
 # resize_(Tensor(a!) self, SymInt[] size, *, MemoryFormat? memory_format=None) -> Tensor(a!)
 # round(Tensor self) -> Tensor
 # rsqrt(Tensor self) -> Tensor
+@map_to(aten.rsqrt)
+def aten_rsqrt(x):
+    return max_ops.rsqrt(x)
 
 
 # scalar_tensor(Scalar s, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
@@ -1312,6 +1300,11 @@ def aten_sigmoid(input):
 
 # sign(Tensor self) -> Tensor
 # sin(Tensor self) -> Tensor
+@map_to(aten.sin)
+def aten_sin(x):
+    return max_ops.sin(x)
+
+
 # sinh(Tensor self) -> Tensor
 
 
@@ -1342,6 +1335,11 @@ def aten_split_with_sizes(input, split_sizes, dim=0):
 
 
 # sqrt(Tensor self) -> Tensor
+@map_to(aten.sqrt)
+def aten_sqrt(x):
+    return max_ops.sqrt(x)
+
+
 # squeeze.dim(Tensor(a) self, int dim) -> Tensor(a)
 # squeeze.dims(Tensor(a) self, int[] dim) -> Tensor(a)
 
