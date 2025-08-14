@@ -7,13 +7,11 @@ name = "max-torch-backend"
 version = "0.1.0"
 description = "PyTorch backend implementation using Modular's MAX framework"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
-    "modular",
-    "pytest-split>=0.10.0",
-    "tabulate>=0.9.0",
-    "tiktoken>=0.11.0",
-    "torch>=2.7.0",
+    "max",
+    "tabulate",
+    "torch",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -40,10 +38,11 @@ dev = [
     "accelerate>=1.10.0",
     "hatchling",
     "ibm-fms>=1.2.1",
-    "ipython>=9.4.0",
+    "ipython",
     "pillow>=11.3.0",
     "pytest>=8.4.1",
     "pytest-forked>=1.6.0",
+    "pytest-split>=0.10.0",
     "pytest-xdist>=3.8.0",
     "requests>=2.32.4",
     "ruff>=0.12.7",
