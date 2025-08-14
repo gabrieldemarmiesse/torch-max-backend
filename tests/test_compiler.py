@@ -4078,3 +4078,40 @@ def test_group_norm_eps(device: str):
     input = torch.randn(batch_size, channels, height, width)
 
     check_functions_are_equivalent(fn, device, [input])
+
+
+def test_logical_not_bool(device: str):
+    """Test torch.logical_not with boolean tensors"""
+
+    def fn(x):
+        return torch.logical_not(x)
+
+    # Test with boolean tensor
+    a = torch.tensor([True, False, True, False])
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_logical_not_numeric(device: str):
+    """Test torch.logical_not with numeric tensors"""
+
+    def fn(x):
+        return torch.logical_not(x)
+
+    # Test with numeric tensor (non-zero values are treated as True)
+    a = torch.tensor([0, 1, 2, -1, 0.0])
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("shapes", [(3, 4), (2, 3, 4), (5,)])
+def test_logical_not_shapes(device: str, shapes):
+    """Test torch.logical_not with different tensor shapes"""
+
+    def fn(x):
+        return torch.logical_not(x)
+
+    # Test with various shapes and numeric values
+    a = torch.randint(0, 2, shapes, dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [a])

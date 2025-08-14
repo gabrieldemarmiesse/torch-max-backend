@@ -1244,6 +1244,18 @@ def torch_native_group_norm_equivalent(input, weight, bias, N, C, HxW, group, ep
     return (result,)
 
 
+def torch_logical_not_equivalent(input):
+    """
+    Equivalent to torch.logical_not.
+    PyTorch's logical_not treats any non-zero value as True and returns the logical negation.
+    MAX's logical_not requires boolean input, so we need to convert first.
+    """
+    # Convert input to boolean (non-zero -> True, zero -> False)
+    input_bool = max_ops.not_equal(input, 0)
+    # Apply logical not
+    return max_ops.logical_not(input_bool)
+
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -1334,6 +1346,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.addmm: torch_addmm_equivalent,
     torch.full: torch_full_equivalent,
     torch.t: torch_t_equivalent,
+    torch.logical_not: torch_logical_not_equivalent,
     # methods are given as strings in the graph
     "float": torch_float_equivalent,
     "expand": torch_expand_equivalent,
@@ -1412,6 +1425,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.clone: torch_clone_equivalent,
     aten.exp: torch_exp_equivalent,
     aten.native_group_norm: torch_native_group_norm_equivalent,
+    aten.logical_not: torch_logical_not_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
     "unsqueeze": torch_unsqueeze_equivalent,
