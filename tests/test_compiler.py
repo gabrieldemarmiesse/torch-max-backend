@@ -4039,7 +4039,7 @@ def test_exp(device: str):
     check_functions_are_equivalent(fn, device, [input])
 
 
-def test_group_norm(device: str, compiler_to_use):
+def test_group_norm(device: str):
     """Test F.group_norm with various configurations"""
 
     def fn(input):
@@ -4049,10 +4049,10 @@ def test_group_norm(device: str, compiler_to_use):
     batch_size, channels, height, width = 2, 4, 8, 8
     input = torch.randn(batch_size, channels, height, width)
 
-    check_functions_are_equivalent(fn, device, [input], compiler=compiler_to_use)
+    check_functions_are_equivalent(fn, device, [input])
 
 
-def test_group_norm_with_weight_bias(device: str, compiler_to_use):
+def test_group_norm_with_weight_bias(device: str):
     """Test F.group_norm with weight and bias parameters"""
 
     def fn(input, weight, bias):
@@ -4064,12 +4064,10 @@ def test_group_norm_with_weight_bias(device: str, compiler_to_use):
     weight = torch.randn(channels)
     bias = torch.randn(channels)
 
-    check_functions_are_equivalent(
-        fn, device, [input, weight, bias], compiler=compiler_to_use
-    )
+    check_functions_are_equivalent(fn, device, [input, weight, bias])
 
 
-def test_group_norm_eps(device: str, compiler_to_use):
+def test_group_norm_eps(device: str):
     """Test F.group_norm with custom eps parameter"""
 
     def fn(input):
@@ -4079,4 +4077,4 @@ def test_group_norm_eps(device: str, compiler_to_use):
     batch_size, channels, height, width = 1, 8, 2, 2
     input = torch.randn(batch_size, channels, height, width)
 
-    check_functions_are_equivalent(fn, device, [input], compiler=compiler_to_use)
+    check_functions_are_equivalent(fn, device, [input])

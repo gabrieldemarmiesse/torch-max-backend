@@ -1168,6 +1168,82 @@ def torch_exp_equivalent(input):
     return max_ops.exp(input)
 
 
+def torch_group_norm_equivalent(input, num_groups, weight=None, bias=None, eps=1e-5):
+    # input shape: [N, C, H, W]
+    N, C, H, W = input.shape
+
+    # Ensure number of channels is divisible by number of groups
+    if int(C) % num_groups != 0:
+        raise ValueError(
+            f"Number of channels ({C}) must be divisible by number of groups ({num_groups})"
+        )
+
+    channels_per_group = int(C) // num_groups
+
+    # Reshape input to [N, num_groups, channels_per_group, H, W]
+    reshaped = max_ops.reshape(
+        input, [int(N), num_groups, channels_per_group, int(H), int(W)]
+    )
+
+    # Calculate mean and variance for each group
+    # Normalize over dimensions: channels_per_group, H, W (dims 2, 3, 4)
+    axis_to_reduce = [2, 3, 4]
+
+    # Calculate mean
+    mean = torch_mean_equivalent(reshaped, dim=axis_to_reduce, keepdim=True)
+
+    # Calculate variance: Var(X) = E[(X - mean)^2]
+    centered = reshaped - mean
+    variance = torch_mean_equivalent(
+        centered * centered, dim=axis_to_reduce, keepdim=True
+    )
+
+    # Normalize: (x - mean) / sqrt(variance + eps)
+    normalized = centered / max_ops.sqrt(variance + eps)
+
+    # Reshape back to original shape [N, C, H, W]
+    normalized = max_ops.reshape(normalized, [int(N), int(C), int(H), int(W)])
+
+    # Apply scale and shift if provided
+    if weight is not None:
+        # weight shape: [C] - broadcast to [N, C, H, W]
+        weight_reshaped = max_ops.reshape(weight, [1, int(C), 1, 1])
+        normalized = normalized * weight_reshaped
+
+    if bias is not None:
+        # bias shape: [C] - broadcast to [N, C, H, W]
+        bias_reshaped = max_ops.reshape(bias, [1, int(C), 1, 1])
+        normalized = normalized + bias_reshaped
+
+    return normalized
+
+
+def torch_native_group_norm_equivalent(input, weight, bias, N, C, HxW, group, eps):
+    """
+    Equivalent to aten.native_group_norm.
+    This is the low-level operation that F.group_norm gets compiled to.
+    Returns (normalized_output, mean, rstd) tuple but we only return the first element for simplicity.
+    """
+    # Reshape input from [N*C, HxW] back to [N, C, H, W] format
+    # First, calculate H and W from HxW
+    HW = int(HxW)
+    # For simplicity, assume square spatial dimensions
+    H = W = int(HW**0.5)
+    if H * W != HW:
+        # If not square, try to factor HxW into reasonable H and W
+        # For now, use 1D spatial dimension
+        H, W = HW, 1
+
+    # Reshape input to [N, C, H, W]
+    input_reshaped = max_ops.reshape(input, [int(N), int(C), H, W])
+
+    # Use the regular group_norm implementation
+    result = torch_group_norm_equivalent(input_reshaped, group, weight, bias, eps)
+
+    # Return just the normalized output (native_group_norm returns a tuple)
+    return (result,)
+
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -1227,6 +1303,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     F.silu: torch_silu_equivalent,
     F.softmax: torch_softmax_equivalent,
     F.mse_loss: torch_mse_loss_equivalent,
+    F.group_norm: torch_group_norm_equivalent,
     torch._C._nn.linear: torch_linear_equivalent,
     torch.flatten: torch_flatten_equivalent,
     # TODO: Use noop function
@@ -1334,6 +1411,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.max_pool2d_with_indices: torch_max_pool2d_with_indices_equivalent,
     aten.clone: torch_clone_equivalent,
     aten.exp: torch_exp_equivalent,
+    aten.native_group_norm: torch_native_group_norm_equivalent,
     "view": torch_view_equivalent,
     "contiguous": torch_contiguous_equivalent,
     "unsqueeze": torch_unsqueeze_equivalent,
