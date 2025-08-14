@@ -262,6 +262,43 @@ def test_abs(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_floor(device: str, tensor_shapes: tuple):
+    def fn(x):
+        return torch.floor(x)
+
+    # Use a mix of positive and negative values to test floor properly
+    a = torch.randn(tensor_shapes) * 10  # Scale to get larger values
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_floor_edge_cases(device: str):
+    """Test floor with specific edge cases"""
+
+    def fn(x):
+        return torch.floor(x)
+
+    # Test with specific values to ensure floor behavior is correct
+    test_cases = [
+        torch.tensor([2.7, -2.7, 3.0, -3.0, 0.5, -0.5, 0.0]),  # Mixed cases
+        torch.tensor([1.9999, -1.9999, 10.1, -10.1]),  # Near integers
+        torch.tensor([100.9, -100.9, 0.1, -0.1]),  # Large and small values
+    ]
+
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_tensor_floor_method(device: str):
+    """Test tensor.floor() method"""
+
+    def fn(x):
+        return x.floor()
+
+    x = torch.randn(3, 4) * 5  # Scale values for better floor testing
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_cos(device: str, tensor_shapes: tuple):
     def fn(x):
         return torch.cos(x)

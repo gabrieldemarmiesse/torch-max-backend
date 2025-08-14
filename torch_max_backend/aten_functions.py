@@ -728,6 +728,15 @@ def aten_expand(tensor, size: list[int]):
 # fill.Scalar(Tensor self, Scalar value) -> Tensor
 # flip(Tensor self, int[] dims) -> Tensor
 # floor(Tensor self) -> Tensor
+@map_to(aten.floor)
+def aten_floor(input):
+    """
+    Returns a new tensor with the floor of the elements of input,
+    the largest integer less than or equal to each element.
+    """
+    return max_ops.floor(input)
+
+
 # fmod.Scalar(Tensor self, Scalar other) -> Tensor
 # fmod.Tensor(Tensor self, Tensor other) -> Tensor
 
