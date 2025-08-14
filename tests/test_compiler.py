@@ -4823,3 +4823,72 @@ def test_aten_index_select_multiple_dtypes(device: str, dtype):
     idx = torch.tensor([1, 2, 3], device=device, dtype=dtype)
 
     check_functions_are_equivalent(fn, device, [x, idx])
+
+
+def test_nonzero_function(device: str):
+    """Test torch.nonzero() function"""
+
+    def fn(x):
+        return torch.nonzero(x)
+
+    # Test with a simple tensor that has some zeros
+    x = torch.tensor(
+        [[1, 0, 2], [0, 3, 0], [4, 0, 5]], device=device, dtype=torch.float32
+    )
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_nonzero_all_zeros(device: str):
+    """Test torch.nonzero() with all zeros"""
+
+    def fn(x):
+        return torch.nonzero(x)
+
+    x = torch.zeros(3, 3, device=device, dtype=torch.float32)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_nonzero_all_nonzeros(device: str):
+    """Test torch.nonzero() with all non-zero values"""
+
+    def fn(x):
+        return torch.nonzero(x)
+
+    x = torch.ones(2, 3, device=device, dtype=torch.float32)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_nonzero_method(device: str):
+    """Test tensor.nonzero() method"""
+
+    def fn(x):
+        return x.nonzero()
+
+    x = torch.tensor([1, 0, 3, 0, 5], device=device, dtype=torch.float32)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("tensor_shapes", [(2,), (3, 4), (2, 3, 4)])
+def test_nonzero_different_shapes(device: str, tensor_shapes: tuple):
+    """Test nonzero with different tensor shapes"""
+
+    def fn(x):
+        return torch.nonzero(x)
+
+    # Create a tensor with some zeros and non-zeros
+    x = torch.randn(*tensor_shapes, device=device)
+    # Set some elements to zero
+    if len(tensor_shapes) == 1:
+        x[0] = 0
+    elif len(tensor_shapes) == 2:
+        x[0, 0] = 0
+        x[1, 1] = 0
+    else:
+        x[0, 0, 0] = 0
+        x[1, 1, 1] = 0
+
+    check_functions_are_equivalent(fn, device, [x])

@@ -1361,6 +1361,13 @@ def aten_neg(x):
 
 
 # nonzero(Tensor self) -> Tensor
+@map_to(aten.nonzero)
+def aten_nonzero(input):
+    """
+    Returns the indices of the elements that are non-zero.
+    Returns a 2D tensor where each row is the indices of a non-zero element.
+    """
+    return max_ops.nonzero(input)
 
 
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)
