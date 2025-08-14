@@ -363,6 +363,35 @@ def test_log1p_small_values(device: str):
         torch.tensor([1e-6, -1e-6, 1e-10, -1e-10]),  # Very small values
         torch.rand(2, 3) * 0.2 - 0.1,  # Random small values in (-0.1, 0.1)
     ]
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_log_basic(device: str):
+    """Test basic log functionality"""
+
+    def fn(x):
+        return torch.log(x)
+
+    # Use positive values only since log is only defined for positive numbers
+    a = torch.rand(3, 4) + 0.1  # Range (0.1, 1.1) to avoid values too close to zero
+    check_functions_are_equivalent(fn, device, [a])
+
+
+def test_log_various_ranges(device: str):
+    """Test log with various value ranges"""
+
+    def fn(x):
+        return torch.log(x)
+
+    test_cases = [
+        torch.tensor([1.0, 2.0, 10.0, 100.0]),  # Simple positive values
+        torch.tensor([0.1, 0.5, 1.5, 5.0]),  # Mixed small and medium values
+        torch.tensor(
+            [math.e, 1.0, math.e**2, math.e**0.5]
+        ),  # Values with known log results
+        torch.rand(2, 3) * 10 + 0.1,  # Random positive values in range (0.1, 10.1)
+    ]
 
     for test_tensor in test_cases:
         check_functions_are_equivalent(fn, device, [test_tensor])
@@ -379,6 +408,23 @@ def test_log1p_various_ranges(device: str):
         torch.tensor([math.e - 1, 0.0, math.e**2 - 1]),  # Values with known results
         torch.tensor([-0.5, -0.9, -0.99, -0.999]),  # Negative values approaching -1
         torch.rand(2, 3) * 5 - 0.5,  # Random values in (-0.5, 4.5)
+    ]
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
+def test_log_edge_cases(device: str):
+    """Test log with edge cases"""
+
+    def fn(x):
+        return torch.log(x)
+
+    # Test with edge values (avoiding zero and negative values)
+    test_cases = [
+        torch.tensor([1.0]),  # log(1) = 0
+        torch.tensor([math.e]),  # log(e) = 1
+        torch.tensor([1e-5, 1e5]),  # Very small and very large positive values
+        torch.tensor([0.001, 1000.0]),  # Range of magnitudes
     ]
 
     for test_tensor in test_cases:
@@ -397,6 +443,11 @@ def test_log1p_edge_cases(device: str):
         torch.tensor([math.e - 1]),  # log1p(e-1) = 1
         torch.tensor([-0.9999, 0.9999]),  # Close to domain boundary and symmetric
         torch.tensor([100.0, 1000.0]),  # Large positive values
+    ]
+    for test_tensor in test_cases:
+        check_functions_are_equivalent(fn, device, [test_tensor])
+
+
 def test_isnan_basic(device: str):
     """Test basic isnan functionality"""
 
@@ -457,6 +508,22 @@ def test_tensor_log1p_method(device: str):
 
     # Use range where log1p is well-defined (x > -1)
     x = torch.rand(3, 4) * 3 - 0.5  # Range (-0.5, 2.5)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_log_method(device: str):
+    """Test tensor.log() method"""
+
+    def fn(x):
+        return x.log()
+
+    # Positive values for log domain
+    x = torch.rand(3, 4) * 5 + 0.5  # Range (0.5, 5.5)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_tensor_isnan_method(device: str):
     """Test tensor.isnan() method"""
 
@@ -4350,6 +4417,81 @@ def test_logical_not_shapes(device: str, shapes):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_logical_xor_bool(device: str):
+    """Test torch.logical_xor with boolean tensors"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test with boolean tensors - various XOR combinations
+    a = torch.tensor([True, False, True, False])
+    b = torch.tensor([True, True, False, False])
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_logical_xor_numeric(device: str):
+    """Test torch.logical_xor with numeric tensors"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test with numeric tensors (non-zero treated as True)
+    a = torch.tensor([0, 1, 2, -1, 0.0])
+    b = torch.tensor([0, 0, 1, -1, 3.0])
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_logical_xor_mixed_types(device: str):
+    """Test torch.logical_xor with mixed boolean and numeric tensors"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test boolean tensor with numeric tensor
+    a = torch.tensor([True, False, True, False])
+    b = torch.tensor([0, 1, 0, 2])
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+@pytest.mark.parametrize("shapes", [(3, 4), (2, 3, 4), (5,)])
+def test_logical_xor_shapes(device: str, shapes):
+    """Test torch.logical_xor with different tensor shapes"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test with various shapes
+    a = torch.randint(0, 2, shapes, dtype=torch.int32)
+    b = torch.randint(0, 2, shapes, dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
+def test_logical_xor_edge_cases(device: str):
+    """Test torch.logical_xor with edge cases"""
+
+    def fn(x, y):
+        return torch.logical_xor(x, y)
+
+    # Test with specific edge case values
+    test_cases = [
+        # All False XOR All False = All False
+        (torch.tensor([False, False, False]), torch.tensor([False, False, False])),
+        # All True XOR All False = All True
+        (torch.tensor([True, True, True]), torch.tensor([False, False, False])),
+        # All True XOR All True = All False
+        (torch.tensor([True, True, True]), torch.tensor([True, True, True])),
+        # Mixed numeric values
+        (torch.tensor([0.0, -1.0, 2.5]), torch.tensor([0.0, 1.0, 0.0])),
+    ]
+
+    for a, b in test_cases:
+        check_functions_are_equivalent(fn, device, [a, b])
+
+
 def test_any_basic(device: str):
     """Test torch.any basic functionality"""
 
@@ -4890,3 +5032,72 @@ def test_aten_index_select_multiple_dtypes(device: str, dtype):
     idx = torch.tensor([1, 2, 3], device=device, dtype=dtype)
 
     check_functions_are_equivalent(fn, device, [x, idx])
+
+
+def test_nonzero_function(device: str):
+    """Test torch.nonzero() function"""
+
+    def fn(x):
+        return torch.nonzero(x)
+
+    # Test with a simple tensor that has some zeros
+    x = torch.tensor(
+        [[1, 0, 2], [0, 3, 0], [4, 0, 5]], device=device, dtype=torch.float32
+    )
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_nonzero_all_zeros(device: str):
+    """Test torch.nonzero() with all zeros"""
+
+    def fn(x):
+        return torch.nonzero(x)
+
+    x = torch.zeros(3, 3, device=device, dtype=torch.float32)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_nonzero_all_nonzeros(device: str):
+    """Test torch.nonzero() with all non-zero values"""
+
+    def fn(x):
+        return torch.nonzero(x)
+
+    x = torch.ones(2, 3, device=device, dtype=torch.float32)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_nonzero_method(device: str):
+    """Test tensor.nonzero() method"""
+
+    def fn(x):
+        return x.nonzero()
+
+    x = torch.tensor([1, 0, 3, 0, 5], device=device, dtype=torch.float32)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("tensor_shapes", [(2,), (3, 4), (2, 3, 4)])
+def test_nonzero_different_shapes(device: str, tensor_shapes: tuple):
+    """Test nonzero with different tensor shapes"""
+
+    def fn(x):
+        return torch.nonzero(x)
+
+    # Create a tensor with some zeros and non-zeros
+    x = torch.randn(*tensor_shapes, device=device)
+    # Set some elements to zero
+    if len(tensor_shapes) == 1:
+        x[0] = 0
+    elif len(tensor_shapes) == 2:
+        x[0, 0] = 0
+        x[1, 1] = 0
+    else:
+        x[0, 0, 0] = 0
+        x[1, 1, 1] = 0
+
+    check_functions_are_equivalent(fn, device, [x])

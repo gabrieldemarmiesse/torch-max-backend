@@ -1032,6 +1032,25 @@ def aten_logical_not(input):
 
 # logical_or(Tensor self, Tensor other) -> Tensor
 # logical_xor(Tensor self, Tensor other) -> Tensor
+@map_to(aten.logical_xor)
+def aten_logical_xor(input, other):
+    """
+    Computes element-wise logical XOR of two tensors.
+    Both inputs are converted to boolean first if they aren't already.
+    """
+    # Convert both inputs to boolean if they aren't already
+    if input.dtype != DType.bool:
+        input_bool = max_ops.not_equal(input, 0)
+    else:
+        input_bool = input
+
+    if other.dtype != DType.bool:
+        other_bool = max_ops.not_equal(other, 0)
+    else:
+        other_bool = other
+
+    # Apply logical xor
+    return max_ops.logical_xor(input_bool, other_bool)
 
 
 # lt.Scalar(Tensor self, Scalar other) -> Tensor
@@ -1378,6 +1397,13 @@ def aten_neg(x):
 
 
 # nonzero(Tensor self) -> Tensor
+@map_to(aten.nonzero)
+def aten_nonzero(input):
+    """
+    Returns the indices of the elements that are non-zero.
+    Returns a 2D tensor where each row is the indices of a non-zero element.
+    """
+    return max_ops.nonzero(input)
 
 
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)
