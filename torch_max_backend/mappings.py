@@ -1273,6 +1273,23 @@ def torch_any_equivalent(input, dim=None, keepdim=False, *, out=None):
     return result
 
 
+def torch_index_equivalent(input, indices):
+    if not isinstance(indices, list | tuple):
+        # Single index tensor case
+        return max_ops.gather(input, indices, axis=0)
+
+    # Handle the interpolation case: [None, None, h_indices, w_indices]
+    result = input
+
+    # Process each non-None index
+    for dim, index_tensor in enumerate(indices):
+        if index_tensor is not None:
+            # Apply gather operation along this dimension
+            result = max_ops.gather(result, index_tensor, axis=dim)
+
+    return result
+
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -1383,6 +1400,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.logical_not: torch_logical_not_equivalent,
     aten.logical_and: torch_logical_and_equivalent,
     aten.any: torch_any_equivalent,
+    aten.index: torch_index_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:

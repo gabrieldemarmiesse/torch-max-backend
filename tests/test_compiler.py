@@ -4377,6 +4377,232 @@ def test_scaled_dot_product_attention_with_scale(device: str):
     check_functions_are_equivalent(fn, device, [query, key, value])
 
 
+def test_interpolate_nearest_upsampling_2d(device: str):
+    """Test F.interpolate with nearest upsampling for 2D tensors"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(2, 3, 4, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_bilinear_upsampling_2d(device: str):
+    """Test F.interpolate with bilinear upsampling for 2D tensors"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(
+            x, scale_factor=2, mode="bilinear", align_corners=False
+        )
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(2, 3, 4, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_nearest_downsampling_2d(device: str):
+    """Test F.interpolate with nearest downsampling for 2D tensors"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, scale_factor=0.5, mode="nearest")
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(2, 3, 8, 8, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_with_size_2d(device: str):
+    """Test F.interpolate with explicit output size for 2D tensors"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, size=(16, 16), mode="nearest")
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(2, 3, 8, 8, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_bilinear_with_size_2d(device: str):
+    """Test F.interpolate with bilinear and explicit output size"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(
+            x, size=(12, 12), mode="bilinear", align_corners=False
+        )
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(2, 3, 6, 6, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_linear_1d(device: str):
+    """Test F.interpolate with linear interpolation for 1D tensors"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(
+            x, scale_factor=2, mode="linear", align_corners=False
+        )
+
+    # Input shape: [batch, channels, length]
+    x = torch.randn(2, 3, 8, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_nearest_3d(device: str):
+    """Test F.interpolate with nearest interpolation for 3D tensors"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
+
+    # Input shape: [batch, channels, depth, height, width]
+    x = torch.randn(1, 2, 4, 4, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_trilinear_3d(device: str):
+    """Test F.interpolate with trilinear interpolation for 3D tensors"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(
+            x, scale_factor=1.5, mode="trilinear", align_corners=False
+        )
+
+    # Input shape: [batch, channels, depth, height, width]
+    x = torch.randn(1, 2, 4, 4, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("scale_factor", [0.5, 1.5, 2.0, 3.0])
+def test_interpolate_different_scale_factors(device: str, scale_factor: float):
+    """Test F.interpolate with various scale factors"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(
+            x, scale_factor=scale_factor, mode="nearest"
+        )
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(1, 2, 8, 8, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("mode", ["nearest", "bilinear"])
+def test_interpolate_different_modes_2d(device: str, mode: str):
+    """Test F.interpolate with different interpolation modes for 2D"""
+
+    def fn(x):
+        if mode == "bilinear":
+            return torch.nn.functional.interpolate(
+                x, scale_factor=2, mode=mode, align_corners=False
+            )
+        else:
+            return torch.nn.functional.interpolate(x, scale_factor=2, mode=mode)
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(2, 3, 4, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_align_corners_true(device: str):
+    """Test F.interpolate with align_corners=True"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(
+            x, scale_factor=2, mode="bilinear", align_corners=True
+        )
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(2, 3, 4, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_small_tensor(device: str):
+    """Test F.interpolate with small tensor dimensions"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, size=(8, 8), mode="nearest")
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(1, 1, 2, 2, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_single_channel(device: str):
+    """Test F.interpolate with single channel input"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, scale_factor=3, mode="nearest")
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(1, 1, 4, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_asymmetric_scaling(device: str):
+    """Test F.interpolate with different scaling factors for different dimensions"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, size=(6, 12), mode="nearest")
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(2, 3, 3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_large_upsampling(device: str):
+    """Test F.interpolate with large upsampling factor"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, scale_factor=4, mode="nearest")
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(1, 2, 3, 3, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("size", [(5, 5), (7, 9), (16, 16)])
+def test_interpolate_various_output_sizes(device: str, size: tuple):
+    """Test F.interpolate with various output sizes"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, size=size, mode="nearest")
+
+    # Input shape: [batch, channels, height, width]
+    x = torch.randn(1, 2, 4, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_interpolate_preserve_aspect_ratio(device: str):
+    """Test F.interpolate preserving aspect ratio with rectangular input"""
+
+    def fn(x):
+        return torch.nn.functional.interpolate(
+            x, size=(8, 16), mode="bilinear", align_corners=False
+        )
+
+    # Input shape: [batch, channels, height, width] - rectangular
+    x = torch.randn(2, 3, 4, 8, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 @pytest.mark.parametrize("dims", [(0, 1), (1, 0)])
 def test_permute_2d(device: str, dims: tuple):
     """Test torch.permute with 2D tensors"""
