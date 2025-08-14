@@ -7,7 +7,7 @@ import torch.amp.autocast_mode
 from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
 from max.dtype import DType
-from max.graph import StaticDim
+from max.graph import StaticDim, Dim
 import max.graph.type as max_type
 import numpy as np
 import math
@@ -815,7 +815,16 @@ def torch_arange_equivalent(
         out_dim = int(math.ceil(out_dim / step))
 
     # Use max_ops.range to create the sequence
-    return max_ops.range(start, end, step, out_dim=out_dim, device=device, dtype=dtype)
+    result = max_ops.range(
+        Dim(start),
+        Dim(end),
+        Dim(step),
+        out_dim=Dim(out_dim),
+        device=device,
+        dtype=dtype,
+    )
+    # TODO: Remove this when the bug is addressed in MAX, range doesn't produce the correct dtype
+    return max_ops.cast(result, dtype=dtype)
 
 
 def torch_new_ones_equivalent(

@@ -166,6 +166,8 @@ class _GraphFactory:
         self.graph_inputs = []
         self.graph = None
         self.tensor_book = TensorsBook()
+        # Link the shape expressions (names) to the node names
+        self.expression_to_node_name: dict[str, str] = {}
 
     def find_live_nodes(self, gm: torch.fx.GraphModule) -> set[torch.fx.Node]:
         """
@@ -230,13 +232,15 @@ class _GraphFactory:
         elif "val" in node.meta:
             example_value = node.meta["val"]
         if isinstance(example_value, torch.SymInt):
-            pass
+            self.expression_to_node_name[example_value.node.expr.name] = node.name
         if isinstance(example_value, torch.Tensor | torch.nn.Parameter):
             shape = []
             for dim_idx, dim in enumerate(example_value.shape):
                 if isinstance(dim, torch.SymInt):
                     shape.append(str(dim))
-                    self.shape_names_to_input_dim[str(dim)] = (node.name, dim_idx)
+                    self.shape_names_to_input_dim[
+                        self.expression_to_node_name[str(dim)]
+                    ] = (node.name, dim_idx)
                 elif isinstance(dim, int):
                     shape.append(dim)
                 else:
@@ -273,7 +277,7 @@ class _GraphFactory:
             func_output = MAPPING_TORCH_TO_MOJO_FUNCTIONS[key](
                 *func_args, **func_kwargs
             )
-        except RuntimeError as e:
+        except Exception as e:
             raise MaxCompilerError(
                 f"Failed to execute node {node_idx} with target {get_fully_qualified_name(node.target)}, "
                 f"inputs were: args={func_args}, kwargs={func_kwargs}. Error: {e}. It comes from there in your code: \n"
@@ -373,7 +377,6 @@ class BaseMaxCompiler:
     ):
         self.example_inputs = example_inputs
         gm = apply_decompositions(gm)
-
         gm.graph.print_tabular()
 
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
