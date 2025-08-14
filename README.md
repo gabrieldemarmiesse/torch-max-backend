@@ -124,7 +124,9 @@ You can get various information with the following environement variables:
 * `TORCH_MAX_BACKEND_PROFILE=1` to get various information about timing (time to compile, time to run, ...)
 * `TORCH_MAX_BACKEND_VERBOSE=1` to display the graph(s) made by pytorch and various other information.
 
-## Testing
+
+## Contributing
+### Testing
 
 ```bash
 # Run all tests (the first time is slow, chaching kicks in after)
@@ -135,3 +137,7 @@ uvx pre-commit run --all-files
 # Or install the pre-commit hook
 uvx pre-commit install
 ```
+
+### Aten ops
+The list of aten ops can be found in [`ressources/aten_ops.txt`](ressources/aten_ops.txt). Sadly 
+the documentation for those ops is non-existant. Reverse-ingeneering is the only thing that works.
