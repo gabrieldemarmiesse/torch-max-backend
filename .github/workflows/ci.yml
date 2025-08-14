@@ -33,9 +33,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/modular/
-          key: modular-${{ hashFiles('uv.lock') }}
+          key: modular-${{ matrix.test-index }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            modular-
+            modular-${{ matrix.test-index }}
       
       - name: Install uv
         uses: astral-sh/setup-uv@v4
