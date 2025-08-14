@@ -1273,6 +1273,16 @@ def torch_any_equivalent(input, dim=None, keepdim=False, *, out=None):
     return result
 
 
+def torch_aten_index_equivalent(input, indices=None):
+    if not indices:
+        raise NotImplementedError("We don't yet support aten.index without indices")
+    if len(indices) != 1:
+        raise NotImplementedError(
+            "We only support aten.index with a single index for now"
+        )
+    return max_ops.gather(input, indices[0], axis=0)
+
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -1383,6 +1393,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.logical_not: torch_logical_not_equivalent,
     aten.logical_and: torch_logical_and_equivalent,
     aten.any: torch_any_equivalent,
+    aten.index: torch_aten_index_equivalent,
 }
 
 for func in IDENTICAL_FUNCTIONS:

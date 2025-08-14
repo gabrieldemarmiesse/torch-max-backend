@@ -4525,3 +4525,16 @@ def test_permute_1d_identity(device: str):
     x = torch.randn(5, device=device)
 
     check_functions_are_equivalent(fn, device, [x])
+
+
+# TODO: support list as input too
+def test_aten_index_select_basic(device: str):
+    """Test basic torch.index_select operation"""
+
+    def fn(x, indices):
+        return x[indices]
+
+    x = torch.randn(5, 3, device=device)
+    idx = torch.tensor([1, 2, 3], device=device, dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, idx])

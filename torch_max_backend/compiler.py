@@ -274,7 +274,7 @@ class _GraphFactory:
         self.tensor_book[node.name] = func_output
 
     def handle_get_attr(self, node: torch.fx.Node):
-        attr_value = self.fetch_attr(node.target)
+        attr_value = fetch_attr(self.graph, node.target)
         self.tensor_book[node.name] = attr_value
 
     def handle_output(self, node: torch.fx.Node):
