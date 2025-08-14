@@ -24,7 +24,7 @@ jobs:
     
     strategy:
       matrix:
-        test-index: [1, 2, 3, 4]
+        test-index: [1, 2, 3, 4, 5, 6, 7, 8]
     
     steps:
       - uses: actions/checkout@v4
@@ -46,4 +46,4 @@ jobs:
       
       - name: Run tests with pytest
         run: |
-          uv run pytest -n auto -v --splits 4 --group ${{ matrix.test-index }}
+          uv run pytest -n auto -v --splits 8 --group ${{ matrix.test-index }}
