@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "max-torch-backend"
 version = "0.1.0"
@@ -11,6 +15,9 @@ dependencies = [
     "tiktoken>=0.11.0",
     "torch>=2.7.0",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["max_torch_backend"]
 
 [[tool.uv.index]]
 url = "https://dl.modular.com/public/nightly/python/simple/"
@@ -31,6 +38,7 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     "accelerate>=1.10.0",
+    "hatchling",
     "ibm-fms>=1.2.1",
     "ipython>=9.4.0",
     "pillow>=11.3.0",
@@ -43,3 +51,4 @@ dev = [
     "torchvision>=0.22.1",
     "transformers>=4.54.1",
 ]
+

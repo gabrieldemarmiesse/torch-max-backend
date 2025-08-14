@@ -10,14 +10,18 @@ from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
 import warnings
 from torch._dynamo.backends.common import aot_autograd
 
-from max.graph import DeviceRef
 from functorch.compile import make_boxed_func
 from torch._decomp import core_aten_decompositions
 from torch.fx.experimental.proxy_tensor import make_fx
+from max_torch_backend.flags import profiling_enabled, verbose_enabled
+import time
 
 
 class MaxCompilerError(Exception):
     pass
+
+
+import datetime as dt
 
 
 def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
@@ -361,31 +365,39 @@ def get_accelerators():
                 warnings.warn(f"Failed to create accelerator {i}. {e}")
 
 
-def deviceref_to_torch(device_ref: DeviceRef) -> torch.device:
-    """Returns the equivalent PyTorch device for a MAX graph device."""
-    if device_ref.api == "cpu":
-        return torch.device(f"cpu:{device_ref.id}")
-    elif device_ref.api == "cuda":
-        return torch.device(f"cuda:{device_ref.id}")
-    else:
-        raise TypeError(f"Unable to convert {device_ref} to a PyTorch device.")
-
-
 class BaseMaxCompiler:
     def __init__(
         self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
     ):
+        if profiling_enabled():
+            compiler_start = time.time_ns()
         self.example_inputs = example_inputs
         gm = apply_decompositions(gm)
-        gm.graph.print_tabular()
+        if verbose_enabled():
+            gm.graph.print_tabular()
 
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
+        if profiling_enabled():
+            graph_defined_time = time.time_ns()
+
         self.model = session.load(graph)
+        if profiling_enabled():
+            compiling_done_time = time.time_ns()
+            defining = dt.timedelta(
+                microseconds=(graph_defined_time - compiler_start) / 1000
+            )
+            print(f"Defining the Max graph in {defining}")
+            compiling = dt.timedelta(
+                microseconds=(compiling_done_time - graph_defined_time) / 1000
+            )
+            print(f"Compiling the Max graph in {compiling}")
 
     def __call__(self, *args) -> list[torch.Tensor]:
         # Detach tensors to avoid gradient tracking issues with DLpack
+        if profiling_enabled():
+            start_inference_time = time.time_ns()
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
@@ -396,6 +408,12 @@ class BaseMaxCompiler:
                 result.append(None)
             else:
                 result.append(tensor_outputs[i])
+        if profiling_enabled():
+            end_inference_time = time.time_ns()
+            inference_duration = dt.timedelta(
+                microseconds=(end_inference_time - start_inference_time) / 1000
+            )
+            print(f"Running the Max graph in {inference_duration}")
         return result
 
 

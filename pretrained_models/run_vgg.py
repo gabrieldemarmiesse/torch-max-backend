@@ -4,7 +4,10 @@ from PIL import Image
 import requests
 from io import BytesIO
 from max_torch_backend import MaxCompiler
-import time
+import os
+
+os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 
 device = "cpu"
 
@@ -50,11 +53,6 @@ def predict_image(image_path_or_url, top_k=5):
 
     with torch.no_grad():
         output = model(input_batch)
-        # Let's time it
-        start_time = time.time()
-        output = model(input_batch)
-        end_time = time.time()
-        print(f"Inference time: {end_time - start_time:.4f} seconds")
 
     probabilities = torch.nn.functional.softmax(output[0], dim=0)
 

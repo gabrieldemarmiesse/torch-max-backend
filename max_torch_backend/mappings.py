@@ -2,7 +2,6 @@ import operator
 
 import max.graph.ops as max_ops
 import torch
-import torch.amp.autocast_mode
 from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
 from max.dtype import DType
@@ -10,13 +9,7 @@ from max.graph import StaticDim, Dim
 import max.graph.type as max_type
 import numpy as np
 import math
-import torch._functorch.vmap
-import torch._C._functorch
 from torch.ops import aten
-
-# Import specific function objects that appear in VGG FX graph
-import torch._C._nn  # for conv2d and linear built-ins
-import torch._C  # for flatten built-in
 
 
 def torch_cat_equivalent(tensors: list, dim=0):
