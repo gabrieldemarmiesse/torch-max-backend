@@ -587,6 +587,24 @@ def aten_cos(x):
 
 # cosh(Tensor self) -> Tensor
 # cumsum(Tensor self, int dim, *, ScalarType? dtype=None) -> Tensor
+@map_to(aten.cumsum)
+def aten_cumsum(input, dim, *, dtype=None):
+    """
+    Returns the cumulative sum of elements of input in the dimension dim.
+
+    Args:
+        input: the input tensor
+        dim: the dimension to do the operation over
+        dtype: the desired data type of returned tensor
+    """
+    if dtype is not None:
+        max_dtype = DType.from_torch(dtype)
+        input = max_ops.cast(input, dtype=max_dtype)
+
+    # MAX's cumsum handles negative dimensions automatically, so no need to convert
+    return max_ops.cumsum(input, axis=dim)
+
+
 # diagonal(Tensor(a) self, int offset=0, int dim1=0, int dim2=1) -> Tensor(a)
 
 

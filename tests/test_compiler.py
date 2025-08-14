@@ -3626,6 +3626,78 @@ def test_sum_negative_dim(device: str):
     check_functions_are_equivalent(fn, device, [input_tensor])
 
 
+def test_cumsum_basic(device: str):
+    """Test basic cumsum operation along dimension 0"""
+
+    def fn(x):
+        return torch.cumsum(x, dim=0)
+
+    input_tensor = torch.randn(5, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_cumsum_different_dims(device: str):
+    """Test cumsum along different dimensions"""
+
+    def fn_dim0(x):
+        return torch.cumsum(x, dim=0)
+
+    def fn_dim1(x):
+        return torch.cumsum(x, dim=1)
+
+    def fn_dim2(x):
+        return torch.cumsum(x, dim=2)
+
+    input_tensor = torch.randn(3, 4, 5)
+
+    check_functions_are_equivalent(fn_dim0, device, [input_tensor])
+    check_functions_are_equivalent(fn_dim1, device, [input_tensor])
+    check_functions_are_equivalent(fn_dim2, device, [input_tensor])
+
+
+def test_cumsum_negative_dim(device: str):
+    """Test cumsum with negative dimension index"""
+
+    def fn(x):
+        return torch.cumsum(x, dim=-1)
+
+    input_tensor = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_cumsum_with_dtype(device: str):
+    """Test cumsum with dtype conversion"""
+
+    def fn(x):
+        return torch.cumsum(x, dim=1, dtype=torch.float32)
+
+    # Start with integer tensor to test dtype conversion
+    input_tensor = torch.randint(
+        0, 10, (4, 6)
+    ).float()  # Convert to float for consistency
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_cumsum_1d_tensor(device: str):
+    """Test cumsum on 1D tensor"""
+
+    def fn(x):
+        return torch.cumsum(x, dim=0)
+
+    input_tensor = torch.randn(10)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_cumsum_large_tensor(device: str):
+    """Test cumsum on larger tensor"""
+
+    def fn(x):
+        return torch.cumsum(x, dim=1)
+
+    input_tensor = torch.randn(8, 16, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
 def test_masked_fill_basic(device: str):
     def fn(x, mask):
         return x.masked_fill(mask, -float("inf"))
