@@ -1149,6 +1149,21 @@ def torch_squeeze_equivalent(input, dim):
     return result
 
 
+def torch_bmm_equivalent(input, mat2):
+    """
+    Batch matrix multiplication equivalent to torch.bmm.
+
+    Args:
+        input: 3D tensor of shape [batch_size, n, m]
+        mat2: 3D tensor of shape [batch_size, m, p]
+
+    Returns:
+        3D tensor of shape [batch_size, n, p]
+    """
+    # MAX's matmul handles batch dimensions automatically through broadcasting
+    return max_ops.matmul(input, mat2)
+
+
 IDENTICAL_FUNCTIONS = [
     operator.add,
     operator.sub,
@@ -1234,6 +1249,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     torch.stack: torch_stack_equivalent,
     torch.sum: torch_sum_equivalent,
     torch.matmul: operator.matmul,
+    torch.bmm: torch_bmm_equivalent,
     torch.addmm: torch_addmm_equivalent,
     torch.full: torch_full_equivalent,
     torch.t: torch_t_equivalent,
@@ -1262,6 +1278,7 @@ MAPPING_TORCH_TO_MOJO_FUNCTIONS = {
     aten.pow: operator.pow,
     aten.mean: torch_mean_equivalent,
     aten.mm: operator.matmul,
+    aten.bmm: torch_bmm_equivalent,
     aten.sum: torch_sum_equivalent,
     aten.view: torch_view_equivalent,
     aten.argmax: torch_argmax_equivalent,

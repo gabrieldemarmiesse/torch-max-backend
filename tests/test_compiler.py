@@ -3972,6 +3972,47 @@ def test_addmm_broadcast_bias(device: str, compiler_to_use):
     )
 
 
+def test_bmm_basic(device: str, compiler_to_use):
+    """Test basic torch.bmm operation (batch matrix multiplication)"""
+
+    def fn(input, mat2):
+        return torch.bmm(input, mat2)
+
+    # Create batch matrix multiplication inputs: [batch, n, m] x [batch, m, p] = [batch, n, p]
+    batch_size, n, m, p = 4, 3, 5, 6
+    input = torch.randn(batch_size, n, m)
+    mat2 = torch.randn(batch_size, m, p)
+
+    check_functions_are_equivalent(fn, device, [input, mat2], compiler=compiler_to_use)
+
+
+def test_bmm_different_batch_sizes(device: str, compiler_to_use):
+    """Test torch.bmm with different batch sizes and matrix dimensions"""
+
+    def fn(input, mat2):
+        return torch.bmm(input, mat2)
+
+    # Different batch size and matrix dimensions
+    batch_size, n, m, p = 2, 4, 3, 7
+    input = torch.randn(batch_size, n, m)
+    mat2 = torch.randn(batch_size, m, p)
+
+    check_functions_are_equivalent(fn, device, [input, mat2], compiler=compiler_to_use)
+
+
+def test_bmm_single_batch(device: str, compiler_to_use):
+    """Test torch.bmm with single batch dimension"""
+
+    def fn(input, mat2):
+        return torch.bmm(input, mat2)
+
+    # Single batch case
+    input = torch.randn(1, 2, 4)
+    mat2 = torch.randn(1, 4, 3)
+
+    check_functions_are_equivalent(fn, device, [input, mat2], compiler=compiler_to_use)
+
+
 def test_bug_keyerror_input(device: str):
     """Test a specific bug where KeyError occurs in input handling"""
 
