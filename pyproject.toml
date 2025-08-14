@@ -7,7 +7,7 @@ name = "max-torch-backend"
 version = "0.1.0"
 description = "PyTorch backend implementation using Modular's MAX framework"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "max",
     "tabulate",
@@ -17,12 +17,8 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["torch_max_backend"]
 
-[[tool.uv.index]]
-url = "https://dl.modular.com/public/nightly/python/simple/"
-default = true
-
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [
