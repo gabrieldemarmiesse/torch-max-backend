@@ -1,3 +1,10 @@
+"""How to execute Pytorch's Aten functions using Max's backend.
+
+The only ressources I could find on the subject are:
+- https://github.com/pytorch/pytorch/blob/500cbb5b9013f842ba0a15ef61bbf0b079ed99ff/aten/src/ATen/native/native_functions.yaml
+- https://docs.pytorch.org/docs/stable/torch.compiler_ir.html
+"""
+
 import operator
 
 import max.graph.ops as max_ops
