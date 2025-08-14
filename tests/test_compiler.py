@@ -3970,3 +3970,19 @@ def test_addmm_broadcast_bias(device: str, compiler_to_use):
     check_functions_are_equivalent(
         fn, device, [bias, mat1, mat2], compiler=compiler_to_use
     )
+
+
+def test_bug_keyerror_input(device: str):
+    """Test a specific bug where KeyError occurs in input handling"""
+
+    def fn(x):
+        y = torch.arange(0, x.shape[1], 1, dtype=x.dtype, device=x.device)
+        z = y[None, :]
+        return x + z
+
+    # Create inputs
+    x = torch.randn(2, 5)
+
+    mark_dynamic(x, 1)
+
+    check_functions_are_equivalent(fn, device, [x])

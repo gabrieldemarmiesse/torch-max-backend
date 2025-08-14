@@ -32,6 +32,7 @@ skip-magic-trailing-comma = true
 dev = [
     "accelerate>=1.10.0",
     "ibm-fms>=1.2.1",
+    "ipython>=9.4.0",
     "pillow>=11.3.0",
     "pytest>=8.4.1",
     "pytest-forked>=1.6.0",
