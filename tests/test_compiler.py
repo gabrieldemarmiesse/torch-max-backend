@@ -280,6 +280,16 @@ def test_sin(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_atanh(device: str, tensor_shapes: tuple):
+    def fn(x):
+        return torch.atanh(x)
+
+    # atanh is defined for |x| < 1, so we need to ensure our test values are in this range
+    a = torch.rand(tensor_shapes) * 1.8 - 0.9  # Values in range (-0.9, 0.9)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
 def test_outer(device: str):
     def fn(x, y):
         return torch.outer(x, y)
@@ -1214,6 +1224,18 @@ def test_tensor_sin_method(device: str):
         return x.sin()
 
     x = torch.randn(3, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_tensor_atanh_method(device: str):
+    """Test tensor.atanh() method"""
+
+    def fn(x):
+        return x.atanh()
+
+    # atanh is defined for |x| < 1, so we need values in this range
+    x = torch.rand(3, 4) * 1.8 - 0.9  # Values in range (-0.9, 0.9)
 
     check_functions_are_equivalent(fn, device, [x])
 
