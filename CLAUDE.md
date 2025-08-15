@@ -23,8 +23,8 @@ This is a PyTorch backend implementation using Modular's MAX framework. The proj
 ## Common Commands
 
 ```bash
-# Run tests (with parallel execution and forking for isolation)
-uv run pytest -v -n 2 --forked
+# Run tests (with parallel execution)
+uv run pytest -n 15
 
 # Run specific test file
 uv run pytest tests/test_compiler.py
