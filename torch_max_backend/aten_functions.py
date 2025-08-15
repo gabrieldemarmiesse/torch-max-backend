@@ -1614,6 +1614,13 @@ def aten_sigmoid(input):
 
 
 # sign(Tensor self) -> Tensor
+@map_to(aten.sign)
+def aten_sign(x):
+    # sign(x) = (x > 0) + (x < 0) * (-1)
+    # This returns 1.0 for positive, -1.0 for negative, 0.0 for zero
+    positive = max_ops.cast(x > 0, dtype=x.dtype)
+    negative = max_ops.cast(x < 0, dtype=x.dtype)
+    return positive + negative * (-1)
 
 
 # sin(Tensor self) -> Tensor

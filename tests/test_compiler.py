@@ -337,6 +337,29 @@ def test_tanh(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
+def test_sign(device: str, tensor_shapes: tuple):
+    def fn(x):
+        return torch.sign(x)
+
+    # Test with mixed positive, negative, and zero values
+    a = torch.randn(tensor_shapes)
+    # Ensure we have a mix of positive, negative, and zero
+    if a.numel() >= 3:
+        a.view(-1)[:3] = torch.tensor([-1.0, 0.0, 1.0])
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_sign_different_dtypes(device: str, dtype):
+    def fn(x):
+        return torch.sign(x)
+
+    a = torch.tensor([-2.5, -1.0, 0.0, 1.0, 2.5], dtype=dtype)
+
+    check_functions_are_equivalent(fn, device, [a])
+
+
 def test_atanh(device: str, tensor_shapes: tuple):
     def fn(x):
         return torch.atanh(x)
