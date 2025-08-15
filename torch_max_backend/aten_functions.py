@@ -69,6 +69,33 @@ def map_to(func: callable) -> callable:
 # Add direct mappings with decorators
 
 
+def get_float_dtype(x, y):
+    for t in (x, y):
+        if t.dtype.is_float():
+            return t.dtype
+
+
+def get_int_dtype(x, y):
+    for t in (x, y):
+        if t.dtype.is_integral():
+            return t.dtype
+
+
+def type_promotion(x, y):
+    if isinstance(x, int | float) or isinstance(y, int | float):
+        # case not handled yet
+        return x, y
+
+    float_dtype = get_float_dtype(x, y)
+    int_dtype = get_int_dtype(x, y)
+    if float_dtype is not None and int_dtype is not None:
+        # If both are float and int, promote to float
+        x = max_ops.cast(x, dtype=float_dtype)
+        y = max_ops.cast(y, dtype=float_dtype)
+
+    return x, y
+
+
 @map_to(aten.floordiv)
 def aten_floordiv(x, y):
     return operator.floordiv(x, y)
@@ -233,6 +260,8 @@ def aten_abs(x):
 # add.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
 @map_to(aten.add)
 def aten_add(input, other, *, alpha=1):
+    input, other = type_promotion(input, other)
+
     if alpha != 1:
         raise NotImplementedError(
             "The 'alpha' argument is not supported in the aten.add equivalent."
@@ -941,15 +970,95 @@ def aten_gt(x, y):
 def aten_index(input, indices=None):
     if not indices:
         raise NotImplementedError("We don't yet support aten.index without indices")
-    if len([i for i in indices if i is not None]) != 1:
-        raise NotImplementedError(
-            "We only support aten.index with a single non-None index"
-        )
 
-    for i, index in enumerate(indices):
-        if index is None:
+    indices = indices + [None] * (len(input.shape) - len(indices))
+
+    result = input
+
+    # Step 1 — group consecutive index tensors into blocks
+    i = 0
+    while i < len(indices):
+        if indices[i] is None:
+            i += 1
             continue
-        return max_ops.gather(input, index, axis=i)
+
+        # Found start of an advanced indexing block
+        start = i
+        while i < len(indices) and indices[i] is not None:
+            i += 1
+        end = i
+
+        block_tensors = indices[start:end]
+
+        if end - start == 1:
+            # Single-axis indexing — use gather
+            idx = block_tensors[0]
+            result = max_ops.gather(result, idx, axis=start)
+        else:
+            # Multi-axis indexing — use gather_nd
+            # First broadcast indices to same shape
+            final_shape = broadcast_shape([t.shape for t in block_tensors])
+
+            b_indices = [max_ops.broadcast_to(t, final_shape) for t in block_tensors]
+
+            # Stack into shape [..., num_axes]
+            stacked = max_ops.stack(b_indices, axis=-1)
+
+            # We still have to broadcast them so that they match the starting dimensions
+            for j in range(start - 1, -1, -1):
+                stacked = max_ops.broadcast_to(
+                    stacked[None, ...], [input.shape[j]] + list(stacked.shape)
+                )
+            print(f"stacked shape: {stacked.shape}")
+
+            # batch_dims = start
+            result = max_ops.gather_nd(result, stacked, batch_dims=start)
+
+    return result
+
+
+def broadcast_shape(shapes):
+    # Normalize: extract raw tuples/lists of dims
+    norm_shapes = []
+    for s in shapes:
+        if hasattr(s, "shape"):
+            s = s.shape
+        # convert Shape-like to list if needed
+        norm_shapes.append(list(s))
+
+    if not norm_shapes:
+        return []
+
+    # Determine max rank and left-pad with 1s
+    max_rank = max(len(s) for s in norm_shapes)
+    padded = []
+    for s in norm_shapes:
+        pad = [1] * (max_rank - len(s))
+        padded.append(pad + list(s))
+
+    # Helper: recognize "dimension == 1"
+    def is_one(d):
+        # Covers ints == 1 and Dim-like objects that compare equal to 1
+        try:
+            return d == 1
+        except Exception:
+            return False
+
+    # Walk from left to right over aligned dims (already padded)
+    out = []
+    for col in zip(*padded):
+        # Keep only the non-1 candidates
+        non_ones = [d for d in col if not is_one(d)]
+        if not non_ones:
+            out.append(1)
+            continue
+        # All non-1 must be equal
+        first = non_ones[0]
+        if any(d != first for d in non_ones[1:]):
+            raise ValueError(f"Shapes are not broadcastable at a dimension: {col}")
+        out.append(first)
+
+    return out
 
 
 # index_put(Tensor self, Tensor?[] indices, Tensor values, bool accumulate=False) -> Tensor
@@ -1264,6 +1373,7 @@ def aten_mm(x, y):
 # mul.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.mul)
 def aten_mul(input, other):
+    input, other = type_promotion(input, other)
     return input * other
 
 
@@ -1563,6 +1673,8 @@ def aten_squeeze(input, dim):
 # sub.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
 @map_to(aten.sub)
 def aten_sub(input, other, *, alpha=1):
+    input, other = type_promotion(input, other)
+
     if alpha != 1:
         raise NotImplementedError(
             "The 'alpha' argument is not supported in the aten.sub equivalent."
