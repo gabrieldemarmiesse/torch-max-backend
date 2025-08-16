@@ -4138,6 +4138,56 @@ def test_unbind_negative_dim(device: str):
     check_functions_are_equivalent(fn, device, [input_tensor])
 
 
+def test_repeat_basic(device: str):
+    def fn(x):
+        return x.repeat(2, 3)
+
+    input_tensor = torch.randn(2, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+@pytest.mark.parametrize("repeats", [(2,), (2, 3), (1, 2, 3), (2, 1, 3)])
+def test_repeat_different_repeats(device: str, repeats):
+    def fn(x):
+        return x.repeat(*repeats)
+
+    # Create tensor with appropriate shape for the repeat operation
+    if len(repeats) == 1:
+        input_tensor = torch.randn(3)
+    elif len(repeats) == 2:
+        input_tensor = torch.randn(2, 3)
+    elif len(repeats) == 3:
+        input_tensor = torch.randn(2, 3, 4)
+    else:
+        input_tensor = torch.randn(2, 3)
+
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_repeat_1d(device: str):
+    def fn(x):
+        return x.repeat(3)
+
+    input_tensor = torch.randn(4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_repeat_2d(device: str):
+    def fn(x):
+        return x.repeat(2, 3)
+
+    input_tensor = torch.randn(2, 4)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+def test_repeat_3d(device: str):
+    def fn(x):
+        return x.repeat(2, 1, 3)
+
+    input_tensor = torch.randn(1, 3, 2)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
 def test_repeat_interleave_basic(device: str):
     def fn(x):
         return x.repeat_interleave(2, dim=0)

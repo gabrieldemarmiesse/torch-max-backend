@@ -1556,6 +1556,15 @@ def aten_remainder(x, y):
 
 
 # repeat(Tensor self, SymInt[] repeats) -> Tensor
+@map_to(aten.repeat)
+def aten_repeat(input: max_ops.TensorType, repeats: list[int]) -> max_ops.TensorType:
+    """
+    Equivalent to torch.repeat - repeats the tensor along each dimension.
+    Each dimension is repeated the number of times specified in repeats.
+    """
+    return max_ops.tile(input, repeats)
+
+
 # replication_pad2d(Tensor self, SymInt[4] padding) -> Tensor
 # replication_pad3d(Tensor self, SymInt[6] padding) -> Tensor
 # resize_(Tensor(a!) self, SymInt[] size, *, MemoryFormat? memory_format=None) -> Tensor(a!)
