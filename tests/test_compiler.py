@@ -3722,6 +3722,58 @@ def test_split_single_element(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_chunk_basic(device: str):
+    """Test basic tensor chunking"""
+
+    def fn(x):
+        return torch.chunk(x, 2, 0)
+
+    x = torch.randn(6, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_chunk_uneven(device: str):
+    """Test tensor chunking with uneven split"""
+
+    def fn(x):
+        return torch.chunk(x, 3, 0)
+
+    x = torch.randn(8, 4, device=device)  # 8 doesn't divide evenly by 3
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("chunks", [2, 3, 4])
+def test_chunk_different_num_chunks(device: str, chunks: int):
+    """Test tensor chunking with different number of chunks"""
+
+    def fn(x):
+        return torch.chunk(x, chunks, 0)
+
+    x = torch.randn(12, 8, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dim", [0, 1, -1])
+def test_chunk_different_dims(device: str, dim: int):
+    """Test tensor chunking along different dimensions"""
+
+    def fn(x):
+        return torch.chunk(x, 2, dim)
+
+    x = torch.randn(4, 6, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_chunk_3d_tensor(device: str):
+    """Test tensor chunking on 3D tensor"""
+
+    def fn(x):
+        return torch.chunk(x, 2, 1)
+
+    x = torch.randn(2, 8, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
 @pytest.mark.parametrize("shapes", [(8,), (3, 4), (2, 3, 4)])
 def test_torch_clamp_both_bounds(device: str, shapes):
     """Test torch.clamp with both min and max bounds."""
