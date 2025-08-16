@@ -376,65 +376,6 @@ wheels = [
 ]
 
 [[package]]
-name = "max-torch-backend"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "max" },
-    { name = "tabulate" },
-    { name = "torch" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "accelerate" },
-    { name = "hatchling" },
-    { name = "ibm-fms" },
-    { name = "ipython" },
-    { name = "max" },
-    { name = "mblack" },
-    { name = "pillow" },
-    { name = "pytest" },
-    { name = "pytest-forked" },
-    { name = "pytest-split" },
-    { name = "pytest-xdist" },
-    { name = "requests" },
-    { name = "ruff" },
-    { name = "sentencepiece" },
-    { name = "tiktoken" },
-    { name = "torchvision" },
-    { name = "transformers" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "max", index = "https://dl.modular.com/public/nightly/python/simple/" },
-    { name = "tabulate" },
-    { name = "torch" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "accelerate", specifier = ">=1.10.0" },
-    { name = "hatchling" },
-    { name = "ibm-fms", specifier = ">=1.2.1" },
-    { name = "ipython" },
-    { name = "max", specifier = "==25.6.0.dev2025081505", index = "https://dl.modular.com/public/nightly/python/simple/" },
-    { name = "mblack", specifier = "==25.6.0.dev2025081505", index = "https://dl.modular.com/public/nightly/python/simple/" },
-    { name = "pillow", specifier = ">=11.3.0" },
-    { name = "pytest", specifier = ">=8.4.1" },
-    { name = "pytest-forked", specifier = ">=1.6.0" },
-    { name = "pytest-split", specifier = ">=0.10.0" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "requests", specifier = ">=2.32.4" },
-    { name = "ruff", specifier = ">=0.12.7" },
-    { name = "sentencepiece", specifier = ">=0.2.0" },
-    { name = "tiktoken", specifier = ">=0.11.0" },
-    { name = "torchvision", specifier = ">=0.22.1" },
-    { name = "transformers", specifier = ">=4.54.1" },
-]
-
-[[package]]
 name = "mblack"
 version = "25.6.0.dev2025081505"
 source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
@@ -1302,6 +1243,65 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4a/15/5e488ca0bc6162c86a33b58642bc577c84ded17c7b72d97e49b5833e2d73/torch-2.8.0-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:8f0a9d617a66509ded240add3754e462430a6c1fc5589f86c17b433dd808f97a", size = 887990692, upload-time = "2025-08-06T14:56:18.286Z" },
     { url = "https://files.pythonhosted.org/packages/b4/a8/6a04e4b54472fc5dba7ca2341ab219e529f3c07b6941059fbf18dccac31f/torch-2.8.0-cp313-cp313t-win_amd64.whl", hash = "sha256:a7242b86f42be98ac674b88a4988643b9bc6145437ec8f048fea23f72feb5eca", size = 241603453, upload-time = "2025-08-06T14:55:22.945Z" },
     { url = "https://files.pythonhosted.org/packages/04/6e/650bb7f28f771af0cb791b02348db8b7f5f64f40f6829ee82aa6ce99aabe/torch-2.8.0-cp313-none-macosx_11_0_arm64.whl", hash = "sha256:7b677e17f5a3e69fdef7eb3b9da72622f8d322692930297e4ccb52fefc6c8211", size = 73632395, upload-time = "2025-08-06T14:55:28.645Z" },
+]
+
+[[package]]
+name = "torch-max-backend"
+version = "0.1.1"
+source = { editable = "." }
+dependencies = [
+    { name = "max" },
+    { name = "tabulate" },
+    { name = "torch" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "accelerate" },
+    { name = "hatchling" },
+    { name = "ibm-fms" },
+    { name = "ipython" },
+    { name = "max" },
+    { name = "mblack" },
+    { name = "pillow" },
+    { name = "pytest" },
+    { name = "pytest-forked" },
+    { name = "pytest-split" },
+    { name = "pytest-xdist" },
+    { name = "requests" },
+    { name = "ruff" },
+    { name = "sentencepiece" },
+    { name = "tiktoken" },
+    { name = "torchvision" },
+    { name = "transformers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "max", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "tabulate" },
+    { name = "torch" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "accelerate", specifier = ">=1.10.0" },
+    { name = "hatchling" },
+    { name = "ibm-fms", specifier = ">=1.2.1" },
+    { name = "ipython" },
+    { name = "max", specifier = "==25.6.0.dev2025081505", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "mblack", specifier = "==25.6.0.dev2025081505", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "pillow", specifier = ">=11.3.0" },
+    { name = "pytest", specifier = ">=8.4.1" },
+    { name = "pytest-forked", specifier = ">=1.6.0" },
+    { name = "pytest-split", specifier = ">=0.10.0" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "requests", specifier = ">=2.32.4" },
+    { name = "ruff", specifier = ">=0.12.7" },
+    { name = "sentencepiece", specifier = ">=0.2.0" },
+    { name = "tiktoken", specifier = ">=0.11.0" },
+    { name = "torchvision", specifier = ">=0.22.1" },
+    { name = "transformers", specifier = ">=4.54.1" },
 ]
 
 [[package]]
