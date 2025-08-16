@@ -24,4 +24,4 @@ jobs:
         uv publish
     - name: Testing the uploaded wheel
       run: |
-        uv run --with torch- --no-project -- python -c "import torch_max_backend"
+        uv run --with torch-max-backend --no-project -- python -c "import torch_max_backend"
