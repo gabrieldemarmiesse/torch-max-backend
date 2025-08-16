@@ -1978,57 +1978,41 @@ def aten__scaled_dot_product_efficient_attention(
     This function implements the scaled dot-product attention mechanism using MAX's flash_attention_gpu.
     It returns a tuple of 9 elements to match PyTorch's interface.
     """
-    # Import flash attention kernel
-    try:
-        from max.nn.kernels import flash_attention_gpu
+    # Fallback to manual attention computation
+    # Get dimensions for attention computation
+    batch_size = query.shape[0]
+    num_heads = query.shape[1]
+    seq_len_q = query.shape[2]
+    head_dim = query.shape[3]
+    seq_len_k = key.shape[2]
 
-        print("DEBUG: Successfully imported flash_attention_gpu")
+    # Compute attention scores: Q @ K^T
+    # Transpose key to [batch_size, num_heads, head_dim, seq_len_k] for matmul
+    key_transposed = max_ops.transpose(key, 2, 3)
+    scores = max_ops.matmul(query, key_transposed)
 
-        # Try to use flash attention GPU kernel
-        # The function might expect different parameter ordering or format
-        output = flash_attention_gpu(query, key, value, is_causal=is_causal)
-        print(f"DEBUG: flash_attention_gpu returned output with shape: {output.shape}")
+    # Scale by sqrt(head_dim)
+    # StaticDim objects need special handling for conversion to float
+    if hasattr(head_dim, "value"):
+        head_dim_val = float(head_dim.value)
+    else:
+        # For StaticDim, we can use int() to get the numeric value
+        head_dim_val = float(int(head_dim))
 
-    except Exception as e:
-        print(
-            f"DEBUG: flash_attention_gpu failed: {e}, falling back to manual implementation"
-        )
+    scale_factor = 1.0 / math.sqrt(head_dim_val)
+    scores = max_ops.mul(scores, scale_factor)
 
-        # Fallback to manual attention computation
-        # Get dimensions for attention computation
-        batch_size = query.shape[0]
-        num_heads = query.shape[1]
-        seq_len_q = query.shape[2]
-        head_dim = query.shape[3]
-        seq_len_k = key.shape[2]
+    # Apply causal mask if requested
+    if is_causal:
+        # For now, we'll skip the causal mask implementation as it's complex
+        # The basic attention will work for most cases without causal masking
+        pass
 
-        # Compute attention scores: Q @ K^T
-        # Transpose key to [batch_size, num_heads, head_dim, seq_len_k] for matmul
-        key_transposed = max_ops.transpose(key, 2, 3)
-        scores = max_ops.matmul(query, key_transposed)
+    # Apply softmax to get attention weights
+    attention_weights = aten_softmax(scores, dim=-1)
 
-        # Scale by sqrt(head_dim)
-        # StaticDim objects need special handling for conversion to float
-        if hasattr(head_dim, "value"):
-            head_dim_val = float(head_dim.value)
-        else:
-            # For StaticDim, we can use int() to get the numeric value
-            head_dim_val = float(int(head_dim))
-
-        scale_factor = 1.0 / math.sqrt(head_dim_val)
-        scores = max_ops.mul(scores, scale_factor)
-
-        # Apply causal mask if requested
-        if is_causal:
-            # For now, we'll skip the causal mask implementation as it's complex
-            # The basic attention will work for most cases without causal masking
-            pass
-
-        # Apply softmax to get attention weights
-        attention_weights = aten_softmax(scores, dim=-1)
-
-        # Apply attention weights to values: attention_weights @ V
-        output = max_ops.matmul(attention_weights, value)
+    # Apply attention weights to values: attention_weights @ V
+    output = max_ops.matmul(attention_weights, value)
 
     # Create dummy outputs for the remaining return values
     # PyTorch's flash attention returns 9 values, we need to match this interface
