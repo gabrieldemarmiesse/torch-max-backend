@@ -5,14 +5,20 @@ build-backend = "hatchling.build"
 [project]
 name = "max-torch-backend"
 version = "0.1.0"
-description = "PyTorch backend implementation using Modular's MAX framework"
+description = "A PyTorch backend implemented using Modular's MAX framework"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "max",
     "tabulate",
     "torch",
 ]
+
+[project.urls]
+"Source" = "https://github.com/gabrieldemarmiesse/torch-max-backend"
+"Documentation" = "https://gabrieldemarmiesse.github.io/torch-max-backend/"
+"Bug Tracker" = "https://github.com/gabrieldemarmiesse/torch-max-backend/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["torch_max_backend"]
