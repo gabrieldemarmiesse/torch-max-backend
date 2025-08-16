@@ -5038,6 +5038,80 @@ def test_permute_1d_identity(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_movedim_basic(device: str):
+    """Test basic movedim operation - move single dimension"""
+
+    def fn(x):
+        return torch.movedim(x, 0, 2)
+
+    x = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "source,destination", [(0, 1), (1, 0), (0, 2), (2, 0), (1, 2), (2, 1)]
+)
+def test_movedim_different_positions(device: str, source: int, destination: int):
+    """Test movedim with different source and destination positions"""
+
+    def fn(x):
+        return torch.movedim(x, source, destination)
+
+    x = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_movedim_negative_indices(device: str):
+    """Test movedim with negative indices"""
+
+    def fn(x):
+        return torch.movedim(x, -1, 0)
+
+    x = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_movedim_multiple_dims(device: str):
+    """Test movedim with multiple dimensions"""
+
+    def fn(x):
+        return torch.movedim(x, [0, 1], [2, 0])
+
+    x = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_movedim_4d_tensor(device: str):
+    """Test movedim on 4D tensor (common in computer vision)"""
+
+    def fn(x):
+        # Move channels from dim 1 to dim 3 (NCHW to NHWC)
+        return torch.movedim(x, 1, 3)
+
+    x = torch.randn(2, 3, 4, 5)  # N, C, H, W
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_movedim_identity(device: str):
+    """Test movedim identity operation"""
+
+    def fn(x):
+        return torch.movedim(x, 1, 1)
+
+    x = torch.randn(3, 4, 5)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_movedim_2d_tensor(device: str):
+    """Test movedim on 2D tensor"""
+
+    def fn(x):
+        return torch.movedim(x, 0, 1)
+
+    x = torch.randn(3, 4)
+    check_functions_are_equivalent(fn, device, [x])
+
+
 # TODO: support list as input too
 def test_aten_index_select_basic(device: str):
     """Test basic torch.index_select operation"""
