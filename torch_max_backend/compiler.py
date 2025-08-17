@@ -15,6 +15,7 @@ from torch._decomp import core_aten_decompositions
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
+from typing import Any
 
 
 class MaxCompilerError(Exception):
@@ -102,7 +103,7 @@ class TensorsBook:
     def __setitem__(self, name: str, tensor):
         self.tensors[name] = tensor
 
-    def convert_to_max(self, something):
+    def convert_to_max(self, something: Any) -> Any:
         if isinstance(something, torch.fx.Node):
             return self.tensors[something.name]
         elif isinstance(something, str):
