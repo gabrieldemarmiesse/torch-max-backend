@@ -6,6 +6,9 @@ import io
 from unittest.mock import patch
 import numpy as np
 from torch_max_backend.testing import check_functions_are_equivalent
+from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
+from torch.ops import aten
+import pytest
 
 
 def test_basic_training(device: str):
@@ -515,3 +518,24 @@ def test_recompilation(device: str):
     assert counter.call_count == 2
 
     # TODO: Make it work if called with more shapes (dynamo doesn't recompile)
+
+
+def test_error_message_unsupported_operation(monkeypatch):
+    def not_working_add(x, y):
+        raise RuntimeError("Ho no crash!")
+
+    monkeypatch.setitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add, not_working_add)
+
+    def fn(x, y):
+        return x + y
+
+    with pytest.raises(RuntimeError) as exc_info:
+        torch.compile(backend=max_backend)(fn)(torch.randn(2, 3), torch.randn(2, 3))
+
+    assert "return x + y" in str(exc_info.value)
+    assert "Ho no crash!" in str(exc_info.value)
+    assert "torch._ops.aten.aten::add" in str(exc_info.value)
+    assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
+        exc_info.value
+    )
+    assert "not_working_add" in str(exc_info.value)

@@ -15,6 +15,7 @@ from torch._decomp import core_aten_decompositions
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
+import traceback
 
 
 class MaxCompilerError(Exception):
@@ -154,6 +155,16 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
     return attr_itr
 
 
+def get_error_message(node, node_idx, func_args, func_kwargs):
+    return (
+        f"Failing at node {node_idx} when executing function {get_fully_qualified_name(node.target)}. "
+        f"inputs of node were: args={func_args}, kwargs={func_kwargs}. "
+        f"You can open an issue at https://github.com/gabrieldemarmiesse/torch-max-backend/issues . "
+        f"It comes from there in your code: \n"
+        f"{node.stack_trace}"
+    )
+
+
 class _GraphFactory:
     def __init__(self):
         self.names_to_input_idx: dict[str, int] = {}
@@ -255,20 +266,19 @@ class _GraphFactory:
 
         if key not in MAPPING_TORCH_ATEN_TO_MAX:
             raise ValueError(
-                f"Failing at node {node_idx}. Function {get_fully_qualified_name(node.target)}  "
-                f"not supported by the Max backend yet. "
-                f"inputs of node were: args={func_args}, kwargs={func_kwargs}. It comes from there in your code: \n"
-                f"{node.stack_trace}"
+                get_error_message(node, node_idx, func_args, func_kwargs)
+                + "The aten function is not supported by the Max backend yet. "
+                "You can try to write it yourself and insert it in the MAPPING_TORCH_ATEN_TO_MAX dictionary."
             )
-
         try:
             func_output = MAPPING_TORCH_ATEN_TO_MAX[key](*func_args, **func_kwargs)
         except Exception as e:
             raise MaxCompilerError(
-                f"Failed to execute node {node_idx} with target {get_fully_qualified_name(node.target)}, "
-                f"inputs were: args={func_args}, kwargs={func_kwargs}. Error: {e}. It comes from there in your code: \n"
-                f"{node.stack_trace}"
-            ) from e
+                get_error_message(node, node_idx, func_args, func_kwargs)
+                + "There was an error when executing the function. See the original error below. \n"
+                f"{e}\n"
+                f"{traceback.format_exc()}"
+            )
         self.tensor_book[node.name] = func_output
 
     def handle_get_attr(self, node: torch.fx.Node):
