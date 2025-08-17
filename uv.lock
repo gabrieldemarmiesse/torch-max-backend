@@ -1259,6 +1259,7 @@ name = "torch-max-backend"
 version = "0.1.1"
 source = { editable = "." }
 dependencies = [
+    { name = "beartype" },
     { name = "max" },
     { name = "tabulate" },
     { name = "torch" },
@@ -1267,7 +1268,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "accelerate" },
-    { name = "beartype" },
     { name = "hatchling" },
     { name = "ibm-fms" },
     { name = "ipython" },
@@ -1288,6 +1288,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "beartype", specifier = ">=0.17.0" },
     { name = "max", index = "https://dl.modular.com/public/nightly/python/simple/" },
     { name = "tabulate" },
     { name = "torch" },
@@ -1296,7 +1297,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "accelerate", specifier = ">=1.10.0" },
-    { name = "beartype", specifier = ">=0.21.0" },
     { name = "hatchling" },
     { name = "ibm-fms", specifier = ">=1.2.1" },
     { name = "ipython" },
