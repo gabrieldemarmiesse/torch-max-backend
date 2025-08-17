@@ -266,9 +266,9 @@ class _GraphFactory:
 
         if key not in MAPPING_TORCH_ATEN_TO_MAX:
             raise MaxCompilerError(
-                get_error_message(node, node_idx, func_args, func_kwargs)
-                + "The aten function is not supported by the Max backend yet. "
-                "You can try to write it yourself and insert it in the MAPPING_TORCH_ATEN_TO_MAX dictionary."
+                "The aten function is not supported by the Max backend yet. "
+                + get_error_message(node, node_idx, func_args, func_kwargs)
+                + "You can try to write it yourself and insert it in the MAPPING_TORCH_ATEN_TO_MAX dictionary."
             )
         try:
             func_output = MAPPING_TORCH_ATEN_TO_MAX[key](*func_args, **func_kwargs)
