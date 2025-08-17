@@ -156,12 +156,16 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
 
 
 def get_error_message(node, node_idx, func_args, func_kwargs):
+    if node.stack_trace is None:
+        stack_trace = "No stack trace available, likely because this node is the result of a decomposition."
+    else:
+        stack_trace = node.stack_trace
     return (
         f"Failing at node {node_idx} when executing function {get_fully_qualified_name(node.target)}. "
         f"inputs of node were: args={func_args}, kwargs={func_kwargs}. "
         f"You can open an issue at https://github.com/gabrieldemarmiesse/torch-max-backend/issues . "
         f"It comes from there in your code: \n"
-        f"{node.stack_trace}"
+        f"{stack_trace}"
     )
 
 
