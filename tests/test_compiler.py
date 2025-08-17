@@ -542,7 +542,7 @@ def test_error_message_exception_in_op(monkeypatch):
     assert "not_working_add" in str(exc_info.value)
 
 
-@pytest.mark.xfail("FIXME if you can")
+@pytest.mark.xfail(reason="FIXME if you can")
 def test_error_message_exception_in_op_decomposed(monkeypatch):
     def not_working_add(x, y):
         raise RuntimeError("Ho no crash!")
@@ -581,7 +581,7 @@ def test_error_message_op_not_supported(monkeypatch):
     assert "is not supported" in str(exc_info.value)
 
 
-@pytest.mark.xfail("FIXME if you can")
+@pytest.mark.xfail(reason="FIXME if you can")
 def test_error_message_op_not_supported_decomposed(monkeypatch):
     monkeypatch.delitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add)
 

@@ -1,6 +1,6 @@
 import torch
 from max.dtype import DType
-
+from collections.abc import Callable
 from max.graph import Graph
 from max.torch.torch import max_device_ref
 import max.graph.value
@@ -9,13 +9,14 @@ from max.driver import Accelerator, accelerator_count, CPU
 from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
 import warnings
 from torch._dynamo.backends.common import aot_autograd
-
+from max.driver import Device
 from functorch.compile import make_boxed_func
 from torch._decomp import core_aten_decompositions
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 import traceback
+from typing import Any
 
 
 class MaxCompilerError(Exception):
@@ -72,7 +73,7 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
     return decomposed_gm
 
 
-def get_fully_qualified_name(func):
+def get_fully_qualified_name(func: Callable) -> str:
     if isinstance(func, str):
         return f"torch.Tensor.{func}"
     result = ""
@@ -86,7 +87,10 @@ def get_fully_qualified_name(func):
     return result
 
 
-def keep_only_tensors(inputs: list | tuple, detach: bool = False) -> list[torch.Tensor]:
+def keep_only_tensors(
+    inputs: list[int | float | torch.Tensor] | tuple[int | float | torch.Tensor, ...],
+    detach: bool = False,
+) -> list[torch.Tensor]:
     result = []
     for x in inputs:
         if isinstance(x, torch.Tensor):
@@ -98,7 +102,7 @@ def keep_only_tensors(inputs: list | tuple, detach: bool = False) -> list[torch.
 
 class TensorsBook:
     def __init__(self):
-        self.tensors = {}
+        self.tensors: dict[str, Any] = {}
 
     def __setitem__(self, name: str, tensor):
         self.tensors[name] = tensor
@@ -155,7 +159,9 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
     return attr_itr
 
 
-def get_error_message(node, node_idx, func_args, func_kwargs):
+def get_error_message(
+    node: torch.fx.Node, node_idx: int, func_args: list, func_kwargs: dict
+) -> str:
     if node.stack_trace is None:
         stack_trace = "No stack trace available, likely because this node is the result of a decomposition."
     else:
@@ -173,8 +179,8 @@ class _GraphFactory:
     def __init__(self):
         self.names_to_input_idx: dict[str, int] = {}
         self.shape_names_to_input_dim: dict[str, tuple[str, int]] = {}
-        self.graph_inputs = []
-        self.graph = None
+        self.graph_inputs: list[max.graph.value.TensorType] = []
+        self.graph: Graph | None = None
         self.tensor_book = TensorsBook()
         # Link the shape expressions (names) to the node names
         self.expression_to_node_name: dict[str, str] = {}
@@ -351,14 +357,15 @@ class _GraphFactory:
         return self.graph, output_blueprint
 
 
-def get_accelerators():
-    yield CPU()
+def get_accelerators() -> list[Device]:
+    result = [CPU()]
     if accelerator_count() > 0:
         for i in range(accelerator_count()):
             try:
-                yield Accelerator(i)
+                result.append(Accelerator(i))
             except ValueError as e:
                 warnings.warn(f"Failed to create accelerator {i}. {e}")
+    return result
 
 
 class BaseMaxCompiler:
@@ -388,7 +395,7 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
-    def __call__(self, *args) -> list:
+    def __call__(self, *args) -> list[torch.Tensor | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
             start_inference_time = time.time_ns()
