@@ -17,6 +17,7 @@ import max.graph.type as max_type
 from max.graph import StaticDim, Dim, TensorValue
 import numpy as np
 import math
+from line_profiler import profile
 
 Scalar = int | float
 SymIntType = Dim | int
@@ -1528,6 +1529,7 @@ def aten_nonzero(input):
 
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)
 @map_to(aten.permute)
+@profile
 def aten_permute(x, dims):
     return max_ops.permute(x, dims)
 
@@ -1659,6 +1661,7 @@ def aten_tanh(x):
 
 # slice.Tensor(Tensor(a) self, int dim=0, SymInt? start=None, SymInt? end=None, SymInt step=1) -> Tensor(a)
 @map_to(aten.slice)
+@profile
 def aten_slice(
     input: TensorValue,
     dim: int,
@@ -1773,6 +1776,7 @@ def aten_unsqueeze(tensor, dim):
 
 # view(Tensor(a) self, SymInt[] size) -> Tensor(a)
 @map_to(aten.view)
+@profile
 def aten_view(tensor, *shape):
     if len(shape) == 1 and isinstance(shape[0], tuple | list):
         target_shape = list(shape[0])
