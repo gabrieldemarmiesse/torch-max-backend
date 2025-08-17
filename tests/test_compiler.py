@@ -616,8 +616,6 @@ def test_bug_keyerror_input(device: str):
 
 
 def test_scalar_as_input():
-    """Test a specific bug where KeyError occurs in input handling"""
-
     def fn(x):
         y = torch.arange(0, x[0], 1, dtype=x.dtype, device=x.device)
         z = y[None, :]
