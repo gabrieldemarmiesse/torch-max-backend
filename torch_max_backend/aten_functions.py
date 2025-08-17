@@ -431,7 +431,9 @@ def aten_arange(
 
 # argmax(Tensor self, int? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.argmax)
-def aten_argmax(input, dim=None, keepdim=False, *, out=None):
+def aten_argmax(
+    input: TensorValue, dim: int | None = None, keepdim: bool = False, *, out=None
+) -> TensorValue:
     # If dim is None, return argmax of flattened tensor
     if dim is None:
         # Flatten the tensor and compute argmax along axis 0
@@ -455,7 +457,9 @@ def aten_argmax(input, dim=None, keepdim=False, *, out=None):
 
 # argmin(Tensor self, int? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.argmin)
-def aten_argmin(input, dim=None, keepdim=False, *, out=None):
+def aten_argmin(
+    input: TensorValue, dim: int | None = None, keepdim: bool = False
+) -> TensorValue:
     # If dim is None, return argmin of flattened tensor
     if dim is None:
         # Flatten the tensor and compute argmin along axis 0
