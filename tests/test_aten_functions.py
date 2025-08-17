@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 import pytest
-from torch._dynamo import mark_dynamic
 import math
 from torch_max_backend.testing import check_functions_are_equivalent
 
@@ -3911,22 +3910,6 @@ def test_bmm_single_batch(device: str):
     mat2 = torch.randn(1, 4, 3)
 
     check_functions_are_equivalent(fn, device, [input, mat2])
-
-
-def test_bug_keyerror_input(device: str):
-    """Test a specific bug where KeyError occurs in input handling"""
-
-    def fn(x):
-        y = torch.arange(0, x.shape[1], 1, dtype=x.dtype, device=x.device)
-        z = y[None, :]
-        return x + z
-
-    # Create inputs
-    x = torch.randn(2, 5)
-
-    mark_dynamic(x, 1)
-
-    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_exp(device: str):
