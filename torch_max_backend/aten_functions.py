@@ -58,8 +58,8 @@ for func in IDENTICAL_FUNCTIONS:
     MAPPING_TORCH_ATEN_TO_MAX[func] = func
 
 
-def map_to(func: callable) -> callable:
-    def decorator(func_to_map: callable) -> callable:
+def map_to(func):
+    def decorator(func_to_map):
         MAPPING_TORCH_ATEN_TO_MAX[func] = func_to_map
         return func_to_map
 

@@ -85,7 +85,7 @@ def get_fully_qualified_name(func):
     return result
 
 
-def keep_only_tensors(inputs: list, detach: bool = False) -> list[torch.Tensor]:
+def keep_only_tensors(inputs: list | tuple, detach: bool = False) -> list[torch.Tensor]:
     result = []
     for x in inputs:
         if isinstance(x, torch.Tensor):
@@ -348,9 +348,7 @@ def get_accelerators():
 
 
 class BaseMaxCompiler:
-    def __init__(
-        self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
-    ):
+    def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         if profiling_enabled():
             compiler_start = time.time_ns()
         self.example_inputs = example_inputs
@@ -376,7 +374,7 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
-    def __call__(self, *args) -> list[torch.Tensor]:
+    def __call__(self, *args) -> list:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
             start_inference_time = time.time_ns()
@@ -400,7 +398,7 @@ class BaseMaxCompiler:
 
 
 def _MaxCompilerBackpropCompatible(
-    gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
+    gm: torch.fx.GraphModule, example_inputs: list, mode=None
 ):
     _max_compiler = BaseMaxCompiler(gm, example_inputs)
     return make_boxed_func(_max_compiler.__call__)
