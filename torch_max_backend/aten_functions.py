@@ -7,16 +7,18 @@ The only ressources I could find on the subject are:
 
 import operator
 from max.torch.torch import max_device_ref
-
+import os
 import max.graph.ops as max_ops
 from max.dtype import DType
 from torch.ops import aten
 import torch
 from max.graph.type import DeviceRef
 import max.graph.type as max_type
-from max.graph import StaticDim, Dim
+from max.graph import StaticDim, Dim, TensorValue
 import numpy as np
 import math
+
+Scalar = int | float
 
 # Initialize the mapping dictionary
 MAPPING_TORCH_ATEN_TO_MAX = {}
@@ -60,6 +62,11 @@ for func in IDENTICAL_FUNCTIONS:
 
 def map_to(func):
     def decorator(func_to_map):
+        if os.environ.get("TORCH_MAX_BACKEND_BEARTYPE", "1") == "1":
+            from beartype import beartype
+
+            func_to_map = beartype(func_to_map)
+
         MAPPING_TORCH_ATEN_TO_MAX[func] = func_to_map
         return func_to_map
 
@@ -259,14 +266,14 @@ def aten_abs(x):
 # add.Scalar(Tensor self, Scalar other, Scalar alpha=1) -> Tensor
 # add.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
 @map_to(aten.add)
-def aten_add(input, other, *, alpha=1):
+def aten_add(input: TensorValue, other, alpha: Scalar = 1):
     input, other = type_promotion(input, other)
 
     if alpha != 1:
         raise NotImplementedError(
             "The 'alpha' argument is not supported in the aten.add equivalent."
         )
-    return input + other
+    return input + other * alpha
 
 
 # addmm(Tensor self, Tensor mat1, Tensor mat2, *, Scalar beta=1, Scalar alpha=1) -> Tensor
@@ -1227,7 +1234,7 @@ def aten_max(*args, **kwargs):
 @map_to(aten.max_pool2d_with_indices)
 def aten_max_pool2d_with_indices(
     input, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False
-) -> tuple[max_ops.TensorType, max_ops.TensorType]:
+) -> tuple[TensorValue,]:
     # the first output is the values, the second output is the indices
     # most of the time people just want the values so we'll implement that
     # for now.
@@ -1557,7 +1564,7 @@ def aten_remainder(x, y):
 
 # repeat(Tensor self, SymInt[] repeats) -> Tensor
 @map_to(aten.repeat)
-def aten_repeat(input: max_ops.TensorType, repeats: list[int]) -> max_ops.TensorType:
+def aten_repeat(input: TensorValue, repeats: list[int]) -> TensorValue:
     """
     Equivalent to torch.repeat - repeats the tensor along each dimension.
     Each dimension is repeated the number of times specified in repeats.
@@ -1603,7 +1610,7 @@ def aten_scalar_tensor(
 
 # select.int(Tensor(a) self, int dim, SymInt index) -> Tensor(a)
 @map_to(aten.select)
-def aten_select(input: max_ops.TensorType, dim: int, index: int):
+def aten_select(input: TensorValue, dim: int, index: int):
     """
     Equivalent to torch.select - selects a slice of the tensor along the given dimension at the given index.
     """
