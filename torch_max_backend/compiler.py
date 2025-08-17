@@ -16,6 +16,8 @@ from torch.fx.experimental.proxy_tensor import make_fx
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 from typing import Any
+from collections.abc import Generator, Callable
+from collections.abc import Iterable
 
 
 class MaxCompilerError(Exception):
@@ -72,7 +74,7 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
     return decomposed_gm
 
 
-def get_fully_qualified_name(func):
+def get_fully_qualified_name(func: Any) -> str:
     if isinstance(func, str):
         return f"torch.Tensor.{func}"
     result = ""
@@ -86,7 +88,9 @@ def get_fully_qualified_name(func):
     return result
 
 
-def keep_only_tensors(inputs: list | tuple, detach: bool = False) -> list[torch.Tensor]:
+def keep_only_tensors(
+    inputs: list[Any] | tuple[Any, ...], detach: bool = False
+) -> list[torch.Tensor]:
     result = []
     for x in inputs:
         if isinstance(x, torch.Tensor):
@@ -97,10 +101,10 @@ def keep_only_tensors(inputs: list | tuple, detach: bool = False) -> list[torch.
 
 
 class TensorsBook:
-    def __init__(self):
-        self.tensors = {}
+    def __init__(self) -> None:
+        self.tensors: dict[str, Any] = {}
 
-    def __setitem__(self, name: str, tensor):
+    def __setitem__(self, name: str, tensor: Any) -> None:
         self.tensors[name] = tensor
 
     def convert_to_max(self, something: Any) -> Any:
@@ -139,7 +143,7 @@ class TensorsBook:
         raise ValueError(f"Unsupported type when reading the graph: {type(something)}")
 
 
-def fetch_attr(gm: torch.fx.GraphModule, target: str):
+def fetch_attr(gm: torch.fx.GraphModule, target: str) -> Any:
     """Fetch an attribute from the Module hierarchy of self.gm.
     Args:
         target (str): The fully-qualified name of the attribute to fetch
@@ -156,12 +160,12 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
 
 
 class _GraphFactory:
-    def __init__(self):
+    def __init__(self) -> None:
         self.names_to_input_idx: dict[str, int] = {}
         self.shape_names_to_input_dim: dict[str, tuple[str, int]] = {}
-        self.graph_inputs = []
-        self.graph = None
-        self.tensor_book = TensorsBook()
+        self.graph_inputs: list[max.graph.value.TensorType] = []
+        self.graph: Graph | None = None
+        self.tensor_book: TensorsBook = TensorsBook()
         # Link the shape expressions (names) to the node names
         self.expression_to_node_name: dict[str, str] = {}
 
@@ -174,7 +178,7 @@ class _GraphFactory:
         # Use a stack for explicit DFS
         stack = list(output_nodes)
 
-        def add_to_stack(iterable):
+        def add_to_stack(iterable: Iterable[Any]) -> None:
             for arg in iterable:
                 if isinstance(arg, torch.fx.Node):
                     stack.append(arg)
@@ -201,7 +205,7 @@ class _GraphFactory:
 
         return live_nodes
 
-    def initialize_graph(self):
+    def initialize_graph(self) -> None:
         if self.graph is not None:
             raise RuntimeError("Graph has already been initialized.")
         self.graph = Graph(
@@ -215,7 +219,7 @@ class _GraphFactory:
                 dim_idx
             ]
 
-    def handle_placeholder(self, node: torch.fx.Node):
+    def handle_placeholder(self, node: torch.fx.Node) -> None:
         if "example_value" in node.meta:
             example_value = node.meta["example_value"]
         elif "val" in node.meta:
@@ -245,7 +249,7 @@ class _GraphFactory:
             )
             self.names_to_input_idx[node.name] = len(self.graph_inputs) - 1
 
-    def handle_call_function(self, node_idx: int, node: torch.fx.Node):
+    def handle_call_function(self, node_idx: int, node: torch.fx.Node) -> None:
         func_args = [self.tensor_book.convert_to_max(x) for x in node.args]
         func_kwargs = {
             k: self.tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
@@ -272,11 +276,11 @@ class _GraphFactory:
             ) from e
         self.tensor_book[node.name] = func_output
 
-    def handle_get_attr(self, node: torch.fx.Node):
+    def handle_get_attr(self, node: torch.fx.Node) -> None:
         attr_value = fetch_attr(self.graph, node.target)
         self.tensor_book[node.name] = attr_value
 
-    def handle_output(self, node: torch.fx.Node):
+    def handle_output(self, node: torch.fx.Node) -> list[int | None]:
         output_tensors = []
 
         # None outputs can be required. So we remember here if
@@ -338,7 +342,7 @@ class _GraphFactory:
         return self.graph, output_blueprint
 
 
-def get_accelerators():
+def get_accelerators() -> Generator[Accelerator, None, None]:
     yield CPU()
     if accelerator_count() > 0:
         for i in range(accelerator_count()):
@@ -349,10 +353,12 @@ def get_accelerators():
 
 
 class BaseMaxCompiler:
-    def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
+    def __init__(
+        self, gm: torch.fx.GraphModule, example_inputs: list[Any], mode: Any = None
+    ) -> None:
         if profiling_enabled():
             compiler_start = time.time_ns()
-        self.example_inputs = example_inputs
+        self.example_inputs: list[Any] = example_inputs
         gm = apply_decompositions(gm)
         if verbose_enabled():
             gm.graph.print_tabular()
@@ -363,7 +369,7 @@ class BaseMaxCompiler:
         if profiling_enabled():
             graph_defined_time = time.time_ns()
 
-        self.model = session.load(graph)
+        self.model: Any = session.load(graph)
         if profiling_enabled():
             compiling_done_time = time.time_ns()
             defining = dt.timedelta(
@@ -375,7 +381,7 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
-    def __call__(self, *args) -> list:
+    def __call__(self, *args: Any) -> list[Any]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
             start_inference_time = time.time_ns()
@@ -399,8 +405,8 @@ class BaseMaxCompiler:
 
 
 def _MaxCompilerBackpropCompatible(
-    gm: torch.fx.GraphModule, example_inputs: list, mode=None
-):
+    gm: torch.fx.GraphModule, example_inputs: list[Any], mode: Any = None
+) -> Callable[..., Any]:
     _max_compiler = BaseMaxCompiler(gm, example_inputs)
     return make_boxed_func(_max_compiler.__call__)
 
