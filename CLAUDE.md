@@ -175,3 +175,12 @@ We use test-driven dev
    to test many input data types.
 8) When you're done, make sure the whole test suite is passing with `uv run pytest -n 15` 
    and the linter with `uvx pre-commit run --all-files`.
+
+## To find the correct type hints for a function
+It may be hard to find the correct type hints for a function. What you should do in this case is:
+1) Add an obviously wrong type hint, for example datetime.timezone in an aten function.
+2) Run an existing unit test that calls this function.
+3) Beartype will throw an error and give the name of the type being actually passed to the function.
+4) Replace the type hint by the type given by beartype.
+5) Run the unit test again to check that it works.
+6) Run the whole test suite to verify that the type hint shouldn't be wider.
