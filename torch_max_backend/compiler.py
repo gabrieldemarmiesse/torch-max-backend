@@ -401,6 +401,7 @@ class BaseMaxCompiler:
             gm.graph.print_tabular()
 
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
+        print(graph)
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
         if profiling_enabled():
