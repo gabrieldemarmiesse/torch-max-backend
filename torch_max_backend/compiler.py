@@ -17,6 +17,7 @@ from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 import traceback
 from typing import Any
+from line_profiler import profile
 
 
 class MaxCompilerError(Exception):
@@ -26,6 +27,22 @@ class MaxCompilerError(Exception):
 import datetime as dt
 
 
+def gather_stats_on_graph(gm: torch.fx.GraphModule):
+    # count the number of times we see each function.
+    # print and sort alphabetically.
+    function_counts = {}
+    for node in gm.graph.nodes:
+        if node.op == "call_function" or node.op == "call_method":
+            name = get_fully_qualified_name(node.target)
+            function_counts.setdefault(name, 0)
+            function_counts[name] += 1
+    sorted_counts = sorted(function_counts.items(), key=lambda x: x[1], reverse=True)
+    print("Function call counts:")
+    for name, count in sorted_counts:
+        print(f"{name}: {count}")
+
+
+@profile
 def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
     """
     Apply decompositions to any unsupported operations using PyTorch's make_fx.
@@ -265,6 +282,7 @@ class _GraphFactory:
             )
             self.names_to_input_idx[node.name] = len(self.graph_inputs) - 1
 
+    @profile
     def handle_call_function(self, node_idx: int, node: torch.fx.Node):
         func_args = [self.tensor_book.convert_to_max(x) for x in node.args]
         func_kwargs = {
@@ -281,7 +299,8 @@ class _GraphFactory:
                 + "You can try to write it yourself and insert it in the MAPPING_TORCH_ATEN_TO_MAX dictionary."
             )
         try:
-            func_output = MAPPING_TORCH_ATEN_TO_MAX[key](*func_args, **func_kwargs)
+            mapping_func = MAPPING_TORCH_ATEN_TO_MAX[key]
+            func_output = mapping_func(*func_args, **func_kwargs)
         except Exception as e:
             raise MaxCompilerError(
                 get_error_message(node, node_idx, func_args, func_kwargs)
@@ -317,6 +336,7 @@ class _GraphFactory:
         self.graph.__exit__(None, None, None)
         return output_blueprint
 
+    @profile
     def create_graph(self, gm: torch.fx.GraphModule) -> tuple[Graph, list[int | None]]:
         # First, identify live nodes to eliminate dead branches
         live_nodes = self.find_live_nodes(gm)
@@ -369,11 +389,14 @@ def get_accelerators() -> list[Device]:
 
 
 class BaseMaxCompiler:
+    @profile
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         if profiling_enabled():
             compiler_start = time.time_ns()
         self.example_inputs = example_inputs
+        gather_stats_on_graph(gm)
         gm = apply_decompositions(gm)
+        gather_stats_on_graph(gm)
         if verbose_enabled():
             gm.graph.print_tabular()
 

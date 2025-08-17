@@ -7,7 +7,7 @@ from torch._dynamo import mark_dynamic
 import os
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
 
 
 class CausalSelfAttention(nn.Module):
