@@ -19,6 +19,7 @@ import numpy as np
 import math
 
 Scalar = int | float
+SymIntType = Dim | int
 
 # Initialize the mapping dictionary
 MAPPING_TORCH_ATEN_TO_MAX = {}
@@ -822,7 +823,9 @@ def aten_exp(input):
 
 # expand(Tensor(a) self, SymInt[] size, *, bool implicit=False) -> Tensor(a)
 @map_to(aten.expand)
-def aten_expand(tensor, size: list[int]):
+def aten_expand(
+    tensor: TensorValue, size: list[SymIntType], *, implicit: bool = False
+) -> TensorValue:
     target_shape = []
 
     # Get current tensor shape - we need this to handle -1 values
@@ -1656,7 +1659,13 @@ def aten_tanh(x):
 
 # slice.Tensor(Tensor(a) self, int dim=0, SymInt? start=None, SymInt? end=None, SymInt step=1) -> Tensor(a)
 @map_to(aten.slice)
-def aten_slice(input, dim, start: int, end: int, step: int = 1):
+def aten_slice(
+    input: TensorValue,
+    dim: int,
+    start: SymIntType | None = None,
+    end: SymIntType | None = None,
+    step: SymIntType = 1,
+) -> TensorValue:
     if end == 2**63 - 1:  # MAX_INT64
         end = None
     slices = [slice(None)] * len(input.shape)
