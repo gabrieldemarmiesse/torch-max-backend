@@ -19,8 +19,8 @@ import numpy as np
 import math
 from line_profiler import profile
 
-Scalar = int | float
-SymIntType = Dim | int
+Scalar = int | float | Dim
+SymIntType = int | Dim
 
 # Initialize the mapping dictionary
 MAPPING_TORCH_ATEN_TO_MAX = {}
@@ -381,9 +381,9 @@ def aten_any(input, dim=None, keepdim=False, *, out=None):
 # arange.start_step(Scalar start, Scalar end, Scalar step=1, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 @map_to(aten.arange)
 def aten_arange(
-    start,
-    end=None,
-    step=1,
+    start: Scalar,
+    end: Scalar | None = None,
+    step: Scalar = 1,
     *,
     out=None,
     dtype=None,
@@ -433,7 +433,9 @@ def aten_arange(
 
 # argmax(Tensor self, int? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.argmax)
-def aten_argmax(input, dim=None, keepdim=False, *, out=None):
+def aten_argmax(
+    input: TensorValue, dim: int | None = None, keepdim: bool = False, *, out=None
+) -> TensorValue:
     # If dim is None, return argmax of flattened tensor
     if dim is None:
         # Flatten the tensor and compute argmax along axis 0
@@ -457,7 +459,9 @@ def aten_argmax(input, dim=None, keepdim=False, *, out=None):
 
 # argmin(Tensor self, int? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.argmin)
-def aten_argmin(input, dim=None, keepdim=False, *, out=None):
+def aten_argmin(
+    input: TensorValue, dim: int | None = None, keepdim: bool = False
+) -> TensorValue:
     # If dim is None, return argmin of flattened tensor
     if dim is None:
         # Flatten the tensor and compute argmin along axis 0

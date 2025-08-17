@@ -597,3 +597,33 @@ def test_error_message_op_not_supported_decomposed(monkeypatch):
         exc_info.value
     )
     assert "is not supported" in str(exc_info.value)
+
+
+def test_bug_keyerror_input(device: str):
+    """Test a specific bug where KeyError occurs in input handling"""
+
+    def fn(x):
+        y = torch.arange(0, x.shape[1], 1, dtype=x.dtype, device=x.device)
+        z = y[None, :]
+        return x + z
+
+    # Create inputs
+    x = torch.randn(2, 5)
+
+    mark_dynamic(x, 1)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_scalar_as_input():
+    def fn(x):
+        y = torch.arange(0, x[0], 1, dtype=x.dtype, device=x.device)
+        z = y[None, :]
+        return x + z
+
+    # Create inputs
+    x = torch.randint(1, 10, (1,), dtype=torch.int32, device="cpu")
+
+    mark_dynamic(x, 1)
+
+    check_functions_are_equivalent(fn, None, [x])
