@@ -107,6 +107,8 @@ class TensorsBook:
     def __setitem__(self, name: str, tensor: Any) -> None:
         self.tensors[name] = tensor
 
+    # The only place where it's acceptable to use `Any` because any kind
+    # of python object can be used in a torch.compile function.
     def convert_to_max(self, something: Any) -> Any:
         if isinstance(something, torch.fx.Node):
             return self.tensors[something.name]

@@ -177,6 +177,7 @@ We use test-driven dev
    and the linter with `uvx pre-commit run --all-files`.
 
 ## To find the correct type hints for a function
+Do not use `typing.Any`.
 It may be hard to find the correct type hints for a function. What you should do in this case is:
 1) Add an obviously wrong type hint, for example datetime.timezone in an aten function.
 2) Run an existing unit test that calls this function.
