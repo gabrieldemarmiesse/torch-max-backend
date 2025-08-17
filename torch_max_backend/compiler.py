@@ -165,7 +165,7 @@ def get_error_message(node, node_idx, func_args, func_kwargs):
         f"inputs of node were: args={func_args}, kwargs={func_kwargs}. "
         f"You can open an issue at https://github.com/gabrieldemarmiesse/torch-max-backend/issues . "
         f"It comes from there in your code: \n"
-        f"{stack_trace}"
+        f"{stack_trace}\n"
     )
 
 
