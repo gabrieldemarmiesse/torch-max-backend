@@ -294,7 +294,7 @@ def main():
     device = "cuda" if len(list(get_accelerators())) >= 2 else "cpu"
     print(f"Using device: {device}")
 
-    model = GPT2.from_pretrained("gpt2")
+    model = GPT2.from_pretrained("gpt2-xl")
     model.eval()
     model.to(device)
 
