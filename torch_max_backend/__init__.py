@@ -1,6 +1,6 @@
 import os
 
-if os.environ.get("TORCH_MAX_BACKEND_BEARTYPE", "0") == "1":
+if os.environ.get("TORCH_MAX_BACKEND_BEARTYPE", "1") == "1":
     from beartype.claw import beartype_this_package
 
     beartype_this_package()
