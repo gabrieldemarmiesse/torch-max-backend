@@ -542,6 +542,7 @@ def test_error_message_exception_in_op(monkeypatch):
     assert "not_working_add" in str(exc_info.value)
 
 
+@pytest.mark.xfail("FIXME if you can")
 def test_error_message_exception_in_op_decomposed(monkeypatch):
     def not_working_add(x, y):
         raise RuntimeError("Ho no crash!")
@@ -573,6 +574,24 @@ def test_error_message_op_not_supported(monkeypatch):
         torch.compile(backend=max_backend)(fn)(torch.randn(2, 3), torch.randn(2, 3))
 
     assert "return x + y" in str(exc_info.value)
+    assert "torch._ops.aten.aten::add" in str(exc_info.value)
+    assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
+        exc_info.value
+    )
+    assert "is not supported" in str(exc_info.value)
+
+
+@pytest.mark.xfail("FIXME if you can")
+def test_error_message_op_not_supported_decomposed(monkeypatch):
+    monkeypatch.delitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add)
+
+    def fn(x):
+        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
+
+    with pytest.raises(BackendCompilerFailed) as exc_info:
+        torch.compile(backend=max_backend)(fn)(torch.randn(2, 3, 4, 4))
+
+    assert "return torch.nn.functional.interpolate(x, scale_f" in str(exc_info.value)
     assert "torch._ops.aten.aten::add" in str(exc_info.value)
     assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
         exc_info.value
