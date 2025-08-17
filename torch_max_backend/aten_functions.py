@@ -18,7 +18,7 @@ from max.graph import StaticDim, Dim, TensorValue
 import numpy as np
 import math
 
-Scalar = int | float
+Scalar = int | float | Dim
 
 # Initialize the mapping dictionary
 MAPPING_TORCH_ATEN_TO_MAX = {}
@@ -379,9 +379,9 @@ def aten_any(input, dim=None, keepdim=False, *, out=None):
 # arange.start_step(Scalar start, Scalar end, Scalar step=1, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 @map_to(aten.arange)
 def aten_arange(
-    start,
-    end=None,
-    step=1,
+    start: Scalar,
+    end: Scalar | None = None,
+    step: Scalar = 1,
     *,
     out=None,
     dtype=None,
