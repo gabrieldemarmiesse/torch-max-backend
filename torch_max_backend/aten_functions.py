@@ -1,7 +1,7 @@
 """How to execute Pytorch's Aten functions using Max's backend.
 
 The only ressources I could find on the subject are:
-- https://github.com/pytorch/pytorch/blob/500cbb5b9013f842ba0a15ef61bbf0b079ed99ff/aten/src/ATen/native/native_functions.yaml
+- https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/native_functions.yaml
 - https://docs.pytorch.org/docs/stable/torch.compiler_ir.html
 """
 
@@ -17,9 +17,16 @@ import max.graph.type as max_type
 from max.graph import StaticDim, Dim, TensorValue
 import numpy as np
 import math
+from torch._decomp import core_aten_decompositions
+from torch._ops import OpOverloadPacket, OpOverload
+
+from torch_max_backend.flags import verbose_enabled
 
 Scalar = int | float | Dim
 
+# Ops that need to be decomposed.
+DECOMPOSITION_TABLE = core_aten_decompositions()
+original_decomposition_table_size = len(DECOMPOSITION_TABLE)
 # Initialize the mapping dictionary
 MAPPING_TORCH_ATEN_TO_MAX = {}
 
@@ -59,6 +66,8 @@ IDENTICAL_FUNCTIONS = [
 for func in IDENTICAL_FUNCTIONS:
     MAPPING_TORCH_ATEN_TO_MAX[func] = func
 
+number_of_decompositions_removed = 0
+
 
 def map_to(func):
     def decorator(func_to_map):
@@ -68,6 +77,20 @@ def map_to(func):
             func_to_map = beartype(func_to_map)
 
         MAPPING_TORCH_ATEN_TO_MAX[func] = func_to_map
+        if isinstance(func, OpOverload):
+            DECOMPOSITION_TABLE.pop(func, None)
+        elif isinstance(func, OpOverloadPacket):
+            # We assume we cover all overloads in the packet
+            for overload_name in func:
+                popped = DECOMPOSITION_TABLE.pop(getattr(func, overload_name), None)
+                if verbose_enabled() and popped is not None:
+                    global number_of_decompositions_removed
+                    number_of_decompositions_removed += 1
+
+        else:
+            raise TypeError(
+                f"Expected OpOverload or OpOverloadPacket, got {type(func)}"
+            )
         return func_to_map
 
     return decorator
@@ -826,7 +849,9 @@ def aten_exp(input):
 
 # expand(Tensor(a) self, SymInt[] size, *, bool implicit=False) -> Tensor(a)
 @map_to(aten.expand)
-def aten_expand(tensor, size: list[int]):
+def aten_expand(
+    tensor: TensorValue, size: list[int | Dim], *, implicit: bool = False
+) -> TensorValue:
     target_shape = []
 
     # Get current tensor shape - we need this to handle -1 values
@@ -1660,7 +1685,13 @@ def aten_tanh(x):
 
 # slice.Tensor(Tensor(a) self, int dim=0, SymInt? start=None, SymInt? end=None, SymInt step=1) -> Tensor(a)
 @map_to(aten.slice)
-def aten_slice(input, dim, start: int, end: int, step: int = 1):
+def aten_slice(
+    input: TensorValue,
+    dim: int = 0,
+    start: int | Dim | None = None,
+    end: int | Dim | None = None,
+    step: int | Dim = 1,
+) -> TensorValue:
     if end == 2**63 - 1:  # MAX_INT64
         end = None
     slices = [slice(None)] * len(input.shape)
@@ -1839,10 +1870,12 @@ def aten_triu(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
         return input
 
 
+# split.Tensor(Tensor(a -> *) self, SymInt split_size, int dim=0) -> Tensor(a)[]
+# split.sizes(Tensor(a -> *) self, SymInt[] split_size, int dim=0) -> Tensor(a)[]
 @map_to(aten.split)
 def aten_split(
-    input: max_ops.TensorType, split_size: int | list[int], dim: int = 0
-) -> list[max_ops.TensorType]:
+    input: TensorValue, split_size: int | list[int], dim: int = 0
+) -> list[TensorValue]:
     if isinstance(split_size, int):
         shape = int(input.shape[dim])
         new_split_size = [split_size] * (shape // split_size)
@@ -2088,4 +2121,17 @@ def aten__scaled_dot_product_efficient_attention(
         rng_state,
         unused,
         debug_attn_mask,
+    )
+
+
+# transpose.int(Tensor(a) self, int dim0, int dim1) -> Tensor(a)
+# transpose.Dimname(Tensor(a) self, Dimname dim0, Dimname dim1) -> Tensor(a)
+@map_to(aten.transpose)
+def aten_transpose(input: TensorValue, dim0: int | Dim, dim1: int | Dim) -> TensorValue:
+    return max_ops.transpose(input, dim0, dim1)
+
+
+if verbose_enabled():
+    print(
+        f"Removed  {number_of_decompositions_removed}/{original_decomposition_table_size} decomposition functions."
     )

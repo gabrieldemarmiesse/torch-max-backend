@@ -10,7 +10,8 @@ from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
 from torch.ops import aten
 import pytest
 from torch._dynamo.exc import BackendCompilerFailed
-from torch_max_backend.compiler import apply_decompositions, get_fully_qualified_name
+import torch_max_backend
+import torch_max_backend.compiler
 
 
 def test_basic_training(device: str):
@@ -630,14 +631,27 @@ def test_scalar_as_input():
     check_functions_are_equivalent(fn, None, [x])
 
 
-def test_decomposition():
+def test_decomposition(monkeypatch):
     def fn(x):
-        return x.t()
+        x = x * 2
+        return x.t() * 2
 
-    a = torch.fx.symbolic_trace(fn)
-    a = apply_decompositions(a)
-    functions_names = []
-    for node in a.graph.nodes:
-        if node.op in ("call_function", "call_method"):
-            functions_names.append(get_fully_qualified_name(node.target))
-    assert functions_names == ["torch._ops.aten.aten::t.default"]
+    # grab the output of apply_decompositions
+    new_gm = None
+    old_apply_decompositions = torch_max_backend.compiler.apply_decompositions
+
+    def fake_apply_decompositions(gm):
+        nonlocal new_gm
+        new_gm = old_apply_decompositions(gm)
+        return new_gm
+
+    monkeypatch.setattr(
+        torch_max_backend.compiler, "apply_decompositions", fake_apply_decompositions
+    )
+
+    a = torch.compile(backend=max_backend)(fn)
+    a(torch.randn(2, 3))
+
+    # it's normally decomposed. We check that it's not the case since we
+    # implemented it ourselves.
+    assert aten.t.default in [node.target for node in new_gm.graph.nodes]
