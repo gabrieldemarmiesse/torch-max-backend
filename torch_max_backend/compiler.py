@@ -349,16 +349,14 @@ class BaseMaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         if profiling_enabled():
             compiler_start = time.time_ns()
-        gather_stats_on_graph(gm)
         if verbose_enabled():
-            print(f"after composition, graph has {len(gm.graph.nodes)} nodes.")
+            print(f"Graph has {len(gm.graph.nodes)} nodes.")
+            gather_stats_on_graph(gm)
 
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
-
-        session = engine.InferenceSession(devices=list(get_accelerators()))
         if profiling_enabled():
             graph_defined_time = time.time_ns()
-
+        session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
         if profiling_enabled():
             compiling_done_time = time.time_ns()
