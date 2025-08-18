@@ -1947,7 +1947,8 @@ def aten_repeat_interleave(
     return result
 
 
-@map_to(aten.t)
+# t(Tensor(a) self) -> Tensor(a)
+@map_to(aten.t.default)
 def aten_t(input):
     return torch_transpose_equivalent(input, 0, 1)
 

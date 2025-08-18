@@ -631,17 +631,23 @@ def test_scalar_as_input():
     check_functions_are_equivalent(fn, None, [x])
 
 
-def test_decomposition(monkeypatch):
+def test_decomposition_overload(monkeypatch):
+    """We verify that we skip decomposition for ops that are in the decomposition table,
+    and that we registered as an OpOverload (here `aten.t.default`).
+    """
+
     def fn(x):
         x = x * 2
         return x.t() * 2
 
     # grab the output of apply_decompositions
+    old_gm = None
     new_gm = None
     old_apply_decompositions = torch_max_backend.compiler.apply_decompositions
 
     def fake_apply_decompositions(gm):
-        nonlocal new_gm
+        nonlocal old_gm, new_gm
+        old_gm = gm
         new_gm = old_apply_decompositions(gm)
         return new_gm
 
@@ -652,6 +658,41 @@ def test_decomposition(monkeypatch):
     a = torch.compile(backend=max_backend)(fn)
     a(torch.randn(2, 3))
 
+    assert aten.t.default in [node.target for node in old_gm.graph.nodes]
+
     # it's normally decomposed. We check that it's not the case since we
     # implemented it ourselves.
     assert aten.t.default in [node.target for node in new_gm.graph.nodes]
+
+
+def test_decomposition_overload_packet(monkeypatch):
+    """We verify that we skip decomposition for ops that are in the decomposition table,
+    and that we registered as an OpOverloadPacket (here `aten.transpose`).
+    """
+
+    def fn(x):
+        x = x * 2
+        return torch.transpose(x, 0, 1) * 2
+
+    # grab the output of apply_decompositions
+    old_gm = None
+    new_gm = None
+    old_apply_decompositions = torch_max_backend.compiler.apply_decompositions
+
+    def fake_apply_decompositions(gm):
+        nonlocal old_gm, new_gm
+        old_gm = gm
+        new_gm = old_apply_decompositions(gm)
+        return new_gm
+
+    monkeypatch.setattr(
+        torch_max_backend.compiler, "apply_decompositions", fake_apply_decompositions
+    )
+
+    a = torch.compile(backend=max_backend)(fn)
+    a(torch.randn(2, 3))
+    assert aten.transpose.int in [node.target for node in old_gm.graph.nodes]
+
+    # it's normally decomposed. We check that it's not the case since we
+    # implemented it ourselves.
+    assert aten.transpose.int in [node.target for node in new_gm.graph.nodes]
