@@ -33,20 +33,23 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
     This is a generic solution that works for any operation in core_aten_decompositions.
     """
     # Check if any nodes need decomposition
-
+    counter = Counter()
+    for node in gm.graph.nodes:
+        if (
+            node.op in ("call_function", "call_method")
+            and node.target in DECOMPOSITION_TABLE
+        ):
+            counter[get_fully_qualified_name(node.target)] += 1
     if verbose_enabled():
-        counter = Counter()
-        for node in gm.graph.nodes:
-            if (
-                node.op in ("call_function", "call_method")
-                and node.target in DECOMPOSITION_TABLE
-            ):
-                counter[get_fully_qualified_name(node.target)] += 1
         print(
             f"{counter.total()} nodes will be decomposed with the decomposition table."
         )
         for name, count in counter.most_common():
             print(f"{name}: decomposed {count} times")
+
+    if not counter:
+        # No decompositions needed, return the original graph module
+        return gm
 
     # Create a wrapper function that applies decompositions using make_fx
     def decompose_with_make_fx(*args):
@@ -75,7 +78,9 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
 
     # Apply decompositions using make_fx
     decomposed_gm = make_fx(
-        decompose_with_make_fx, decomposition_table=DECOMPOSITION_TABLE
+        decompose_with_make_fx,
+        decomposition_table=DECOMPOSITION_TABLE,
+        record_module_stack=True,
     )(*example_inputs)
     return decomposed_gm
 

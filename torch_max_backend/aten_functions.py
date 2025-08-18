@@ -1842,8 +1842,10 @@ def aten_tril(input: TensorValue, diagonal: int = 0, *, out=None) -> TensorValue
     return result
 
 
+# triu.out(Tensor self, int diagonal=0, *, Tensor(a!) out) -> Tensor(a!)
+# triu(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.triu)
-def aten_triu(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
+def aten_triu(input: TensorValue, diagonal: int = 0, *, out=None) -> TensorValue:
     # For dynamic shapes, we can't pre-compute a mask. Instead we use a different approach.
     # For now, let's check if we can handle static dims, otherwise return input unchanged
     # TODO: Implement dynamic triu using coordinate-based masking
@@ -1889,7 +1891,7 @@ def aten_split(
 
 
 @map_to(aten.unbind)
-def aten_unbind(input: max_ops.TensorType, dim: int = 0) -> list[max_ops.TensorType]:
+def aten_unbind(input: TensorValue, dim: int = 0) -> list[TensorValue]:
     """
     Equivalent to torch.unbind - removes a tensor dimension and returns a tuple of all slices along that dimension.
     """
