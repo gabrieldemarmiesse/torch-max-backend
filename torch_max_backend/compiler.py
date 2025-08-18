@@ -73,7 +73,7 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
     return decomposed_gm
 
 
-def get_fully_qualified_name(func: Callable) -> str:
+def get_fully_qualified_name(func: Callable | str) -> str:
     if isinstance(func, str):
         return f"torch.Tensor.{func}"
     result = ""

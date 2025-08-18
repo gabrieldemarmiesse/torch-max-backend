@@ -10,6 +10,7 @@ from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
 from torch.ops import aten
 import pytest
 from torch._dynamo.exc import BackendCompilerFailed
+from torch_max_backend.compiler import apply_decompositions, get_fully_qualified_name
 
 
 def test_basic_training(device: str):
@@ -627,3 +628,16 @@ def test_scalar_as_input():
     mark_dynamic(x, 1)
 
     check_functions_are_equivalent(fn, None, [x])
+
+
+def test_decomposition():
+    def fn(x):
+        return x.t()
+
+    a = torch.fx.symbolic_trace(fn)
+    a = apply_decompositions(a)
+    functions_names = []
+    for node in a.graph.nodes:
+        if node.op in ("call_function", "call_method"):
+            functions_names.append(get_fully_qualified_name(node.target))
+    assert functions_names == ["torch._ops.aten.aten::t.default"]
