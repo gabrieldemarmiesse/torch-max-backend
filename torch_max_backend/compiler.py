@@ -11,13 +11,14 @@ import warnings
 from torch._dynamo.backends.common import aot_autograd
 from max.driver import Device
 from functorch.compile import make_boxed_func
-from torch._decomp import core_aten_decompositions
+from torch_max_backend.aten_functions import DECOMPOSITION_TABLE
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 import traceback
 from typing import Any
 from line_profiler import profile
+from collections import Counter
 
 
 class MaxCompilerError(Exception):
@@ -48,14 +49,23 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
     Apply decompositions to any unsupported operations using PyTorch's make_fx.
     This is a generic solution that works for any operation in core_aten_decompositions.
     """
-    decomposition_table = core_aten_decompositions()
     # Check if any nodes need decomposition
-    needs_decomposition = any(
-        node.op == "call_function" and node.target in decomposition_table
-        for node in gm.graph.nodes
-    )
+    counter = Counter()
+    for node in gm.graph.nodes:
+        if (
+            node.op in ("call_function", "call_method")
+            and node.target in DECOMPOSITION_TABLE
+        ):
+            counter[get_fully_qualified_name(node.target)] += 1
+    if verbose_enabled():
+        print(
+            f"{counter.total()} nodes will be decomposed with the decomposition table."
+        )
+        for name, count in counter.most_common():
+            print(f"{name}: decomposed {count} times")
 
-    if not needs_decomposition:
+    if not counter:
+        # No decompositions needed, return the original graph module
         return gm
 
     # Create a wrapper function that applies decompositions using make_fx
@@ -85,12 +95,12 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
 
     # Apply decompositions using make_fx
     decomposed_gm = make_fx(
-        decompose_with_make_fx, decomposition_table=decomposition_table
+        decompose_with_make_fx, decomposition_table=DECOMPOSITION_TABLE
     )(*example_inputs)
     return decomposed_gm
 
 
-def get_fully_qualified_name(func: Callable) -> str:
+def get_fully_qualified_name(func: Callable | str) -> str:
     if isinstance(func, str):
         return f"torch.Tensor.{func}"
     result = ""
@@ -289,7 +299,12 @@ class _GraphFactory:
             k: self.tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
         }
         key = node.target
-        if hasattr(key, "namespace") and key.namespace == "aten":
+
+        # TODO: refactor this
+        if (
+            key not in MAPPING_TORCH_ATEN_TO_MAX
+            and key.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX
+        ):
             key = key.overloadpacket
 
         if key not in MAPPING_TORCH_ATEN_TO_MAX:
@@ -394,6 +409,7 @@ class BaseMaxCompiler:
         if profiling_enabled():
             compiler_start = time.time_ns()
         gather_stats_on_graph(gm)
+
         if verbose_enabled():
             print(f"before composition, graph has {len(gm.graph.nodes)} nodes.")
 

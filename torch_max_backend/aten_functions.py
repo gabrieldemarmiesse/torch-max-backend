@@ -1,7 +1,7 @@
 """How to execute Pytorch's Aten functions using Max's backend.
 
 The only ressources I could find on the subject are:
-- https://github.com/pytorch/pytorch/blob/500cbb5b9013f842ba0a15ef61bbf0b079ed99ff/aten/src/ATen/native/native_functions.yaml
+- https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/native_functions.yaml
 - https://docs.pytorch.org/docs/stable/torch.compiler_ir.html
 """
 
@@ -18,10 +18,17 @@ from max.graph import StaticDim, Dim, TensorValue
 import numpy as np
 import math
 from line_profiler import profile
+from torch._decomp import core_aten_decompositions
+from torch._ops import OpOverloadPacket, OpOverload
+
+from torch_max_backend.flags import verbose_enabled
 
 Scalar = int | float | Dim
 SymIntType = int | Dim
 
+# Ops that need to be decomposed.
+DECOMPOSITION_TABLE = core_aten_decompositions()
+original_decomposition_table_size = len(DECOMPOSITION_TABLE)
 # Initialize the mapping dictionary
 MAPPING_TORCH_ATEN_TO_MAX = {}
 
@@ -61,6 +68,8 @@ IDENTICAL_FUNCTIONS = [
 for func in IDENTICAL_FUNCTIONS:
     MAPPING_TORCH_ATEN_TO_MAX[func] = func
 
+number_of_decompositions_removed = 0
+
 
 def map_to(func):
     def decorator(func_to_map):
@@ -70,6 +79,20 @@ def map_to(func):
             func_to_map = beartype(func_to_map)
 
         MAPPING_TORCH_ATEN_TO_MAX[func] = func_to_map
+        if isinstance(func, OpOverload):
+            DECOMPOSITION_TABLE.pop(func, None)
+        elif isinstance(func, OpOverloadPacket):
+            # We assume we cover all overloads in the packet
+            for overload_name in func:
+                popped = DECOMPOSITION_TABLE.pop(getattr(func, overload_name), None)
+                if verbose_enabled() and popped is not None:
+                    global number_of_decompositions_removed
+                    number_of_decompositions_removed += 1
+
+        else:
+            raise TypeError(
+                f"Expected OpOverload or OpOverloadPacket, got {type(func)}"
+            )
         return func_to_map
 
     return decorator
@@ -1803,8 +1826,10 @@ def aten_stack(tensors: list, dim=0):
     return max_ops.stack(tensors, axis=dim)
 
 
+# tril.out(Tensor self, int diagonal=0, *, Tensor(a!) out) -> Tensor(a!)
+# tril(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.tril)
-def aten_tril(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
+def aten_tril(input: TensorValue, diagonal: int = 0, *, out=None) -> TensorValue:
     # Max doesn't have tril built-in, so we get around this. It should be pretty
     # easy to implement on cpu and gpu though.
     shape = input.shape
@@ -1822,8 +1847,10 @@ def aten_tril(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
     return result
 
 
+# triu.out(Tensor self, int diagonal=0, *, Tensor(a!) out) -> Tensor(a!)
+# triu(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.triu)
-def aten_triu(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
+def aten_triu(input: TensorValue, diagonal: int = 0, *, out=None) -> TensorValue:
     # For dynamic shapes, we can't pre-compute a mask. Instead we use a different approach.
     # For now, let's check if we can handle static dims, otherwise return input unchanged
     # TODO: Implement dynamic triu using coordinate-based masking
@@ -1852,10 +1879,12 @@ def aten_triu(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
         return input
 
 
+# split.Tensor(Tensor(a -> *) self, SymInt split_size, int dim=0) -> Tensor(a)[]
+# split.sizes(Tensor(a -> *) self, SymInt[] split_size, int dim=0) -> Tensor(a)[]
 @map_to(aten.split)
 def aten_split(
-    input: max_ops.TensorType, split_size: int | list[int], dim: int = 0
-) -> list[max_ops.TensorType]:
+    input: TensorValue, split_size: int | list[int], dim: int = 0
+) -> list[TensorValue]:
     if isinstance(split_size, int):
         shape = int(input.shape[dim])
         new_split_size = [split_size] * (shape // split_size)
@@ -1867,7 +1896,7 @@ def aten_split(
 
 
 @map_to(aten.unbind)
-def aten_unbind(input: max_ops.TensorType, dim: int = 0) -> list[max_ops.TensorType]:
+def aten_unbind(input: TensorValue, dim: int = 0) -> list[TensorValue]:
     """
     Equivalent to torch.unbind - removes a tensor dimension and returns a tuple of all slices along that dimension.
     """
@@ -1927,7 +1956,8 @@ def aten_repeat_interleave(
     return result
 
 
-@map_to(aten.t)
+# t(Tensor(a) self) -> Tensor(a)
+@map_to(aten.t.default)
 def aten_t(input):
     return torch_transpose_equivalent(input, 0, 1)
 
@@ -2101,4 +2131,17 @@ def aten__scaled_dot_product_efficient_attention(
         rng_state,
         unused,
         debug_attn_mask,
+    )
+
+
+# transpose.int(Tensor(a) self, int dim0, int dim1) -> Tensor(a)
+# transpose.Dimname(Tensor(a) self, Dimname dim0, Dimname dim1) -> Tensor(a)
+@map_to(aten.transpose)
+def aten_transpose(input: TensorValue, dim0: int | Dim, dim1: int | Dim) -> TensorValue:
+    return max_ops.transpose(input, dim0, dim1)
+
+
+if verbose_enabled():
+    print(
+        f"Removed  {number_of_decompositions_removed}/{original_decomposition_table_size} decomposition functions."
     )
