@@ -1821,8 +1821,10 @@ def aten_stack(tensors: list, dim=0):
     return max_ops.stack(tensors, axis=dim)
 
 
+# tril.out(Tensor self, int diagonal=0, *, Tensor(a!) out) -> Tensor(a!)
+# tril(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.tril)
-def aten_tril(input: max_ops.TensorType, diagonal: int = 0, *, out=None):
+def aten_tril(input: TensorValue, diagonal: int = 0, *, out=None) -> TensorValue:
     # Max doesn't have tril built-in, so we get around this. It should be pretty
     # easy to implement on cpu and gpu though.
     shape = input.shape
