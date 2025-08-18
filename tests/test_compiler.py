@@ -640,29 +640,25 @@ def test_decomposition_overload(monkeypatch):
         x = x * 2
         return x.t() * 2
 
-    # grab the output of apply_decompositions
-    old_gm = None
-    new_gm = None
-    old_apply_decompositions = torch_max_backend.compiler.apply_decompositions
+    # grab the input of init_compiler
+    input_gm = None
+    init_compiler = torch_max_backend.compiler.BaseMaxCompiler.__init__
 
-    def fake_apply_decompositions(gm):
-        nonlocal old_gm, new_gm
-        old_gm = gm
-        new_gm = old_apply_decompositions(gm)
-        return new_gm
+    def fake_init_compiler(self, gm, *args, **kwargs):
+        nonlocal input_gm
+        input_gm = gm
+        return init_compiler(self, gm, *args, **kwargs)
 
     monkeypatch.setattr(
-        torch_max_backend.compiler, "apply_decompositions", fake_apply_decompositions
+        torch_max_backend.compiler.BaseMaxCompiler, "__init__", fake_init_compiler
     )
 
     a = torch.compile(backend=max_backend)(fn)
     a(torch.randn(2, 3))
 
-    assert aten.t.default in [node.target for node in old_gm.graph.nodes]
-
     # it's normally decomposed. We check that it's not the case since we
     # implemented it ourselves.
-    assert aten.t.default in [node.target for node in new_gm.graph.nodes]
+    assert aten.t.default in [node.target for node in input_gm.graph.nodes]
 
 
 def test_decomposition_overload_packet(monkeypatch):
@@ -674,25 +670,22 @@ def test_decomposition_overload_packet(monkeypatch):
         x = x * 2
         return torch.transpose(x, 0, 1) * 2
 
-    # grab the output of apply_decompositions
-    old_gm = None
-    new_gm = None
-    old_apply_decompositions = torch_max_backend.compiler.apply_decompositions
+    # grab the input of init_compiler
+    input_gm = None
+    init_compiler = torch_max_backend.compiler.BaseMaxCompiler.__init__
 
-    def fake_apply_decompositions(gm):
-        nonlocal old_gm, new_gm
-        old_gm = gm
-        new_gm = old_apply_decompositions(gm)
-        return new_gm
+    def fake_init_compiler(self, gm, *args, **kwargs):
+        nonlocal input_gm
+        input_gm = gm
+        return init_compiler(self, gm, *args, **kwargs)
 
     monkeypatch.setattr(
-        torch_max_backend.compiler, "apply_decompositions", fake_apply_decompositions
+        torch_max_backend.compiler.BaseMaxCompiler, "__init__", fake_init_compiler
     )
 
     a = torch.compile(backend=max_backend)(fn)
     a(torch.randn(2, 3))
-    assert aten.transpose.int in [node.target for node in old_gm.graph.nodes]
 
     # it's normally decomposed. We check that it's not the case since we
     # implemented it ourselves.
-    assert aten.transpose.int in [node.target for node in new_gm.graph.nodes]
+    assert aten.transpose.int in [node.target for node in input_gm.graph.nodes]
