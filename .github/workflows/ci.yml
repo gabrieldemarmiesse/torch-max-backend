@@ -38,4 +38,4 @@ jobs:
       
       - name: Run tests with pytest
         run: |
-          uv run pytest -n auto -v --splits 15 --group ${{ matrix.test-index }}
+          uv run pytest -n auto -v --forked --splits 15 --group ${{ matrix.test-index }}
