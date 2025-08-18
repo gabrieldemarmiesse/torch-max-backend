@@ -78,9 +78,7 @@ def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
 
     # Apply decompositions using make_fx
     decomposed_gm = make_fx(
-        decompose_with_make_fx,
-        decomposition_table=DECOMPOSITION_TABLE,
-        record_module_stack=True,
+        decompose_with_make_fx, decomposition_table=DECOMPOSITION_TABLE
     )(*example_inputs)
     return decomposed_gm
 
@@ -284,8 +282,11 @@ class _GraphFactory:
         }
         key = node.target
 
-        # TODO: Remove this condition when our mapping use only specific overloads
-        if key not in MAPPING_TORCH_ATEN_TO_MAX:
+        # TODO: refactor this
+        if (
+            key not in MAPPING_TORCH_ATEN_TO_MAX
+            and key.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX
+        ):
             key = key.overloadpacket
 
         if key not in MAPPING_TORCH_ATEN_TO_MAX:
@@ -386,7 +387,7 @@ class BaseMaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         if profiling_enabled():
             compiler_start = time.time_ns()
-        gm.graph.print_tabular()
+
         if verbose_enabled():
             print(f"before composition, graph has {len(gm.graph.nodes)} nodes.")
 
