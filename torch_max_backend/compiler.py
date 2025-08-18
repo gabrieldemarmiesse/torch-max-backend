@@ -12,13 +12,11 @@ from torch._dynamo.backends.common import aot_autograd
 from max.driver import Device
 from functorch.compile import make_boxed_func
 from torch_max_backend.aten_functions import DECOMPOSITION_TABLE
-from torch.fx.experimental.proxy_tensor import make_fx
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 import traceback
 from typing import Any
 from line_profiler import profile
-from collections import Counter
 
 
 class MaxCompilerError(Exception):
@@ -41,63 +39,6 @@ def gather_stats_on_graph(gm: torch.fx.GraphModule):
     print("Function call counts:")
     for name, count in sorted_counts:
         print(f"{name}: {count}")
-
-
-@profile
-def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
-    """
-    Apply decompositions to any unsupported operations using PyTorch's make_fx.
-    This is a generic solution that works for any operation in core_aten_decompositions.
-    """
-    # Check if any nodes need decomposition
-    counter = Counter()
-    for node in gm.graph.nodes:
-        if (
-            node.op in ("call_function", "call_method")
-            and node.target in DECOMPOSITION_TABLE
-        ):
-            counter[get_fully_qualified_name(node.target)] += 1
-    if verbose_enabled():
-        print(
-            f"{counter.total()} nodes will be decomposed with the decomposition table."
-        )
-        for name, count in counter.most_common():
-            print(f"{name}: decomposed {count} times")
-
-    if not counter:
-        # No decompositions needed, return the original graph module
-        return gm
-
-    # Create a wrapper function that applies decompositions using make_fx
-    def decompose_with_make_fx(*args):
-        # We need to create a function that represents the entire graph
-        # and then apply decompositions to it
-        return gm(*args)
-
-    # Get example inputs from the first few placeholder nodes
-    example_inputs = []
-    for node in gm.graph.nodes:
-        if node.op == "placeholder":
-            if "val" in node.meta:
-                example_value = node.meta["val"]
-            elif "example_value" in node.meta:
-                example_value = node.meta["example_value"]
-            else:
-                # Create a dummy tensor - this might not work for all cases
-                example_value = torch.tensor(0.0)
-
-            if isinstance(example_value, torch.Tensor):
-                # Use the exact same shape as the original to avoid shape mismatches
-                dummy_tensor = torch.zeros_like(example_value)
-                example_inputs.append(dummy_tensor)
-            else:
-                example_inputs.append(example_value)
-
-    # Apply decompositions using make_fx
-    decomposed_gm = make_fx(
-        decompose_with_make_fx, decomposition_table=DECOMPOSITION_TABLE
-    )(*example_inputs)
-    return decomposed_gm
 
 
 def get_fully_qualified_name(func: Callable | str) -> str:
@@ -409,18 +350,10 @@ class BaseMaxCompiler:
         if profiling_enabled():
             compiler_start = time.time_ns()
         gather_stats_on_graph(gm)
-
-        if verbose_enabled():
-            print(f"before composition, graph has {len(gm.graph.nodes)} nodes.")
-
-        gm = apply_decompositions(gm)
-        gather_stats_on_graph(gm)
         if verbose_enabled():
             print(f"after composition, graph has {len(gm.graph.nodes)} nodes.")
-            gm.graph.print_tabular()
 
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
-        print(graph)
 
         session = engine.InferenceSession(devices=list(get_accelerators()))
         if profiling_enabled():
@@ -468,4 +401,6 @@ def _MaxCompilerBackpropCompatible(
     return make_boxed_func(_max_compiler.__call__)
 
 
-max_backend = aot_autograd(fw_compiler=_MaxCompilerBackpropCompatible)
+max_backend = aot_autograd(
+    fw_compiler=_MaxCompilerBackpropCompatible, decompositions=DECOMPOSITION_TABLE
+)

@@ -5,9 +5,10 @@ import math
 from torch_max_backend import max_backend, get_accelerators
 from torch._dynamo import mark_dynamic
 import os
+import torch._dynamo.utils
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 
 
 class CausalSelfAttention(nn.Module):
@@ -327,7 +328,7 @@ def main():
 
     @torch.no_grad()
     def generate_with_compiled_step(idx, max_new_tokens, temperature=1.0, top_k=None):
-        for _ in range(max_new_tokens):
+        for i in range(max_new_tokens):
             idx_cond = (
                 idx
                 if idx.size(1) <= model.config.block_size
@@ -338,7 +339,13 @@ def main():
             mark_dynamic(idx_cond, 1)  # Sequence length dimension
 
             # Use compiled forward pass for each step
+            import time
+
+            t0 = time.time()
             logits, _ = compiled_forward(idx_cond)
+            t1 = time.time()
+            if i == 0:
+                print(f"Compiled and run forward step took {t1 - t0:.4f} seconds")
             logits = logits[:, -1, :] / temperature
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
@@ -362,6 +369,7 @@ def main():
     print("\n" + "=" * 50)
     print("Testing completed successfully!")
     print("=" * 50)
+    print(torch._dynamo.utils.compile_times())
 
 
 if __name__ == "__main__":
