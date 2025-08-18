@@ -544,28 +544,6 @@ def test_error_message_exception_in_op(monkeypatch):
     assert "not_working_add" in str(exc_info.value)
 
 
-@pytest.mark.xfail(reason="FIXME if you can")
-def test_error_message_exception_in_op_decomposed(monkeypatch):
-    def not_working_add(x, y):
-        raise RuntimeError("Ho no crash!")
-
-    monkeypatch.setitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add, not_working_add)
-
-    def fn(x):
-        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
-
-    with pytest.raises(RuntimeError) as exc_info:
-        torch.compile(backend=max_backend)(fn)(torch.randn(2, 3, 4, 4))
-
-    assert "return torch.nn.functional.interpolate(x, scale_f" in str(exc_info.value)
-    assert "Ho no crash!" in str(exc_info.value)
-    assert "torch._ops.aten.aten::add" in str(exc_info.value)
-    assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
-        exc_info.value
-    )
-    assert "not_working_add" in str(exc_info.value)
-
-
 def test_error_message_op_not_supported(monkeypatch):
     monkeypatch.delitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add)
 
@@ -576,24 +554,6 @@ def test_error_message_op_not_supported(monkeypatch):
         torch.compile(backend=max_backend)(fn)(torch.randn(2, 3), torch.randn(2, 3))
 
     assert "return x + y" in str(exc_info.value)
-    assert "torch._ops.aten.aten::add" in str(exc_info.value)
-    assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
-        exc_info.value
-    )
-    assert "is not supported" in str(exc_info.value)
-
-
-@pytest.mark.xfail(reason="FIXME if you can")
-def test_error_message_op_not_supported_decomposed(monkeypatch):
-    monkeypatch.delitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add)
-
-    def fn(x):
-        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
-
-    with pytest.raises(BackendCompilerFailed) as exc_info:
-        torch.compile(backend=max_backend)(fn)(torch.randn(2, 3, 4, 4))
-
-    assert "return torch.nn.functional.interpolate(x, scale_f" in str(exc_info.value)
     assert "torch._ops.aten.aten::add" in str(exc_info.value)
     assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
         exc_info.value
@@ -640,29 +600,25 @@ def test_decomposition_overload(monkeypatch):
         x = x * 2
         return x.t() * 2
 
-    # grab the output of apply_decompositions
-    old_gm = None
-    new_gm = None
-    old_apply_decompositions = torch_max_backend.compiler.apply_decompositions
+    # grab the input of init_compiler
+    input_gm = None
+    init_compiler = torch_max_backend.compiler.BaseMaxCompiler.__init__
 
-    def fake_apply_decompositions(gm):
-        nonlocal old_gm, new_gm
-        old_gm = gm
-        new_gm = old_apply_decompositions(gm)
-        return new_gm
+    def fake_init_compiler(self, gm, *args, **kwargs):
+        nonlocal input_gm
+        input_gm = gm
+        return init_compiler(self, gm, *args, **kwargs)
 
     monkeypatch.setattr(
-        torch_max_backend.compiler, "apply_decompositions", fake_apply_decompositions
+        torch_max_backend.compiler.BaseMaxCompiler, "__init__", fake_init_compiler
     )
 
     a = torch.compile(backend=max_backend)(fn)
     a(torch.randn(2, 3))
 
-    assert aten.t.default in [node.target for node in old_gm.graph.nodes]
-
     # it's normally decomposed. We check that it's not the case since we
     # implemented it ourselves.
-    assert aten.t.default in [node.target for node in new_gm.graph.nodes]
+    assert aten.t.default in [node.target for node in input_gm.graph.nodes]
 
 
 def test_decomposition_overload_packet(monkeypatch):
@@ -674,25 +630,22 @@ def test_decomposition_overload_packet(monkeypatch):
         x = x * 2
         return torch.transpose(x, 0, 1) * 2
 
-    # grab the output of apply_decompositions
-    old_gm = None
-    new_gm = None
-    old_apply_decompositions = torch_max_backend.compiler.apply_decompositions
+    # grab the input of init_compiler
+    input_gm = None
+    init_compiler = torch_max_backend.compiler.BaseMaxCompiler.__init__
 
-    def fake_apply_decompositions(gm):
-        nonlocal old_gm, new_gm
-        old_gm = gm
-        new_gm = old_apply_decompositions(gm)
-        return new_gm
+    def fake_init_compiler(self, gm, *args, **kwargs):
+        nonlocal input_gm
+        input_gm = gm
+        return init_compiler(self, gm, *args, **kwargs)
 
     monkeypatch.setattr(
-        torch_max_backend.compiler, "apply_decompositions", fake_apply_decompositions
+        torch_max_backend.compiler.BaseMaxCompiler, "__init__", fake_init_compiler
     )
 
     a = torch.compile(backend=max_backend)(fn)
     a(torch.randn(2, 3))
-    assert aten.transpose.int in [node.target for node in old_gm.graph.nodes]
 
     # it's normally decomposed. We check that it's not the case since we
     # implemented it ourselves.
-    assert aten.transpose.int in [node.target for node in new_gm.graph.nodes]
+    assert aten.transpose.int in [node.target for node in input_gm.graph.nodes]

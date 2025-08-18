@@ -23,6 +23,7 @@ from torch._ops import OpOverloadPacket, OpOverload
 from torch_max_backend.flags import verbose_enabled
 
 Scalar = int | float | Dim
+SymIntType = int | Dim
 
 # Ops that need to be decomposed.
 DECOMPOSITION_TABLE = core_aten_decompositions()
@@ -850,7 +851,7 @@ def aten_exp(input):
 # expand(Tensor(a) self, SymInt[] size, *, bool implicit=False) -> Tensor(a)
 @map_to(aten.expand)
 def aten_expand(
-    tensor: TensorValue, size: list[int | Dim], *, implicit: bool = False
+    tensor: TensorValue, size: list[SymIntType], *, implicit: bool = False
 ) -> TensorValue:
     target_shape = []
 
@@ -1687,10 +1688,10 @@ def aten_tanh(x):
 @map_to(aten.slice)
 def aten_slice(
     input: TensorValue,
-    dim: int = 0,
-    start: int | Dim | None = None,
-    end: int | Dim | None = None,
-    step: int | Dim = 1,
+    dim: int,
+    start: SymIntType | None = None,
+    end: SymIntType | None = None,
+    step: SymIntType = 1,
 ) -> TensorValue:
     if end == 2**63 - 1:  # MAX_INT64
         end = None
