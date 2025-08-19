@@ -263,7 +263,7 @@ class _GraphFactory:
                 self.handle_output(node)
             else:
                 raise ValueError(f"Unsupported node type: {node.op}")
-      
+
         return self.graph
 
 
@@ -286,7 +286,7 @@ class BaseMaxCompiler:
             print(f"Graph has {len(gm.graph.nodes)} nodes.")
             gather_stats_on_graph(gm)
 
-        graph= _GraphFactory().create_graph(gm)
+        graph = _GraphFactory().create_graph(gm)
         if profiling_enabled():
             graph_defined_time = time.time_ns()
         session = engine.InferenceSession(devices=list(get_accelerators()))
