@@ -1,3 +1,9 @@
+import os
+
+os.environ["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "0"
+os.environ["TORCHINDUCTOR_AUTOGRAD_CACHE"] = "0"
+os.environ["TORCHINDUCTOR_FORCE_DISABLE_CACHES"] = "1"
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -344,8 +350,7 @@ def main():
             t0 = time.time()
             logits, _ = compiled_forward(idx_cond)
             t1 = time.time()
-            if i == 0:
-                print(f"Compiled and run forward step took {t1 - t0:.4f} seconds")
+            print(f"Run forward step took {t1 - t0:.4f} seconds")
             logits = logits[:, -1, :] / temperature
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
