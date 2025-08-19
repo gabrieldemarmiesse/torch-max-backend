@@ -238,24 +238,15 @@ class _GraphFactory:
         # None outputs can be required. So we remember here if
         # we want an output tensor (and we reccord the tensor position)
         # or if we want None.
-        output_blueprint: list[int | None] = []
 
         for x in node.args[0]:
-            converted = self.tensor_book.convert_to_max(x)
-            if converted is None:
-                output_blueprint.append(None)
-            else:
-                # position of the output tensor
-                output_blueprint.append(len(output_tensors))
-                output_tensors.append(converted)
+            output_tensors.append(self.tensor_book.convert_to_max(x))
 
         # Store the none indices for runtime handling
         self.graph.output(*output_tensors)
         self.graph.__exit__(None, None, None)
-        return output_blueprint
 
-    def create_graph(self, gm: torch.fx.GraphModule) -> tuple[Graph, list[int | None]]:
-        output_blueprint = None
+    def create_graph(self, gm: torch.fx.GraphModule) -> Graph:
         for node_idx, node in enumerate(gm.graph.nodes):
             if node.op == "placeholder":
                 self.handle_placeholder(node)
@@ -269,14 +260,11 @@ class _GraphFactory:
             elif node.op == "get_attr":
                 self.handle_get_attr(node)
             elif node.op == "output":
-                output_blueprint = self.handle_output(node)
+                self.handle_output(node)
             else:
                 raise ValueError(f"Unsupported node type: {node.op}")
-        if output_blueprint is None:
-            raise ValueError(
-                "No output node found in the graph, this should never happen."
-            )
-        return self.graph, output_blueprint
+      
+        return self.graph
 
 
 def get_accelerators() -> list[Device]:
@@ -298,7 +286,7 @@ class BaseMaxCompiler:
             print(f"Graph has {len(gm.graph.nodes)} nodes.")
             gather_stats_on_graph(gm)
 
-        graph, self.output_blueprint = _GraphFactory().create_graph(gm)
+        graph= _GraphFactory().create_graph(gm)
         if profiling_enabled():
             graph_defined_time = time.time_ns()
         session = engine.InferenceSession(devices=list(get_accelerators()))
@@ -321,20 +309,13 @@ class BaseMaxCompiler:
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
-        # Reconstruct the original output structure with None values
-        result = []
-        for i in self.output_blueprint:
-            if i is None:
-                result.append(None)
-            else:
-                result.append(tensor_outputs[i])
         if profiling_enabled():
             end_inference_time = time.time_ns()
             inference_duration = dt.timedelta(
                 microseconds=(end_inference_time - start_inference_time) / 1000
             )
             print(f"Running the Max graph in {inference_duration}")
-        return result
+        return tensor_outputs
 
 
 def _MaxCompilerBackpropCompatible(
