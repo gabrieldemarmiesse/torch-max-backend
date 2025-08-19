@@ -16,7 +16,52 @@ from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 import traceback
 from typing import Any
+from collections.abc import Sequence
 from line_profiler import profile
+
+# Try to import from different possible locations for SerializableAOTDispatchCompiler
+CACHING_AVAILABLE = False
+try:
+    # First try the newer location (post July 2025)
+    from torch._functorch._aot_autograd.schemas import SerializableAOTDispatchCompiler
+
+    CACHING_AVAILABLE = True
+    print("AOTAutograd caching enabled (schemas location)")
+except ImportError:
+    try:
+        # Try the older location (Dec 2024 - July 2025)
+        from torch._functorch.aot_autograd import SerializableAOTDispatchCompiler
+
+        CACHING_AVAILABLE = True
+        print("AOTAutograd caching enabled (aot_autograd location)")
+    except ImportError:
+        print("SerializableAOTDispatchCompiler not available in this PyTorch version")
+
+if CACHING_AVAILABLE:
+    try:
+        from torch._inductor.output_code import OutputCode
+        import torch._inductor.config as inductor_config
+        import torch._functorch.config as functorch_config
+
+        # Try to import newer types or fall back to Any for compatibility
+        try:
+            from torch._inductor.runtime.runtime_utils import InputType
+            from torch._inductor.compile_fx import _CompileFxKwargs
+            from torch._inductor.output_code import CompiledFxGraphConstants
+        except ImportError:
+            # Use Any as fallback for older versions
+            InputType = Any
+            _CompileFxKwargs = Any
+            CompiledFxGraphConstants = Any
+
+        # Enable caching
+        inductor_config.fx_graph_cache = True
+        functorch_config.enable_autograd_cache = True
+    except ImportError as e:
+        print(f"Failed to import other caching components: {e}")
+        CACHING_AVAILABLE = False
+
+import dataclasses
 
 
 class MaxCompilerError(Exception):
@@ -383,7 +428,7 @@ class BaseMaxCompiler:
                 result.append(None)
             else:
                 result.append(tensor_outputs[i])
-        if profiling_enabled():
+        if profiling_enabled() and False:
             end_inference_time = time.time_ns()
             inference_duration = dt.timedelta(
                 microseconds=(end_inference_time - start_inference_time) / 1000
@@ -399,6 +444,59 @@ def _MaxCompilerBackpropCompatible(
     return make_boxed_func(_max_compiler.__call__)
 
 
-max_backend = aot_autograd(
-    fw_compiler=_MaxCompilerBackpropCompatible, decompositions=DECOMPOSITION_TABLE
-)
+if CACHING_AVAILABLE:
+
+    @dataclasses.dataclass
+    class MaxOutputCode(OutputCode):
+        """Custom OutputCode wrapper for Max compiler to enable AOTAutograd caching."""
+
+        compiled_fn: Any = None
+
+        def __post_init__(self) -> None:
+            self._boxed_call = True
+            # Set required attributes for AOTAutograd caching
+            self._fx_graph_cache_key = None  # Will be set by _CacheableMaxCompiler
+            self._fx_graph_cache_debug_lines = []
+            self._time_taken_ns = 0
+
+        def post_compile(
+            self,
+            example_inputs: Sequence[InputType],
+            constants: CompiledFxGraphConstants,
+            graph_kwargs: _CompileFxKwargs,
+        ) -> None:
+            pass
+
+        def __call__(self, inputs: Sequence[Any]) -> Any:
+            return self.compiled_fn(inputs)
+
+    def _CacheableMaxCompiler(gm: torch.fx.GraphModule, example_inputs: list):
+        """Wrapper for Max compiler that returns OutputCode for caching."""
+        # Use existing Max compiler logic
+        compiled_fn = _MaxCompilerBackpropCompatible(gm, example_inputs)
+
+        # Generate a proper cache key based on graph content
+        import hashlib
+
+        graph_str = str(gm.graph)
+        graph_hash = hashlib.sha256(graph_str.encode()).hexdigest()[:16]
+        cache_key = f"max_backend_{graph_hash}"
+
+        # Return as OutputCode for caching with proper cache key
+        output_code = MaxOutputCode(compiled_fn=compiled_fn)
+        output_code._fx_graph_cache_key = cache_key
+        return output_code
+
+    # Create cacheable compiler
+    cacheable_max_compiler = SerializableAOTDispatchCompiler(
+        MaxOutputCode, _CacheableMaxCompiler
+    )
+
+    max_backend = aot_autograd(
+        fw_compiler=cacheable_max_compiler, decompositions=DECOMPOSITION_TABLE
+    )
+else:
+    # Fallback to non-cacheable compiler
+    max_backend = aot_autograd(
+        fw_compiler=_MaxCompilerBackpropCompatible, decompositions=DECOMPOSITION_TABLE
+    )

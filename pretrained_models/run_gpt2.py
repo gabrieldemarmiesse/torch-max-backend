@@ -1,3 +1,7 @@
+import os
+
+os.environ["TORCHINDUCTOR_AUTOGRAD_CACHE"] = "1"
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,9 +10,21 @@ from torch_max_backend import max_backend, get_accelerators
 from torch._dynamo import mark_dynamic
 import os
 import torch._dynamo.utils
+from torch._dynamo.utils import counters
+import logging
+import torch._inductor.config as inductor_config
 
+inductor_config.fx_graph_cache = True
+import torch._functorch.config as functorch_config
+
+# Enable autograd cache
+functorch_config.enable_autograd_cache = True
+
+logging.getLogger("torch._functorch._aot_autograd.autograd_cache").setLevel(
+    logging.INFO
+)
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
 
 
 class CausalSelfAttention(nn.Module):
@@ -295,15 +311,15 @@ def main():
     device = "cuda" if len(list(get_accelerators())) >= 2 else "cpu"
     print(f"Using device: {device}")
 
-    model = GPT2.from_pretrained("gpt2-xl")
+    model = GPT2.from_pretrained("gpt2")
     model.eval()
     model.to(device)
 
     enc = load_tokenizer()
 
-    print("\n" + "=" * 50)
-    print("Testing GPT-2 generation without torch.compile")
-    print("=" * 50)
+    # print("\n" + "=" * 50)
+    # print("Testing GPT-2 generation without torch.compile")
+    # print("=" * 50)
 
     prompts = ["The future of artificial intelligence"]
 
@@ -312,12 +328,12 @@ def main():
         tokens = enc.encode(prompt)
         tokens = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
 
-        with torch.no_grad():
-            generated = model.generate(
-                tokens, max_new_tokens=50, temperature=0.8, top_k=50
-            )
-            generated_text = enc.decode(generated[0].tolist())
-            print(f"Generated: {generated_text}")
+        # with torch.no_grad():
+        #     generated = model.generate(
+        #         tokens, max_new_tokens=50, temperature=0.8, top_k=50
+        #     )
+        #     generated_text = enc.decode(generated[0].tolist())
+        #     print(f"Generated: {generated_text}")
 
     print("\n" + "=" * 50)
     print("Testing GPT-2 generation with compiled single forward step")
@@ -370,6 +386,11 @@ def main():
     print("Testing completed successfully!")
     print("=" * 50)
     print(torch._dynamo.utils.compile_times())
+    print(f"Cache hits: {counters['aot_autograd']['autograd_cache_hit']}")
+    print(f"Cache misses: {counters['aot_autograd']['autograd_cache_miss']}")
+    print(f"Cache bypasses: {counters['aot_autograd']['autograd_cache_bypass']}")
+    print(f"Cache saves: {counters['aot_autograd']['autograd_cache_saved']}")
+    print(f"Guard misses: {counters['aot_autograd']['autograd_cache_guard_miss']}")
 
 
 if __name__ == "__main__":
