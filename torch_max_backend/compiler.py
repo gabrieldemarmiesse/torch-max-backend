@@ -197,7 +197,6 @@ class _GraphFactory:
             )
             self.names_to_input_idx[node.name] = len(self.graph_inputs) - 1
 
-    @profile
     def handle_call_function(self, node_idx: int, node: torch.fx.Node):
         func_args = [self.tensor_book.convert_to_max(x) for x in node.args]
         func_kwargs = {
@@ -256,7 +255,6 @@ class _GraphFactory:
         self.graph.__exit__(None, None, None)
         return output_blueprint
 
-    @profile
     def create_graph(self, gm: torch.fx.GraphModule) -> tuple[Graph, list[int | None]]:
         output_blueprint = None
         for node_idx, node in enumerate(gm.graph.nodes):
@@ -294,7 +292,6 @@ def get_accelerators() -> list[Device]:
 
 
 class BaseMaxCompiler:
-    @profile
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         if profiling_enabled():
             compiler_start = time.time_ns()
@@ -318,6 +315,7 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
+    @profile
     def __call__(self, *args) -> list[torch.Tensor | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():

@@ -1556,7 +1556,6 @@ def aten_nonzero(input):
 
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)
 @map_to(aten.permute)
-@profile
 def aten_permute(x, dims):
     return max_ops.permute(x, dims)
 

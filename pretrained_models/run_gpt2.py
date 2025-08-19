@@ -1,16 +1,11 @@
 import os
 
-os.environ["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "0"
-os.environ["TORCHINDUCTOR_AUTOGRAD_CACHE"] = "0"
-os.environ["TORCHINDUCTOR_FORCE_DISABLE_CACHES"] = "1"
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
 from torch_max_backend import max_backend, get_accelerators
 from torch._dynamo import mark_dynamic
-import os
 import torch._dynamo.utils
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
