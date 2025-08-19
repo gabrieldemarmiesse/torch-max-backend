@@ -14,3 +14,4 @@ pytorch/
 modular/
 .claude/settings.local.json
 *.lprof
+*.prof

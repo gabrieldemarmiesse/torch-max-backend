@@ -7,9 +7,26 @@ import math
 from torch_max_backend import max_backend, get_accelerators
 from torch._dynamo import mark_dynamic
 import torch._dynamo.utils
+import argparse
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+
+# check if --max or --inductor
+parser = argparse.ArgumentParser(description="Run GPT-2 model with Max backend")
+parser.add_argument(
+    "--max", action="store_true", help="Use Max backend for compilation"
+)
+parser.add_argument(
+    "--inductor", action="store_true", help="Use Inductor backend for compilation"
+)
+args = parser.parse_args()
+if args.max and args.inductor:
+    raise ValueError("Cannot use both --max and --inductor at the same time")
+if args.max:
+    backend = max_backend
+elif args.inductor:
+    backend = "inductor"
 
 
 class CausalSelfAttention(nn.Module):
@@ -325,7 +342,7 @@ def main():
     print("=" * 50)
 
     # Compile just the forward pass, not the full generation loop
-    compiled_forward = torch.compile(model.forward, fullgraph=True, backend=max_backend)
+    compiled_forward = torch.compile(model.forward, fullgraph=True, backend=backend)
 
     @torch.no_grad()
     def generate_with_compiled_step(idx, max_new_tokens, temperature=1.0, top_k=None):

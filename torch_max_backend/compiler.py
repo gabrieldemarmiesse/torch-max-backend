@@ -330,7 +330,7 @@ class BaseMaxCompiler:
                 result.append(None)
             else:
                 result.append(tensor_outputs[i])
-        if profiling_enabled():
+        if profiling_enabled() and False:
             end_inference_time = time.time_ns()
             inference_duration = dt.timedelta(
                 microseconds=(end_inference_time - start_inference_time) / 1000
