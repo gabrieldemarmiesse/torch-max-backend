@@ -16,6 +16,7 @@ from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 import traceback
 from typing import Any
+from line_profiler import profile
 
 
 class MaxCompilerError(Exception):
@@ -314,6 +315,7 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
+    @profile
     def __call__(self, *args) -> list[torch.Tensor | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
@@ -328,7 +330,7 @@ class BaseMaxCompiler:
                 result.append(None)
             else:
                 result.append(tensor_outputs[i])
-        if profiling_enabled():
+        if profiling_enabled() and False:
             end_inference_time = time.time_ns()
             inference_duration = dt.timedelta(
                 microseconds=(end_inference_time - start_inference_time) / 1000
