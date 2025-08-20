@@ -182,6 +182,61 @@ def aten__adaptive_avg_pool2d(input, output_size):
 # _native_batch_norm_legit(Tensor input, Tensor? weight, Tensor? bias, Tensor(a!) running_mean, Tensor(b!) running_var, bool training, float momentum, float eps) -> (Tensor, Tensor, Tensor)
 # _native_batch_norm_legit.no_stats(Tensor input, Tensor? weight, Tensor? bias, bool training, float momentum, float eps) -> (Tensor, Tensor, Tensor)
 # _native_batch_norm_legit_no_training(Tensor input, Tensor? weight, Tensor? bias, Tensor running_mean, Tensor running_var, float momentum, float eps) -> (Tensor, Tensor, Tensor)
+@map_to(aten._native_batch_norm_legit_no_training)
+def aten__native_batch_norm_legit_no_training(
+    input, weight, bias, running_mean, running_var, momentum, eps
+):
+    """
+    Implements batch normalization for inference (no training).
+
+    Args:
+        input: Input tensor of shape (N, C, H, W) or (N, C, ...)
+        weight: Optional gamma parameter tensor of shape (C,)
+        bias: Optional beta parameter tensor of shape (C,)
+        running_mean: Running mean statistics tensor of shape (C,)
+        running_var: Running variance statistics tensor of shape (C,)
+        momentum: Momentum factor (unused in no-training mode)
+        eps: Small value for numerical stability
+
+    Returns:
+        Tuple of (normalized_output, save_mean, save_var)
+        where save_mean and save_var are empty tensors in no-training mode
+    """
+    # Get input dimensions
+    input_shape = input.shape
+    num_channels = int(input_shape[1])  # Channel dimension is always 1 in NCHW format
+
+    # Reshape running statistics to broadcast properly: (C,) -> (1, C, 1, 1, ...)
+    # Create broadcast shape with 1s for all dims except channel dim
+    broadcast_shape = [1] * len(input_shape)
+    broadcast_shape[1] = num_channels  # Set channel dimension
+
+    # Reshape running mean and variance for broadcasting
+    running_mean_reshaped = max_ops.reshape(running_mean, broadcast_shape)
+    running_var_reshaped = max_ops.reshape(running_var, broadcast_shape)
+
+    # Compute normalization: (input - mean) / sqrt(var + eps)
+    normalized = (input - running_mean_reshaped) / max_ops.sqrt(
+        running_var_reshaped + eps
+    )
+
+    # Apply weight (gamma) and bias (beta) if provided
+    if weight is not None:
+        weight_reshaped = max_ops.reshape(weight, broadcast_shape)
+        normalized = normalized * weight_reshaped
+
+    if bias is not None:
+        bias_reshaped = max_ops.reshape(bias, broadcast_shape)
+        normalized = normalized + bias_reshaped
+
+    # Create empty tensors for save_mean and save_var (inference mode)
+    # These should be 0-dimensional tensors
+    zero_scalar = max_ops.constant(np.array([]), dtype=input.dtype, device=input.device)
+    empty_tensor = max_ops.reshape(zero_scalar, [0])
+
+    return (normalized, empty_tensor, empty_tensor)
+
+
 # _pdist_forward(Tensor self, float p=2) -> Tensor
 # _softmax(Tensor self, int dim, bool half_to_float) -> Tensor
 @map_to(aten._softmax)
