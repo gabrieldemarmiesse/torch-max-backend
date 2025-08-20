@@ -74,5 +74,6 @@ dev = [
     "torchvision>=0.22.1",
     "transformers>=4.54.1",
     "line-profiler>=5.0.0",
+    "llms-from-scratch>=1.0.17",
 ]
 
