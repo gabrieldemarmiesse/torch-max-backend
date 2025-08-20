@@ -165,11 +165,12 @@ Device compatibility should be checked using `get_accelerators()` before GPU usa
 ## To add support for an op
 To add support for an op, the process is the following:
 We use test-driven dev
-1) Explore the pytorch codebase `../pytorch` and look for the signature and the meaning of inputs and outputs of this aten function.
+1) Ask a subagent to explore the pytorch codebase `../pytorch` and look for the signature and the meaning of inputs and outputs of this aten function and to give you a full report.
 2) Write a few unit tests in test_aten_functions.py using this op directly (somewhere in the middle of the file to avoid conflicts).
 3) Run those unit tests. You should see an error message explaining that the aten op is not supported.
-4) Find in aten_functions.py the comment giving the signature of the aten op.
-5) Look into the directory `../modular/max` to find if functions exist in MAX to do something similar (sometimes they have direct equivalents).
+4) Find in aten_functions.py the comment giving the signature of the aten op. If it's not there, add it 
+   yourself. Note that the file is sorted alphabetically and must remain this way. 
+5) Ask a subagent to look into the directory `../modular/max` to find if functions exist in MAX to do something similar (sometimes they have direct equivalents) or can be composed to re-implement the op. You can also explore the models created with Max as they have examples of using those ops. `kernels.py` has sometimes more complexe ops, you can look into that too. The subagent must give you a full report of useful functions for your task and descriptions of inputs and outputs.
 6) Just below it, write the aten op implementation with the max functions you just found.
 7) Re-run the unit tests and make sure they're passing. Do not hesistate to use pytest.mark.parametrize 
    to test many input data types.
