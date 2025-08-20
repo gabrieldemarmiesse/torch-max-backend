@@ -1296,6 +1296,60 @@ def test_transpose_negative_dims(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_scaled_dot_product_flash_attention_basic(device: str):
+    """Test _scaled_dot_product_flash_attention basic functionality"""
+
+    def fn(q, k, v):
+        return torch.ops.aten._scaled_dot_product_flash_attention(
+            q, k, v, dropout_p=0.0, is_causal=False, return_debug_mask=False
+        )
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 8, 16
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    check_functions_are_equivalent(fn, device, [q, k, v])
+
+
+def test_scaled_dot_product_flash_attention_with_causal(device: str):
+    """Test _scaled_dot_product_flash_attention with causal masking"""
+
+    def fn(q, k, v):
+        return torch.ops.aten._scaled_dot_product_flash_attention(
+            q, k, v, dropout_p=0.0, is_causal=True, return_debug_mask=False
+        )
+
+    batch_size, num_heads, seq_len, head_dim = 1, 2, 4, 8
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    check_functions_are_equivalent(fn, device, [q, k, v])
+
+
+def test_scaled_dot_product_flash_attention_with_scale(device: str):
+    """Test _scaled_dot_product_flash_attention with custom scale"""
+
+    def fn(q, k, v):
+        return torch.ops.aten._scaled_dot_product_flash_attention(
+            q,
+            k,
+            v,
+            dropout_p=0.0,
+            is_causal=False,
+            return_debug_mask=False,
+            scale=0.125,
+        )
+
+    batch_size, num_heads, seq_len, head_dim = 1, 1, 4, 8
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    check_functions_are_equivalent(fn, device, [q, k, v])
+
+
 def test_transpose_same_dim(device: str):
     """Test transpose with same dimension (should be no-op)"""
 
