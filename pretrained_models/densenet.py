@@ -40,6 +40,6 @@ imagenet_classes = requests.get(imagenet_classes_url).text.strip().split("\n")
 
 top5_prob, top5_catid = torch.topk(probabilities, 5)
 
-print("Top 5 Predictions:")
+print("Top 5 Predictions: (boxer should come first)")
 for i in range(top5_prob.size(0)):
     print(f"{i + 1}. {imagenet_classes[top5_catid[i]]}: {top5_prob[i].item():.4f}")
