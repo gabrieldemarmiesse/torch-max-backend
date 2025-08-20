@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import pytest
 import math
 from torch_max_backend.testing import check_functions_are_equivalent
+from torch.ops import aten
 
 
 def test_basic_addition(device: str):
@@ -5010,3 +5011,117 @@ def test_interpolate_preserve_aspect_ratio(device: str):
     x = torch.randn(2, 3, 4, 8, device=device)
 
     check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dtype):
+    """Test basic batch normalization inference with different dtypes"""
+
+    def fn(input_tensor, weight, bias, running_mean, running_var):
+        return aten._native_batch_norm_legit_no_training.default(
+            input_tensor, weight, bias, running_mean, running_var, 0.1, 1e-5
+        )
+
+    # Create test tensors
+    batch_size, channels, height, width = 2, 3, 4, 4
+    input_tensor = torch.randn(
+        batch_size, channels, height, width, dtype=dtype, device=device
+    )
+    weight = torch.randn(channels, dtype=dtype, device=device)
+    bias = torch.randn(channels, dtype=dtype, device=device)
+    running_mean = torch.randn(channels, dtype=dtype, device=device)
+    running_var = torch.abs(torch.randn(channels, dtype=dtype, device=device)) + 1e-5
+
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, weight, bias, running_mean, running_var]
+    )
+
+
+@pytest.mark.parametrize("channels", [1, 4, 16])
+def test_native_batch_norm_legit_no_training_different_channels(
+    device: str, channels: int
+):
+    """Test batch norm with different numbers of channels"""
+
+    def fn(input_tensor, weight, bias, running_mean, running_var):
+        return aten._native_batch_norm_legit_no_training.default(
+            input_tensor, weight, bias, running_mean, running_var, 0.1, 1e-5
+        )
+
+    # Create test tensors with varying channel dimensions
+    batch_size, height, width = 2, 8, 8
+    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
+    weight = torch.randn(channels, device=device)
+    bias = torch.randn(channels, device=device)
+    running_mean = torch.randn(channels, device=device)
+    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
+
+    # Test that compilation works and outputs match
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, weight, bias, running_mean, running_var]
+    )
+
+
+def test_native_batch_norm_legit_no_training_none_weight_bias(device: str):
+    """Test batch norm with None weight and bias"""
+
+    def fn(input_tensor, running_mean, running_var):
+        return aten._native_batch_norm_legit_no_training.default(
+            input_tensor, None, None, running_mean, running_var, 0.1, 1e-5
+        )
+
+    # Create test tensors
+    batch_size, channels, height, width = 2, 3, 4, 4
+    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
+    running_mean = torch.randn(channels, device=device)
+    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
+
+    # Test that compilation works and outputs match
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, running_mean, running_var]
+    )
+
+
+@pytest.mark.parametrize("eps", [1e-5, 1e-3])
+def test_native_batch_norm_legit_no_training_different_eps(device: str, eps: float):
+    """Test batch norm with different epsilon values"""
+
+    def fn(input_tensor, weight, bias, running_mean, running_var):
+        return aten._native_batch_norm_legit_no_training.default(
+            input_tensor, weight, bias, running_mean, running_var, 0.1, eps
+        )
+
+    # Create test tensors
+    batch_size, channels, height, width = 2, 3, 4, 4
+    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
+    weight = torch.randn(channels, device=device)
+    bias = torch.randn(channels, device=device)
+    running_mean = torch.randn(channels, device=device)
+    running_var = torch.abs(torch.randn(channels, device=device)) + eps * 10
+
+    # Test that compilation works and outputs match
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, weight, bias, running_mean, running_var]
+    )
+
+
+def test_native_batch_norm_legit_no_training_2d_input(device: str):
+    """Test batch norm with 2D input (N, C)"""
+
+    def fn(input_tensor, weight, bias, running_mean, running_var):
+        return aten._native_batch_norm_legit_no_training.default(
+            input_tensor, weight, bias, running_mean, running_var, 0.1, 1e-5
+        )
+
+    # Create 2D test tensors (batch_size, channels)
+    batch_size, channels = 10, 5
+    input_tensor = torch.randn(batch_size, channels, device=device)
+    weight = torch.randn(channels, device=device)
+    bias = torch.randn(channels, device=device)
+    running_mean = torch.randn(channels, device=device)
+    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
+
+    # Test that compilation works and outputs match
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, weight, bias, running_mean, running_var]
+    )
