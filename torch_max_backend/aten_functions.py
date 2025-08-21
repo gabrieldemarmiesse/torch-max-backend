@@ -185,7 +185,7 @@ def aten__adaptive_avg_pool2d(input, output_size):
 @map_to(aten._native_batch_norm_legit_no_training)
 def aten__native_batch_norm_legit_no_training(
     input, weight, bias, running_mean, running_var, momentum, eps
-):
+) -> tuple[TensorValue, TensorValue, TensorValue]:
     """
     Implements batch normalization for inference (no training).
 
@@ -1477,7 +1477,8 @@ def aten_mul(input, other):
 
 # native_group_norm(Tensor input, Tensor? weight, Tensor? bias, SymInt N, SymInt C, SymInt HxW, int group, float eps) -> (Tensor, Tensor, Tensor)
 @map_to(aten.native_group_norm)
-def aten_native_group_norm(input, weight, bias, N, C, HxW, group, eps):
+def aten_native_group_norm(input: TensorValue, weight, bias, N, C, HxW, group, eps
+                           ) -> tuple[TensorValue, NotImplementedError, NotImplementedError]:
     """
     This is the low-level operation that F.group_norm gets compiled to.
     Returns (normalized_output, mean, rstd) tuple but we only return the first element for simplicity.
@@ -1499,7 +1500,11 @@ def aten_native_group_norm(input, weight, bias, N, C, HxW, group, eps):
     result = torch_group_norm_equivalent(input_reshaped, group, weight, bias, eps)
 
     # Return just the normalized output (native_group_norm returns a tuple)
-    return (result,)
+    return (
+        result,
+        NotImplementedError("The implementation of aten.native_group_norm doesn't support returning mean yet."),
+        NotImplementedError("The implementation of aten.native_group_norm doesn't support returning rstd yet.")
+        )
 
 
 def torch_group_norm_equivalent(input, num_groups, weight=None, bias=None, eps=1e-5):
@@ -1555,7 +1560,8 @@ def torch_group_norm_equivalent(input, num_groups, weight=None, bias=None, eps=1
 
 # native_layer_norm(Tensor input, SymInt[] normalized_shape, Tensor? weight, Tensor? bias, float eps) -> (Tensor, Tensor, Tensor)
 @map_to(aten.native_layer_norm)
-def aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
+def aten_native_layer_norm(input, normalized_shape, weight, bias, eps
+                           ) -> tuple[TensorValue, NotImplementedError, NotImplementedError]:
     # expects a tuple or list for some reason
     # surely for the backward pass,
     # for the moment we only output the first one.
@@ -1581,8 +1587,12 @@ def aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
     if bias is not None:
         normalized = normalized + bias
 
-    # TODO: Add the other outputs later
-    return (normalized,)
+
+    return (
+        normalized,
+        NotImplementedError("The implementation of aten.native_layer_norm doesn't support returning mean yet."),
+        NotImplementedError("The implementation of aten.native_layer_norm doesn't support returning rstd yet."),
+        )
 
 
 # native_layer_norm_backward(Tensor grad_out, Tensor input, SymInt[] normalized_shape, Tensor mean, Tensor rstd, Tensor? weight, Tensor? bias, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
@@ -2072,17 +2082,22 @@ def aten__foreach_add(tensors, others, alpha=1.0):
 def aten_masked_fill(input, mask, value):
     return max_ops.where(mask, value, input)
 
-
+# _scaled_dot_product_efficient_attention(
+#     Tensor query, 
+#     Tensor key, 
+#     Tensor value, 
+#     float dropout_p=0.0, 
+#     bool is_causal=False, 
+#     bool return_debug_mask=False, 
+#     *, 
+#     float? scale=None
+# ) -> (Tensor output, Tensor logsumexp, Tensor cum_seq_q, Tensor cum_seq_k,
+#     SymInt max_q, SymInt max_k, Tensor rng_state, Tensor unused, Tensor debug_attn_mask)
 @map_to(aten._scaled_dot_product_efficient_attention)
 def aten__scaled_dot_product_efficient_attention(
     query, key, value, dropout_p=0.0, is_causal=False
 ):
     """
-    _scaled_dot_product_efficient_attention(Tensor query, Tensor key, Tensor value, float
-    dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float?
-    scale=None) -> (Tensor output, Tensor logsumexp, Tensor cum_seq_q, Tensor cum_seq_k,
-    SymInt max_q, SymInt max_k, Tensor rng_state, Tensor unused, Tensor debug_attn_mask)
-
     This function implements the scaled dot-product attention mechanism using MAX's flash_attention_gpu.
     It returns a tuple of 9 elements to match PyTorch's interface.
     """
