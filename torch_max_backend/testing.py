@@ -30,4 +30,6 @@ def check_functions_are_equivalent(
         assert original.shape == compiled.shape, f"Issue with output {i}"
         assert original.device == compiled.device, f"Issue with output {i}"
         assert original.dtype == compiled.dtype, f"Issue with output {i}"
-        assert torch.allclose(original, compiled, rtol=rtol, atol=atol), f"Issue with output {i}"
+        assert torch.allclose(original, compiled, rtol=rtol, atol=atol), (
+            f"Issue with output {i}"
+        )

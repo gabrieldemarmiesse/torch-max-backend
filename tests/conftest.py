@@ -1,10 +1,9 @@
 import pytest
 import torch
 
-import pytest
 
 # Register your helper module for assertion rewriting
-pytest.register_assert_rewrite('torch_max_backend.testing')
+pytest.register_assert_rewrite("torch_max_backend.testing")
 
 from torch_max_backend import get_accelerators
 

@@ -254,12 +254,12 @@ def aten__scaled_dot_product_flash_attention(
     # We return only the first element for now because we don't support training yet.
     # PyTorch provides tensors in shape [batch, num_heads, seq_len, head_dim]
     # MAX expects tensors in shape [batch, seq_len, num_heads, head_dim]
-    
+
     # Transpose from PyTorch format to MAX format
     q = max_ops.permute(query, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
-    k = max_ops.permute(key, [0, 2, 1, 3])    # [batch, seq_len, num_heads, head_dim]
+    k = max_ops.permute(key, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
     v = max_ops.permute(value, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
-    
+
     # Calculate scale if not provided
     if scale is None:
         head_dim = query.shape[-1]
@@ -268,20 +268,16 @@ def aten__scaled_dot_product_flash_attention(
         else:
             head_dim_value = head_dim
         scale = 1.0 / math.sqrt(float(head_dim_value))
-    
+
     # Choose mask variant based on is_causal flag
     mask_variant = MHAMaskVariant.CAUSAL_MASK if is_causal else MHAMaskVariant.NULL_MASK
-    
+
     # Call flash attention
-    attn_out = flash_attention_gpu(
-        q, k, v,
-        mask_variant=mask_variant,
-        scale=scale
-    )
-    
+    attn_out = flash_attention_gpu(q, k, v, mask_variant=mask_variant, scale=scale)
+
     # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
     result = max_ops.permute(attn_out, [0, 2, 1, 3])
-    
+
     # Return tuple as expected by PyTorch (we only support inference, not training)
     # The full signature returns 9 values for training, but we only need the first one
     return (result,)
