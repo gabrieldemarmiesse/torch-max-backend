@@ -57,7 +57,7 @@ skip-magic-trailing-comma = true
 dev = [
     # Bump the version of max nightly here
     "mblack==25.6.0.dev2025081619",
-    "max[serve]==25.6.0.dev2025081619",
+    "max==25.6.0.dev2025081619",
     "accelerate>=1.10.0",
     "hatchling",
     "ibm-fms>=1.2.1",
@@ -74,5 +74,6 @@ dev = [
     "torchvision>=0.22.1",
     "transformers>=4.54.1",
     "line-profiler>=5.0.0",
+    "llms-from-scratch>=1.0.17",
 ]
 
