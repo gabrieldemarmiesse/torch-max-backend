@@ -1,5 +1,10 @@
 import pytest
 import torch
+
+
+# Register your helper module for assertion rewriting
+pytest.register_assert_rewrite("torch_max_backend.testing")
+
 from torch_max_backend import get_accelerators
 
 import os
@@ -29,3 +34,10 @@ def tensor_shapes(request):
 def reset_compiler():
     torch.compiler.reset()
     yield
+
+
+@pytest.fixture
+def cuda_device(gpu_available: bool):
+    if not gpu_available:
+        pytest.skip("CUDA not available")
+    return "cuda"

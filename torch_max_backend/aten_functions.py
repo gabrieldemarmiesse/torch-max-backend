@@ -21,6 +21,7 @@ from torch._decomp import core_aten_decompositions
 from torch._ops import OpOverloadPacket, OpOverload
 
 from torch_max_backend.flags import verbose_enabled
+from max.graph import TensorType
 
 Scalar = int | float | Dim
 SymIntType = int | Dim
@@ -238,6 +239,192 @@ def aten__native_batch_norm_legit_no_training(
 
 
 # _pdist_forward(Tensor self, float p=2) -> Tensor
+# _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)
+@map_to(aten._scaled_dot_product_flash_attention)
+def aten__scaled_dot_product_flash_attention(
+    query: TensorValue,
+    key: TensorValue,
+    value: TensorValue,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    return_debug_mask: bool = False,
+    scale: float | None = None,
+):
+    # We return only the first element for now because we don't support training yet.
+    # PyTorch provides tensors in shape [batch, num_heads, seq_len, head_dim]
+    # MAX expects tensors in shape [batch, seq_len, num_heads, head_dim]
+
+    # Transpose from PyTorch format to MAX format
+    q = max_ops.permute(query, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
+    k = max_ops.permute(key, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
+    v = max_ops.permute(value, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
+
+    # Calculate scale if not provided
+    if scale is None:
+        head_dim = query.shape[-1]
+        if isinstance(head_dim, Dim):
+            head_dim_value = int(head_dim)
+        else:
+            head_dim_value = head_dim
+        scale = 1.0 / math.sqrt(float(head_dim_value))
+
+    # Choose mask variant based on is_causal flag
+    mask_variant = MHAMaskVariant.CAUSAL_MASK if is_causal else MHAMaskVariant.NULL_MASK
+
+    # Call flash attention
+    attn_out = flash_attention_gpu(q, k, v, mask_variant=mask_variant, scale=scale)
+
+    # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
+    result = max_ops.permute(attn_out, [0, 2, 1, 3])
+
+    # Return tuple as expected by PyTorch (we only support inference, not training)
+    # The full signature returns 9 values for training, but we only need the first one
+    return (result,)
+
+
+# TODO: remove all of those when https://github.com/modular/modular/issues/5198
+# is fixed
+from dataclasses import dataclass
+from enum import Enum
+
+
+class MHAMaskVariant(str, Enum):
+    CAUSAL_MASK = 0
+    CAUSAL_ALIBI_MASK = 1
+    NULL_MASK = 2
+    CHUNKED_CAUSAL_MASK = 3
+    SLIDING_WINDOW_CAUSAL_MASK = 4
+
+
+class AttentionMaskVariant(str, Enum):
+    NULL_MASK = "null"
+    CAUSAL_MASK = "causal"
+    TENSOR_MASK = "tensor_mask"
+    CHUNKED_CAUSAL_MASK = "chunked_causal"
+    SLIDING_WINDOW_CAUSAL_MASK = "sliding_window_causal"
+
+
+class PositionalEncodingVariant(str, Enum):
+    NO_POS = "no_pos"
+    ALIBI_POS = "alibi_pos"
+
+
+@dataclass
+class MHAMaskConfig:
+    attention_mask_variant: AttentionMaskVariant
+    positional_encoding_variant: PositionalEncodingVariant
+
+
+_MHA_MASK_CONFIG_DICT = {
+    MHAMaskVariant.CAUSAL_MASK: MHAMaskConfig(
+        attention_mask_variant=AttentionMaskVariant.CAUSAL_MASK,
+        positional_encoding_variant=PositionalEncodingVariant.NO_POS,
+    ),
+    MHAMaskVariant.CAUSAL_ALIBI_MASK: MHAMaskConfig(
+        attention_mask_variant=AttentionMaskVariant.CAUSAL_MASK,
+        positional_encoding_variant=PositionalEncodingVariant.ALIBI_POS,
+    ),
+    MHAMaskVariant.NULL_MASK: MHAMaskConfig(
+        attention_mask_variant=AttentionMaskVariant.NULL_MASK,
+        positional_encoding_variant=PositionalEncodingVariant.NO_POS,
+    ),
+    MHAMaskVariant.CHUNKED_CAUSAL_MASK: MHAMaskConfig(
+        attention_mask_variant=AttentionMaskVariant.CHUNKED_CAUSAL_MASK,
+        positional_encoding_variant=PositionalEncodingVariant.NO_POS,
+    ),
+    MHAMaskVariant.SLIDING_WINDOW_CAUSAL_MASK: MHAMaskConfig(
+        attention_mask_variant=AttentionMaskVariant.SLIDING_WINDOW_CAUSAL_MASK,
+        positional_encoding_variant=PositionalEncodingVariant.NO_POS,
+    ),
+}
+
+
+def flash_attention_gpu(
+    q: TensorValue,
+    k: TensorValue,
+    v: TensorValue,
+    mask_variant: MHAMaskVariant,
+    scale: float,
+    local_window_size: int = -1,
+    valid_length: TensorValue | None = None,
+) -> TensorValue:
+    """Computes flash attention using GPU-optimized kernel.
+
+    Args:
+        q: Query tensor of shape [batch, seq_len, num_heads, head_dim]
+        k: Key tensor of shape [batch, seq_len, num_heads, head_dim]
+        v: Value tensor of shape [batch, seq_len, num_heads, head_dim]
+        mask_variant: The mask variant to use for attention
+        scale: Scaling factor for attention scores
+        local_window_size: Local window size for sliding window attention
+        valid_length: Optional tensor of shape [batch] with dtype uint32.
+            When provided, uses the padded kernel variant that respects
+            the valid sequence lengths for each batch element.
+
+    Returns:
+        Output tensor of shape [batch, seq_len, num_heads, head_dim]
+    """
+    if q.dtype != k.dtype or q.dtype != v.dtype:
+        msg = (
+            "q, k, v must have matching dtypes. Got "
+            f"q.dtype={q.dtype}, k.dtype={k.dtype}, v.dtype={v.dtype}"
+        )
+        raise ValueError(msg)
+
+    expected_rank = 4
+    for name, tensor in [("q", q), ("k", k), ("v", v)]:
+        if tensor.rank != expected_rank:
+            msg = f"{name} must be rank {expected_rank}, got {tensor.rank}"
+            raise ValueError(msg)
+
+    # Validate head dimension matches across all inputs
+    head_dim = q.shape[-1]
+    if k.shape[-1] != head_dim or v.shape[-1] != head_dim:
+        msg = (
+            "All inputs must have same head_dim. Got "
+            f"q: {head_dim}, k: {k.shape[-1]}, v: {v.shape[-1]}"
+        )
+        raise ValueError(msg)
+
+    # Validate valid_length if provided
+    if valid_length is not None:
+        if valid_length.dtype != DType.uint32:
+            msg = f"valid_length must have dtype uint32, got {valid_length.dtype}"
+            raise ValueError(msg)
+
+        if valid_length.rank != 1:
+            msg = f"valid_length must be rank 1, got {valid_length.rank}"
+            raise ValueError(msg)
+
+        if valid_length.shape[0] != q.shape[0]:
+            msg = (
+                f"valid_length batch size ({valid_length.shape[0]}) must match "
+                f"q batch size ({q.shape[0]})"
+            )
+            raise ValueError(msg)
+
+    mha_mask_config = _MHA_MASK_CONFIG_DICT[mask_variant]
+    parameters: dict[str, int | str | DType] = {}
+    parameters["mask_str"] = mha_mask_config.attention_mask_variant.value
+    parameters["score_mod_str"] = mha_mask_config.positional_encoding_variant.value
+    parameters["local_window_size"] = local_window_size
+
+    op_name = "mo.mha.no_cache"
+    values = [q, k, v]
+    if valid_length is not None:
+        op_name = "mo.mha.padded.no_cache"
+        values.append(valid_length)
+    values.append(max_ops.constant(scale, dtype=DType.float32, device=DeviceRef.CPU()))
+
+    return max_ops.custom(
+        op_name,
+        values=values,
+        out_types=[TensorType(dtype=q.dtype, shape=q.shape, device=q.device)],
+        parameters=parameters,
+        device=q.device,
+    )[0].tensor
+
+
 # _softmax(Tensor self, int dim, bool half_to_float) -> Tensor
 @map_to(aten._softmax)
 def aten__softmax(input, dim, half_to_float):

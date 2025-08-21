@@ -1297,6 +1297,63 @@ def test_transpose_negative_dims(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_scaled_dot_product_flash_attention_basic(cuda_device: str, dtype: torch.dtype):
+    """Test _scaled_dot_product_flash_attention basic functionality"""
+
+    def fn(q, k, v):
+        return torch.ops.aten._scaled_dot_product_flash_attention(
+            q, k, v, dropout_p=0.0, is_causal=False, return_debug_mask=False
+        )[0]  # For the moment we support only training
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 8, 16
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_scaled_dot_product_flash_attention_with_causal(cuda_device: str, dtype: str):
+    """Test _scaled_dot_product_flash_attention with causal masking"""
+
+    def fn(q, k, v):
+        return torch.ops.aten._scaled_dot_product_flash_attention(
+            q, k, v, dropout_p=0.0, is_causal=True, return_debug_mask=False
+        )[0]  # For the moment we support only training
+
+    batch_size, num_heads, seq_len, head_dim = 1, 2, 4, 8
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_scaled_dot_product_flash_attention_with_scale(cuda_device: str, dtype):
+    """Test _scaled_dot_product_flash_attention with custom scale"""
+
+    def fn(q, k, v):
+        return torch.ops.aten._scaled_dot_product_flash_attention(
+            q,
+            k,
+            v,
+            dropout_p=0.0,
+            is_causal=False,
+            return_debug_mask=False,
+            scale=0.125,
+        )[0]  # For the moment we support only training
+
+    batch_size, num_heads, seq_len, head_dim = 1, 1, 4, 8
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
+
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+
+
 def test_transpose_same_dim(device: str):
     """Test transpose with same dimension (should be no-op)"""
 

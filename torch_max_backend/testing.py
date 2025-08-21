@@ -26,8 +26,10 @@ def check_functions_are_equivalent(
         output_original = [output_original]
         output_compiled = [output_compiled]
 
-    for original, compiled in zip(output_original, output_compiled):
-        assert original.shape == compiled.shape
-        assert original.device == compiled.device
-        assert original.dtype == compiled.dtype
-        assert torch.allclose(original, compiled, rtol=rtol, atol=atol)
+    for i, (original, compiled) in enumerate(zip(output_original, output_compiled)):
+        assert original.shape == compiled.shape, f"Issue with output {i}"
+        assert original.device == compiled.device, f"Issue with output {i}"
+        assert original.dtype == compiled.dtype, f"Issue with output {i}"
+        assert torch.allclose(original, compiled, rtol=rtol, atol=atol), (
+            f"Issue with output {i}"
+        )
