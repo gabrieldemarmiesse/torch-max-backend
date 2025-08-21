@@ -6,6 +6,7 @@ from torch_max_backend.testing import check_functions_are_equivalent
 from torch.ops import aten
 from torch._dynamo.exc import BackendCompilerFailed
 
+
 def test_basic_addition(device: str):
     def fn(x, y):
         return x + y
@@ -2762,29 +2763,31 @@ def test_max_pool2d_various_sizes(device: str):
 
 
 def test_max_pool2d_error_message_not_supported_output(device: str):
-
     def fn(x):
         return aten.max_pool2d_with_indices(x, kernel_size=2, stride=2)
 
     # Test different sizes
     batch_size, channels = 1, 2
     x = torch.randn(batch_size, channels, 16, 16)
-    with pytest.raises(BackendCompilerFailed, match="The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet."):
+    with pytest.raises(
+        BackendCompilerFailed,
+        match="The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet.",
+    ):
         check_functions_are_equivalent(fn, device, [x])
 
 
-
 def test_max_pool2d_error_message_not_supported_in_graph(device: str):
-
     def fn(x):
         return aten.max_pool2d_with_indices(x, kernel_size=2, stride=2)[1] * 2
 
     # Test different sizes
     batch_size, channels = 1, 2
     x = torch.randn(batch_size, channels, 16, 16)
-    with pytest.raises(BackendCompilerFailed, match="The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet."):
+    with pytest.raises(
+        BackendCompilerFailed,
+        match="The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet.",
+    ):
         check_functions_are_equivalent(fn, device, [x])
-
 
 
 def test_adaptive_avg_pool2d_global(device: str):
