@@ -32,7 +32,7 @@ jobs:
       - name: Cache Modular directory
         uses: actions/cache@v4
         with:
-          path: ~/.local/share/modular/
+          path: /tmp/modular/
           key: modular-${{ matrix.test-index }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             modular-${{ matrix.test-index }}
@@ -45,5 +45,7 @@ jobs:
           uv run echo hello
       
       - name: Run tests with pytest
+        env:
+          MODULAR_HOME: /tmp/modular/
         run: |
-          uv run pytest -n auto -v --splits 8 --group ${{ matrix.test-index }}
+          uv run pytest -n auto -v --forked --splits 8 --group ${{ matrix.test-index }}

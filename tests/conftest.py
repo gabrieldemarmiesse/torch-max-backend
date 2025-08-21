@@ -2,6 +2,10 @@ import pytest
 import torch
 from torch_max_backend import get_accelerators
 
+import os
+
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+
 
 @pytest.fixture(params=["cpu", "cuda"])
 def device(request, gpu_available: bool):

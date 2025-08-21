@@ -1,20 +1,21 @@
 import torch
 from max.dtype import DType
-
+from collections.abc import Callable
 from max.graph import Graph
 from max.torch.torch import max_device_ref
 import max.graph.value
 from max import engine
 from max.driver import Accelerator, accelerator_count, CPU
-from .mappings import MAPPING_TORCH_TO_MOJO_FUNCTIONS
+from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
 import warnings
 from torch._dynamo.backends.common import aot_autograd
-
+from max.driver import Device
 from functorch.compile import make_boxed_func
-from torch._decomp import core_aten_decompositions
-from torch.fx.experimental.proxy_tensor import make_fx
+from torch_max_backend.aten_functions import DECOMPOSITION_TABLE
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
+import traceback
+from typing import Any
 
 
 class MaxCompilerError(Exception):
@@ -24,54 +25,22 @@ class MaxCompilerError(Exception):
 import datetime as dt
 
 
-def apply_decompositions(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
-    """
-    Apply decompositions to any unsupported operations using PyTorch's make_fx.
-    This is a generic solution that works for any operation in core_aten_decompositions.
-    """
-    decomposition_table = core_aten_decompositions()
-    # Check if any nodes need decomposition
-    needs_decomposition = any(
-        node.op == "call_function" and node.target in decomposition_table
-        for node in gm.graph.nodes
-    )
-
-    if not needs_decomposition:
-        return gm
-
-    # Create a wrapper function that applies decompositions using make_fx
-    def decompose_with_make_fx(*args):
-        # We need to create a function that represents the entire graph
-        # and then apply decompositions to it
-        return gm(*args)
-
-    # Get example inputs from the first few placeholder nodes
-    example_inputs = []
+def gather_stats_on_graph(gm: torch.fx.GraphModule):
+    # count the number of times we see each function.
+    # print and sort alphabetically.
+    function_counts = {}
     for node in gm.graph.nodes:
-        if node.op == "placeholder":
-            if "val" in node.meta:
-                example_value = node.meta["val"]
-            elif "example_value" in node.meta:
-                example_value = node.meta["example_value"]
-            else:
-                # Create a dummy tensor - this might not work for all cases
-                example_value = torch.tensor(0.0)
-
-            if isinstance(example_value, torch.Tensor):
-                # Use the exact same shape as the original to avoid shape mismatches
-                dummy_tensor = torch.zeros_like(example_value)
-                example_inputs.append(dummy_tensor)
-            else:
-                example_inputs.append(example_value)
-
-    # Apply decompositions using make_fx
-    decomposed_gm = make_fx(
-        decompose_with_make_fx, decomposition_table=decomposition_table
-    )(*example_inputs)
-    return decomposed_gm
+        if node.op == "call_function" or node.op == "call_method":
+            name = get_fully_qualified_name(node.target)
+            function_counts.setdefault(name, 0)
+            function_counts[name] += 1
+    sorted_counts = sorted(function_counts.items(), key=lambda x: x[1], reverse=True)
+    print("Function call counts:")
+    for name, count in sorted_counts:
+        print(f"{name}: {count}")
 
 
-def get_fully_qualified_name(func):
+def get_fully_qualified_name(func: Callable | str) -> str:
     if isinstance(func, str):
         return f"torch.Tensor.{func}"
     result = ""
@@ -85,7 +54,10 @@ def get_fully_qualified_name(func):
     return result
 
 
-def keep_only_tensors(inputs: list, detach: bool = False) -> list[torch.Tensor]:
+def keep_only_tensors(
+    inputs: list[int | float | torch.Tensor] | tuple[int | float | torch.Tensor, ...],
+    detach: bool = False,
+) -> list[torch.Tensor]:
     result = []
     for x in inputs:
         if isinstance(x, torch.Tensor):
@@ -97,7 +69,7 @@ def keep_only_tensors(inputs: list, detach: bool = False) -> list[torch.Tensor]:
 
 class TensorsBook:
     def __init__(self):
-        self.tensors = {}
+        self.tensors: dict[str, Any] = {}
 
     def __setitem__(self, name: str, tensor):
         self.tensors[name] = tensor
@@ -154,58 +126,31 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
     return attr_itr
 
 
+def get_error_message(
+    node: torch.fx.Node, node_idx: int, func_args: list, func_kwargs: dict
+) -> str:
+    if node.stack_trace is None:
+        stack_trace = "No stack trace available, likely because this node is the result of a decomposition."
+    else:
+        stack_trace = node.stack_trace
+    return (
+        f"Failing at node {node_idx} when executing function {get_fully_qualified_name(node.target)}. "
+        f"inputs of node were: args={func_args}, kwargs={func_kwargs}. "
+        f"You can open an issue at https://github.com/gabrieldemarmiesse/torch-max-backend/issues . "
+        f"It comes from there in your code: \n"
+        f"{stack_trace}\n"
+    )
+
+
 class _GraphFactory:
     def __init__(self):
         self.names_to_input_idx: dict[str, int] = {}
         self.shape_names_to_input_dim: dict[str, tuple[str, int]] = {}
-        self.graph_inputs = []
-        self.graph = None
+        self.graph_inputs: list[max.graph.value.TensorType] = []
+        self.graph: Graph | None = None
         self.tensor_book = TensorsBook()
         # Link the shape expressions (names) to the node names
         self.expression_to_node_name: dict[str, str] = {}
-
-    def find_live_nodes(self, gm: torch.fx.GraphModule) -> set[torch.fx.Node]:
-        """
-        Find all nodes that contribute to the final outputs using backward traversal.
-        This eliminates dead branches that don't affect any outputs.
-        """
-        live_nodes = set()
-
-        # Find output nodes first
-        output_nodes = [node for node in gm.graph.nodes if node.op == "output"]
-
-        def mark_live(node: torch.fx.Node):
-            if node in live_nodes:
-                return
-            live_nodes.add(node)
-
-            # Mark all input nodes as live
-            for arg in node.args:
-                if isinstance(arg, torch.fx.Node):
-                    mark_live(arg)
-                elif isinstance(arg, list | tuple):
-                    for item in arg:
-                        if isinstance(item, torch.fx.Node):
-                            mark_live(item)
-
-            for kwarg in node.kwargs.values():
-                if isinstance(kwarg, torch.fx.Node):
-                    mark_live(kwarg)
-                elif isinstance(kwarg, list | tuple):
-                    for item in kwarg:
-                        if isinstance(item, torch.fx.Node):
-                            mark_live(item)
-
-        # Start from output nodes and work backwards
-        for output_node in output_nodes:
-            mark_live(output_node)
-
-        # Always include placeholder nodes as they represent inputs
-        for node in gm.graph.nodes:
-            if node.op == "placeholder":
-                live_nodes.add(node)
-
-        return live_nodes
 
     def initialize_graph(self):
         if self.graph is not None:
@@ -257,31 +202,34 @@ class _GraphFactory:
             k: self.tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
         }
         key = node.target
-        if hasattr(key, "namespace") and key.namespace == "aten":
+
+        # TODO: refactor this
+        if (
+            key not in MAPPING_TORCH_ATEN_TO_MAX
+            and key.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX
+        ):
             key = key.overloadpacket
 
-        if key not in MAPPING_TORCH_TO_MOJO_FUNCTIONS:
-            raise ValueError(
-                f"Failing at node {node_idx}. Function {get_fully_qualified_name(node.target)}  "
-                f"not supported by the Max backend yet. "
-                f"inputs of node were: args={func_args}, kwargs={func_kwargs}. It comes from there in your code: \n"
-                f"{node.stack_trace}"
+        if key not in MAPPING_TORCH_ATEN_TO_MAX:
+            raise MaxCompilerError(
+                "The aten function is not supported by the Max backend yet. "
+                + get_error_message(node, node_idx, func_args, func_kwargs)
+                + "You can try to write it yourself and insert it in the MAPPING_TORCH_ATEN_TO_MAX dictionary."
             )
-
         try:
-            func_output = MAPPING_TORCH_TO_MOJO_FUNCTIONS[key](
-                *func_args, **func_kwargs
-            )
+            mapping_func = MAPPING_TORCH_ATEN_TO_MAX[key]
+            func_output = mapping_func(*func_args, **func_kwargs)
         except Exception as e:
             raise MaxCompilerError(
-                f"Failed to execute node {node_idx} with target {get_fully_qualified_name(node.target)}, "
-                f"inputs were: args={func_args}, kwargs={func_kwargs}. Error: {e}. It comes from there in your code: \n"
-                f"{node.stack_trace}"
-            ) from e
+                get_error_message(node, node_idx, func_args, func_kwargs)
+                + "There was an error when executing the function. See the original error below. \n"
+                f"{e}\n"
+                f"{traceback.format_exc()}"
+            )
         self.tensor_book[node.name] = func_output
 
     def handle_get_attr(self, node: torch.fx.Node):
-        attr_value = self.fetch_attr(node.target)
+        attr_value = fetch_attr(self.graph, node.target)
         self.tensor_book[node.name] = attr_value
 
     def handle_output(self, node: torch.fx.Node):
@@ -307,23 +255,8 @@ class _GraphFactory:
         return output_blueprint
 
     def create_graph(self, gm: torch.fx.GraphModule) -> tuple[Graph, list[int | None]]:
-        # First, identify live nodes to eliminate dead branches
-        live_nodes = self.find_live_nodes(gm)
-
-        # Count dead nodes for reporting
-        total_nodes = len(list(gm.graph.nodes))
-        dead_nodes = total_nodes - len(live_nodes)
-        if verbose_enabled():
-            print(
-                f"Dead branch elimination: Skipping {dead_nodes} dead nodes out of {total_nodes} total nodes"
-            )
-
         output_blueprint = None
         for node_idx, node in enumerate(gm.graph.nodes):
-            # Skip dead nodes
-            if node not in live_nodes:
-                continue
-
             if node.op == "placeholder":
                 self.handle_placeholder(node)
                 continue
@@ -346,33 +279,29 @@ class _GraphFactory:
         return self.graph, output_blueprint
 
 
-def get_accelerators():
-    yield CPU()
+def get_accelerators() -> list[Device]:
+    result = [CPU()]
     if accelerator_count() > 0:
         for i in range(accelerator_count()):
             try:
-                yield Accelerator(i)
+                result.append(Accelerator(i))
             except ValueError as e:
                 warnings.warn(f"Failed to create accelerator {i}. {e}")
+    return result
 
 
 class BaseMaxCompiler:
-    def __init__(
-        self, gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
-    ):
+    def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         if profiling_enabled():
             compiler_start = time.time_ns()
-        self.example_inputs = example_inputs
-        gm = apply_decompositions(gm)
         if verbose_enabled():
-            gm.graph.print_tabular()
+            print(f"Graph has {len(gm.graph.nodes)} nodes.")
+            gather_stats_on_graph(gm)
 
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
-
-        session = engine.InferenceSession(devices=list(get_accelerators()))
         if profiling_enabled():
             graph_defined_time = time.time_ns()
-
+        session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
         if profiling_enabled():
             compiling_done_time = time.time_ns()
@@ -385,7 +314,7 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
-    def __call__(self, *args) -> list[torch.Tensor]:
+    def __call__(self, *args) -> list[torch.Tensor | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
             start_inference_time = time.time_ns()
@@ -409,10 +338,12 @@ class BaseMaxCompiler:
 
 
 def _MaxCompilerBackpropCompatible(
-    gm: torch.fx.GraphModule, example_inputs: list[torch.Tensor], mode=None
+    gm: torch.fx.GraphModule, example_inputs: list, mode=None
 ):
     _max_compiler = BaseMaxCompiler(gm, example_inputs)
     return make_boxed_func(_max_compiler.__call__)
 
 
-max_backend = aot_autograd(fw_compiler=_MaxCompilerBackpropCompatible)
+max_backend = aot_autograd(
+    fw_compiler=_MaxCompilerBackpropCompatible, decompositions=DECOMPOSITION_TABLE
+)

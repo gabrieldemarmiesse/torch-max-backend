@@ -23,8 +23,8 @@ This is a PyTorch backend implementation using Modular's MAX framework. The proj
 ## Common Commands
 
 ```bash
-# Run tests (with parallel execution and forking for isolation)
-uv run pytest -v -n 2 --forked
+# Run tests (with parallel execution)
+uv run pytest -n 15
 
 # Run specific test file
 uv run pytest tests/test_compiler.py
@@ -160,3 +160,28 @@ def my_function(x, y):
 ```
 
 Device compatibility should be checked using `get_accelerators()` before GPU usage.
+
+
+## To add support for an op
+To add support for an op, the process is the following:
+We use test-driven dev
+1) Ask a subagent to explore the pytorch codebase `../pytorch` and look for the signature and the meaning of inputs and outputs of this aten function and to give you a full report.
+2) Write a few unit tests in test_aten_functions.py using this op directly (somewhere in the middle of the file to avoid conflicts).
+3) Run those unit tests. You should see an error message explaining that the aten op is not supported.
+4) Find in aten_functions.py the comment giving the signature of the aten op. If it's not there, add it 
+   yourself. Note that the file is sorted alphabetically and must remain this way. 
+5) Ask a subagent to look into the directory `../modular/max` to find if functions exist in MAX to do something similar (sometimes they have direct equivalents) or can be composed to re-implement the op. You can also explore the models created with Max as they have examples of using those ops. `kernels.py` has sometimes more complexe ops, you can look into that too. The subagent must give you a full report of useful functions for your task and descriptions of inputs and outputs.
+6) Just below it, write the aten op implementation with the max functions you just found.
+7) Re-run the unit tests and make sure they're passing. Do not hesistate to use pytest.mark.parametrize 
+   to test many input data types.
+8) When you're done, make sure the whole test suite is passing with `uv run pytest -n 15` 
+   and the linter with `uvx pre-commit run --all-files`.
+
+## To find the correct type hints for a function
+It may be hard to find the correct type hints for a function. What you should do in this case is:
+1) Add an obviously wrong type hint, for example datetime.timezone in an aten function.
+2) Run an existing unit test that calls this function.
+3) Beartype will throw an error and give the name of the type being actually passed to the function.
+4) Replace the type hint by the type given by beartype.
+5) Run the unit test again to check that it works.
+6) Run the whole test suite to verify that the type hint shouldn't be wider.

@@ -60,6 +60,7 @@ def predict_image(image_path_or_url, top_k=5):
 
     labels = load_imagenet_labels()
 
+    print("Top Predictions: (boxer should come first)")
     for i in range(top_k):
         class_idx = top_class[i].item()
         prob = top_prob[i].item()

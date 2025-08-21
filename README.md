@@ -5,7 +5,7 @@ Simply use [`torch.compile`](https://docs.pytorch.org/tutorials/intermediate/tor
 ## Installation
 
 ```bash
-pip install git+https://github.com/gabrieldemarmiesse/max-torch-backend.git
+pip install torch-max-backend
 ```
 
 ## Quick Start
@@ -98,7 +98,37 @@ model = model.to(device)
 
 ## Supported Operations
 
-The backend currently supports every op listed in [`mappings.py`](https://github.com/gabrieldemarmiesse/max-torch-backend/blob/main/torch_max_backend/mappings.py)
+The backend currently supports operations defined in [`aten_functions.py`](https://github.com/gabrieldemarmiesse/max-torch-backend/blob/main/torch_max_backend/aten_functions.py). You can view the mapping dictionary by importing `MAPPING_TORCH_ATEN_TO_MAX`.
+
+## Extending the Backend
+
+You can add support for new PyTorch operations without cloning the repository by creating custom mappings:
+
+```python
+from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
+from torch.ops import aten
+import max_ops
+
+# Example: Add support for a new operation
+def my_custom_tanh(x):
+    return max_ops.tanh(x)
+
+# Register the operation
+MAPPING_TORCH_ATEN_TO_MAX[aten.tanh] = my_custom_tanh
+
+# Now you can use it with torch.compile
+import torch
+from torch_max_backend import max_backend
+
+@torch.compile(backend=max_backend)
+def my_function(x):
+    return torch.tanh(x)  # Will now use your custom implementation
+```
+
+This approach allows you to:
+- Add missing operations your models need
+- Override existing implementations with optimized versions
+- Prototype new MAX operations before contributing them back
 
 ## Performance Tips
 
@@ -123,7 +153,7 @@ You can find more information about dynamic shapes in the [PyTorch documentation
 You can get various information with the following environement variables:
 * `TORCH_MAX_BACKEND_PROFILE=1` to get various information about timing (time to compile, time to run, ...)
 * `TORCH_MAX_BACKEND_VERBOSE=1` to display the graph(s) made by pytorch and various other information.
-
+* `TORCH_MAX_BACKEND_BEARTYPE=0` to disable type checking. By default, everything in the package is type-checked at runtime. But it may lead to errors when actually the code is valid (and the type hint is wrong). You can try disabling the type-checking then to see if the bug goes away. Feel free to open a bug report in any case! Type errors should never happen and are a sign of an internal bug.
 
 ## Contributing
 ### Testing
@@ -138,6 +168,10 @@ uvx pre-commit run --all-files
 uvx pre-commit install
 ```
 
-### Aten ops
-The list of aten ops can be found in [`ressources/aten_ops.txt`](ressources/aten_ops.txt). Sadly 
-the documentation for those ops is non-existant. Reverse-ingeneering is the only thing that works.
+You can try to run all the pretrained models to make sure we're compatible with
+
+```bash
+./pretrained_models/run_all.sh
+# or for example
+uv run pretrained_model/gpt2.sh
+```
