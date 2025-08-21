@@ -19,6 +19,8 @@ import numpy as np
 import math
 from torch._decomp import core_aten_decompositions
 from torch._ops import OpOverloadPacket, OpOverload
+from max.nn.kernels import flash_attention_gpu
+from max.nn.attention.mask_config import MHAMaskVariant
 
 from torch_max_backend.flags import verbose_enabled
 
@@ -241,113 +243,48 @@ def aten__native_batch_norm_legit_no_training(
 # _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)
 @map_to(aten._scaled_dot_product_flash_attention)
 def aten__scaled_dot_product_flash_attention(
-    query,
-    key,
-    value,
-    dropout_p=0.0,
-    is_causal=False,
-    return_debug_mask=False,
-    scale=None,
+    query: TensorValue,
+    key: TensorValue,
+    value: TensorValue,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    return_debug_mask: bool = False,
+    scale: float | None = None,
 ):
-    """Scaled dot-product attention implemented from scratch using existing aten functions."""
-    batch_size, num_heads, seq_len_q, head_dim = query.shape
-    seq_len_k = key.shape[2]
-
-    # Handle default scale: 1/sqrt(head_dim)
+    # We return only the first element for now because we don't support training yet.
+    # PyTorch provides tensors in shape [batch, num_heads, seq_len, head_dim]
+    # MAX expects tensors in shape [batch, seq_len, num_heads, head_dim]
+    
+    # Transpose from PyTorch format to MAX format
+    q = max_ops.permute(query, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
+    k = max_ops.permute(key, [0, 2, 1, 3])    # [batch, seq_len, num_heads, head_dim]
+    v = max_ops.permute(value, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
+    
+    # Calculate scale if not provided
     if scale is None:
-        if hasattr(head_dim, "__index__"):  # Handle Dim type
-            head_dim_val = int(head_dim)
+        head_dim = query.shape[-1]
+        if isinstance(head_dim, Dim):
+            head_dim_value = int(head_dim)
         else:
-            head_dim_val = head_dim
-        scale = 1.0 / math.sqrt(float(head_dim_val))
-
-    # Step 1: Compute Q @ K^T
-    # Transpose key from (B, H, S_k, D) to (B, H, D, S_k) for matrix multiplication
-    key_transposed = aten_transpose(key, 2, 3)
-    scores = max_ops.matmul(query, key_transposed)  # (B, H, S_q, S_k)
-
-    # Step 2: Scale the scores
-    scores = aten_mul(scores, scale)
-
-    # Step 3: Apply causal mask if requested
-    if is_causal and seq_len_q == seq_len_k:
-        # Create a causal mask using available aten functions
-        # This is a simplified implementation - for full support we'd need more advanced indexing
-        # For now, we'll skip the mask and warn about limited causal support
-        if seq_len_q > 1:
-            import warnings
-
-            warnings.warn("Causal masking is simplified in this implementation")
-
-    # Step 4: Apply softmax along the last dimension
-    attention_weights = aten_softmax(scores, dim=-1)
-
-    # Step 5: Apply dropout (skip if dropout_p > 0 since we don't have a proper dropout implementation)
-    if dropout_p > 0.0:
-        import warnings
-
-        warnings.warn("Dropout is not supported in this flash attention implementation")
-
-    # Step 6: Compute attention_weights @ V
-    attention_output = max_ops.matmul(attention_weights, value)  # (B, H, S_q, D)
-
-    # Step 7: Create the 9-tuple output required by PyTorch
-    # Most of these are metadata for backward pass - we'll create simple placeholders
-
-    # Convert dimensions to int for creating tensors
-    batch_size_int = int(batch_size) if hasattr(batch_size, "__index__") else batch_size
-    num_heads_int = int(num_heads) if hasattr(num_heads, "__index__") else num_heads
-    seq_len_q_int = int(seq_len_q) if hasattr(seq_len_q, "__index__") else seq_len_q
-    seq_len_k_int = int(seq_len_k) if hasattr(seq_len_k, "__index__") else seq_len_k
-
-    # logsumexp: used in backward pass (placeholder with zeros)
-    zero_scalar = max_ops.constant(
-        np.array(0.0), dtype=query.dtype, device=query.device
+            head_dim_value = head_dim
+        scale = 1.0 / math.sqrt(float(head_dim_value))
+    
+    # Choose mask variant based on is_causal flag
+    mask_variant = MHAMaskVariant.CAUSAL_MASK if is_causal else MHAMaskVariant.NULL_MASK
+    
+    # Call flash attention
+    attn_out = flash_attention_gpu(
+        q, k, v,
+        mask_variant=mask_variant,
+        scale=scale
     )
-    logsumexp = max_ops.broadcast_to(
-        zero_scalar, [batch_size_int, num_heads_int, seq_len_q_int]
-    )
-
-    # cum_seq_q, cum_seq_k: cumulative sequence lengths (empty for non-nested tensors)
-    empty_int64_array = max_ops.constant(
-        np.array([], dtype=np.int64), dtype=DType.int64, device=query.device
-    )
-    cum_seq_q = max_ops.reshape(empty_int64_array, [0])
-    cum_seq_k = max_ops.reshape(empty_int64_array, [0])
-
-    # max_q, max_k: maximum sequence lengths (as SymInt)
-    max_q = seq_len_q_int
-    max_k = seq_len_k_int
-
-    # rng_state: random number generator state (placeholder)
-    zero_int64_scalar = max_ops.constant(
-        np.array(0), dtype=DType.int64, device=query.device
-    )
-    rng_state = max_ops.broadcast_to(zero_int64_scalar, [2])
-
-    # unused: unused tensor (placeholder)
-    unused = max_ops.broadcast_to(zero_int64_scalar, [1])
-
-    # debug_attn_mask: attention mask for debugging
-    if return_debug_mask:
-        debug_attn_mask = attention_weights
-    else:
-        empty_float_array = max_ops.constant(
-            np.array([]), dtype=query.dtype, device=query.device
-        )
-        debug_attn_mask = max_ops.reshape(empty_float_array, [0])
-
-    return (
-        attention_output,
-        logsumexp,
-        cum_seq_q,
-        cum_seq_k,
-        max_q,
-        max_k,
-        rng_state,
-        unused,
-        debug_attn_mask,
-    )
+    
+    # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
+    result = max_ops.permute(attn_out, [0, 2, 1, 3])
+    
+    # Return tuple as expected by PyTorch (we only support inference, not training)
+    # The full signature returns 9 values for training, but we only need the first one
+    return (result,)
 
 
 # _softmax(Tensor self, int dim, bool half_to_float) -> Tensor
