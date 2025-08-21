@@ -168,6 +168,10 @@ uvx pre-commit run --all-files
 uvx pre-commit install
 ```
 
-### Aten ops
-The list of aten ops can be found in [`ressources/aten_ops.txt`](ressources/aten_ops.txt). Sadly 
-the documentation for those ops is non-existant. Reverse-ingeneering is the only thing that works.
+You can try to run all the pretrained models to make sure we're compatible with
+
+```bash
+./pretrained_models/run_all.sh
+# or for example
+uv run pretrained_model/gpt2.sh
+```
