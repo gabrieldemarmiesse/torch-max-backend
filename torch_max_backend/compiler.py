@@ -76,7 +76,10 @@ class TensorsBook:
 
     def convert_to_max(self, something):
         if isinstance(something, torch.fx.Node):
-            return self.tensors[something.name]
+            input_tensor = self.tensors[something.name]
+            if isinstance(input_tensor, NotImplementedError):
+                raise input_tensor
+            return input_tensor
         elif isinstance(something, str):
             return something
         elif isinstance(something, int):
@@ -101,6 +104,8 @@ class TensorsBook:
             return something
         elif isinstance(something, torch.memory_format):
             return something
+        elif isinstance(something, NotImplementedError):
+            raise something
         elif something is None:
             return None
         elif something == ...:
@@ -297,6 +302,7 @@ class BaseMaxCompiler:
         if verbose_enabled():
             print(f"Graph has {len(gm.graph.nodes)} nodes.")
             gather_stats_on_graph(gm)
+            gm.graph.print_tabular()
 
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
         if profiling_enabled():

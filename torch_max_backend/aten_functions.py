@@ -1319,7 +1319,7 @@ def aten_max(*args, **kwargs):
 @map_to(aten.max_pool2d_with_indices)
 def aten_max_pool2d_with_indices(
     input, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False
-) -> tuple[TensorValue,]:
+) -> tuple[TensorValue, NotImplementedError]:
     # the first output is the values, the second output is the indices
     # most of the time people just want the values so we'll implement that
     # for now.
@@ -1349,8 +1349,11 @@ def aten_max_pool2d_with_indices(
 
     # Convert result back from NHWC to NCHW for PyTorch compatibility
     forward_result = result.permute([0, 3, 1, 2])
-    # TODO: Add indices
-    return (forward_result,)
+    return (
+        forward_result, 
+        NotImplementedError("The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet.")
+    )
+    
 
 
 # max_pool2d_with_indices_backward(Tensor grad_output, Tensor self, int[2] kernel_size, int[2] stride, int[2] padding, int[2] dilation, bool ceil_mode, Tensor indices) -> Tensor
