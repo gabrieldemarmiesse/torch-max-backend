@@ -40,45 +40,14 @@ max = [
 mblack = [
     { index = "modular-nightly" },
 ]
-torch = [
-  { index = "pytorch-cpu", extra = "cpu" },
-  { index = "pytorch-cpu", extra = "cu128" },
-]
-
 
 [[tool.uv.index]]
 name = "modular-nightly"
 url = "https://dl.modular.com/public/nightly/python/simple/"
 explicit = true
 
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
 [tool.uv]
 prerelease = "allow"
-conflicts = [
-  [
-    { extra = "cpu" },
-    { extra = "cu128" },
-  ],
-]
-
-
-[project.optional-dependencies]
-cpu = [
-  "torch",
-]
-cu128 = [
-  "torch",
-]
-
 
 
 [tool.ruff.format]
