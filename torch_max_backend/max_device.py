@@ -6,6 +6,14 @@ from max.graph import Graph, TensorType
 from max import engine
 import numpy as np
 from torch_max_backend import get_accelerators
+from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
+import max.driver
+from torch.ops import aten
+
+
+class Placeholder:
+    def __init__(self, index):
+        self.index = index
 
 
 class MaxTensor(torch.Tensor):
@@ -27,7 +35,7 @@ class MaxTensor(torch.Tensor):
             r = torch.Tensor._make_wrapper_subclass(
                 cls,
                 data,
-                dtype=torch.float32,
+                dtype=torch.float32,  # TODO fix this
                 device=device or torch.device("max_gpu"),
                 requires_grad=False,
             )
@@ -37,129 +45,105 @@ class MaxTensor(torch.Tensor):
     def __torch_dispatch__(self, func, types, args, kwargs=None):
         if kwargs is None:
             kwargs = {}
+        if func == aten._to_copy.default and kwargs.get("device") != torch.device(
+            "max_gpu"
+        ):
+            if kwargs.get("device") == torch.device("cpu"):
+                # TODO: transfer on the cpu with max
+                return torch.from_dlpack(args[0]._max_data).to("cpu")
+            else:
+                raise NotImplementedError("Transfer to non-CPU devices not implemented")
+        input_tensors = []
+        list_of_input_specs = []
 
-        # Handle specific operations
-        if func == torch.ops.aten.add.Tensor:
-            return self._add_impl(args[1])
-        elif func == torch.ops.aten.mul.Tensor:
-            return self._mul_impl(args[1])
-        elif func == torch.ops.aten.sqrt.default:
-            return self._sqrt_impl()
-        elif func == torch.ops.aten._to_copy.default:
-            return self._to_impl(kwargs.get("device"))
+        def extract_tensors(arg):
+            if isinstance(arg, torch.Tensor):
+                # create an input spec
+                input_type = TensorType(
+                    dtype=DType.from_torch(arg.dtype),
+                    shape=list(arg.shape),
+                    device=DeviceRef.GPU(),
+                )
+                list_of_input_specs.append(input_type)
+                input_tensors.append(arg._max_data)
+
+                return Placeholder(len(list_of_input_specs) - 1)
+            elif isinstance(arg, int | float):
+                return arg
+            elif isinstance(arg, list):
+                return [extract_tensors(x) for x in arg]
+            elif isinstance(arg, tuple):
+                return tuple(extract_tensors(x) for x in arg)
+            elif isinstance(arg, dict):
+                return {k: extract_tensors(v) for k, v in arg.items()}
+            elif isinstance(arg, torch.dtype):
+                return arg
+            elif isinstance(arg, torch.layout):
+                return arg
+            elif isinstance(arg, torch.device):
+                return arg
+            elif arg is None:
+                return arg
+            else:
+                raise NotImplementedError(f"Argument type {type(arg)} not supported")
+
+        new_args_with_placeholders = extract_tensors(args)
+        new_kwargs_with_placeholders = extract_tensors(kwargs)
+
+        with Graph("add_graph", input_types=list_of_input_specs) as graph:
+
+            def replace_with_inputs(arg):
+                if isinstance(arg, Placeholder):
+                    return graph.inputs[arg.index]
+                elif isinstance(arg, int | float):
+                    return arg
+                elif isinstance(arg, list):
+                    return [replace_with_inputs(x) for x in arg]
+                elif isinstance(arg, tuple):
+                    return tuple(replace_with_inputs(x) for x in arg)
+                elif isinstance(arg, dict):
+                    return {k: replace_with_inputs(v) for k, v in arg.items()}
+                elif isinstance(arg, torch.dtype):
+                    return arg
+                elif isinstance(arg, torch.layout):
+                    return arg
+                elif isinstance(arg, torch.device):
+                    return arg
+                elif arg is None:
+                    return arg
+                else:
+                    raise NotImplementedError(
+                        f"Argument type {type(arg)} not supported"
+                    )
+
+            replaced_args = replace_with_inputs(new_args_with_placeholders)
+            replaced_kwargs = replace_with_inputs(new_kwargs_with_placeholders)
+
+            if func in MAPPING_TORCH_ATEN_TO_MAX:
+                func_to_use = MAPPING_TORCH_ATEN_TO_MAX[func]
+            elif func.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX:
+                func_to_use = MAPPING_TORCH_ATEN_TO_MAX[func.overloadpacket]
+            else:
+                raise NotImplementedError(
+                    f"Operation {func} not implemented for MaxTensor"
+                )
+            out = func_to_use(*replaced_args, **replaced_kwargs)
+            # can be a tuple or a single tensor
+            if isinstance(out, tuple):
+                graph.output(*out)
+                is_tuple = True
+            else:
+                graph.output(out)
+                is_tuple = False
+
+        session = engine.InferenceSession(devices=list(get_accelerators()))
+        model = session.load(graph)
+        output = model.execute(*input_tensors)
+
+        if is_tuple:
+            return tuple(make_max_tensor_from_max(o) for o in output)
         else:
-            raise NotImplementedError(f"Operation {func} not implemented for MaxTensor")
-
-    def _add_impl(self, other):
-        """Custom add implementation"""
-
-        if not isinstance(other, MaxTensor):
-            raise RuntimeError("Can only add MaxTensor to MaxTensor")
-
-        # Get MAX data from tensors
-        lhs_data = self._max_data
-        rhs_data = other._max_data
-
-        if lhs_data is None or rhs_data is None:
-            raise RuntimeError("Tensors don't have MAX data")
-
-        # Create computation graph
-        input_type = TensorType(
-            dtype=DType.float32, shape=list(self.shape), device=DeviceRef.GPU()
-        )
-        with Graph("add_graph", input_types=(input_type, input_type)) as graph:
-            lhs, rhs = graph.inputs
-            out = ops.add(lhs, rhs)
-            graph.output(out)
-
-        # Execute on MAX engine
-        session = engine.InferenceSession(devices=list(get_accelerators()))
-        model = session.load(graph)
-        output = model.execute(lhs_data, rhs_data)[0]
-
-        # Create result MaxTensor
-        result = MaxTensor(self.shape, max_data=output, device=torch.device("max_gpu"))
-        return result
-
-    def _mul_impl(self, other):
-        """Custom multiply implementation"""
-        print("DEBUG: MaxTensor multiply implementation called")
-
-        if not isinstance(other, MaxTensor):
-            raise RuntimeError("Can only multiply MaxTensor with MaxTensor")
-
-        # Get MAX data from tensors
-        lhs_data = self._max_data
-        rhs_data = other._max_data
-
-        if lhs_data is None or rhs_data is None:
-            raise RuntimeError("Tensors don't have MAX data")
-
-        # Create computation graph
-        input_type = TensorType(
-            dtype=DType.float32, shape=list(self.shape), device=DeviceRef.GPU()
-        )
-        with Graph("mul_graph", input_types=(input_type, input_type)) as graph:
-            lhs, rhs = graph.inputs
-            out = ops.mul(lhs, rhs)
-            graph.output(out)
-
-        # Execute on MAX engine
-        session = engine.InferenceSession(devices=list(get_accelerators()))
-        model = session.load(graph)
-        output = model.execute(lhs_data, rhs_data)[0]
-
-        # Create result MaxTensor
-        result = MaxTensor(self.shape, max_data=output, device=torch.device("max_gpu"))
-        print(f"DEBUG: Multiply completed, result shape: {result.shape}")
-        return result
-
-    def _sqrt_impl(self):
-        """Custom sqrt implementation"""
-
-        # Get MAX data from tensor
-        input_data = self._max_data
-
-        if input_data is None:
-            raise RuntimeError("Tensor doesn't have MAX data")
-
-        # Create computation graph
-        input_type = TensorType(
-            dtype=DType.from_torch(self.dtype),
-            shape=list(self.shape),
-            device=DeviceRef.GPU(),
-        )
-        with Graph("sqrt_graph", input_types=(input_type,)) as graph:
-            (input_tensor,) = graph.inputs
-            out = ops.sqrt(input_tensor)
-            graph.output(out)
-
-        # Execute on MAX engine
-        session = engine.InferenceSession(devices=list(get_accelerators()))
-        model = session.load(graph)
-        output = model.execute(input_data)[0]
-
-        # Create result MaxTensor
-        result = MaxTensor(self.shape, max_data=output, device=torch.device("max_gpu"))
-        return result
-
-    def _to_impl(self, device):
-        """Custom to() implementation"""
-        if device is not None and device.type == "cpu":
-            print("DEBUG: Converting MaxTensor to CPU")
-            max_data = self._max_data
-            if max_data is None:
-                return torch.zeros(self.shape, dtype=self.dtype, device="cpu")
-
-            try:
-                cpu_array = max_data.to_numpy()
-                return torch.from_numpy(cpu_array).float()
-            except Exception as e:
-                print(f"GPU->CPU transfer failed: {e}")
-                return torch.zeros(self.shape, dtype=self.dtype, device="cpu")
-
-        # For other devices, return a copy
-        return MaxTensor(self.shape, max_data=self._max_data, device=device)
+            return make_max_tensor_from_max(output[0])
 
 
 class MaxDeviceModule:
@@ -240,6 +224,13 @@ def register_max_ops():
         result = MaxTensor((int(end),), max_data=output, device=torch.device("max_gpu"))
         print(f"DEBUG: Created MaxTensor with shape {result.shape} (data kept on GPU)")
         return result
+
+
+def make_max_tensor_from_max(tensor: max.driver.Tensor) -> MaxTensor:
+    """Convert a max.driver.Tensor to a MaxTensor"""
+    shape = tuple(tensor.shape)
+    max_data = tensor
+    return MaxTensor(shape, max_data=max_data, device=torch.device("max_gpu"))
 
 
 class MaxDeviceBackend:
