@@ -19,7 +19,7 @@ class MaxTensor(torch.Tensor):
                 cls,
                 data.shape,
                 dtype=data.dtype,
-                device=device or torch.device("max_device"),
+                device=device or torch.device("max_gpu"),
                 requires_grad=data.requires_grad,
             )
         else:
@@ -28,7 +28,7 @@ class MaxTensor(torch.Tensor):
                 cls,
                 data,
                 dtype=torch.float32,
-                device=device or torch.device("max_device"),
+                device=device or torch.device("max_gpu"),
                 requires_grad=False,
             )
         r._max_data = max_data
@@ -78,9 +78,7 @@ class MaxTensor(torch.Tensor):
         output = model.execute(lhs_data, rhs_data)[0]
 
         # Create result MaxTensor
-        result = MaxTensor(
-            self.shape, max_data=output, device=torch.device("max_device")
-        )
+        result = MaxTensor(self.shape, max_data=output, device=torch.device("max_gpu"))
         return result
 
     def _mul_impl(self, other):
@@ -112,9 +110,7 @@ class MaxTensor(torch.Tensor):
         output = model.execute(lhs_data, rhs_data)[0]
 
         # Create result MaxTensor
-        result = MaxTensor(
-            self.shape, max_data=output, device=torch.device("max_device")
-        )
+        result = MaxTensor(self.shape, max_data=output, device=torch.device("max_gpu"))
         print(f"DEBUG: Multiply completed, result shape: {result.shape}")
         return result
 
@@ -144,9 +140,7 @@ class MaxTensor(torch.Tensor):
         output = model.execute(input_data)[0]
 
         # Create result MaxTensor
-        result = MaxTensor(
-            self.shape, max_data=output, device=torch.device("max_device")
-        )
+        result = MaxTensor(self.shape, max_data=output, device=torch.device("max_gpu"))
         return result
 
     def _to_impl(self, device):
@@ -204,7 +198,7 @@ class MaxDeviceModule:
     def get_amp_supported_dtype():
         return [torch.float16, torch.bfloat16]
 
-    def max_device(self):
+    def max_gpu(self):
         print("hello")
 
 
@@ -218,9 +212,9 @@ def register_max_ops():
     def empty_max(
         size, dtype=None, layout=None, device=None, pin_memory=None, memory_format=None
     ):
-        # Create a meta tensor first, then create the storage for max_device
+        # Create a meta tensor first, then create the storage for max_gpu
         meta_tensor = torch.empty(size, dtype=dtype or torch.float32, device="meta")
-        # Now we need to make this tensor appear as max_device
+        # Now we need to make this tensor appear as max_gpu
         # For now, return meta tensor - PyTorch will handle device assignment
         meta_tensor._max_data = None
         return meta_tensor
@@ -243,9 +237,7 @@ def register_max_ops():
         output = model.execute()[0]
 
         # Return MaxTensor with GPU data
-        result = MaxTensor(
-            (int(end),), max_data=output, device=torch.device("max_device")
-        )
+        result = MaxTensor((int(end),), max_data=output, device=torch.device("max_gpu"))
         print(f"DEBUG: Created MaxTensor with shape {result.shape} (data kept on GPU)")
         return result
 
@@ -256,11 +248,11 @@ class MaxDeviceBackend:
 
     def register(self):
         """Register the max backend with PyTorch."""
-        # Step 1: Rename privateuse1 backend to "max_device"
-        torch.utils.rename_privateuse1_backend("max_device")
+        # Step 1: Rename privateuse1 backend to "max_gpu"
+        torch.utils.rename_privateuse1_backend("max_gpu")
 
         # Step 2: Register the device module
-        torch._register_device_module("max_device", self.device_module)
+        torch._register_device_module("max_gpu", self.device_module)
 
         # Step 3: Register operations for the PrivateUse1 dispatch key
         register_max_ops()
