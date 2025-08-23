@@ -179,7 +179,7 @@ def rename_privateuse_backend():
 
 
 def _register_device_module():
-    from . import torch_max_device_module
+    from torch_max_backend import torch_max_device_module
 
     torch._register_device_module(device_name, torch_max_device_module)
 
