@@ -9,8 +9,38 @@ from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
 import max.driver
 from torch.ops import aten
 from collections.abc import Callable
+from max.torch.torch import max_device_ref
+from torch_max_backend import torch_max_device_module
+from line_profiler import profile
 
 device_name = "max_device"
+
+
+def current_torch_device() -> torch.device:
+    return torch.device(f"max_device:{torch_max_device_module.current_device()}")
+
+
+def torch_device_to_max_device(x: torch.device) -> DeviceRef:
+    if x.type == "max_device":
+        if x.index is None:
+            index = torch_max_device_module.current_device()
+        else:
+            index = x.index
+        if index == torch_max_device_module.device_count() - 1:
+            return DeviceRef.CPU()
+        else:
+            return DeviceRef.GPU(index)
+    else:
+        return max_device_ref(x)
+
+
+def max_device_to_torch_device(x: max.driver.Device) -> torch.device:
+    if x.label == "cpu":
+        return torch_max_device_module.cpu()
+    elif x.label == "gpu":
+        return torch.device(f"max_device:{x.id}")
+    else:
+        raise ValueError(f"unrecognized device type {x.label}")
 
 
 class Placeholder:
@@ -33,6 +63,7 @@ class Dispatcher:
         self.list_of_input_specs = []
         self.graph = None
 
+    @profile
     def traversal(self, arg):
         if isinstance(arg, torch.Tensor):
             # First pass on the arguments
@@ -40,10 +71,10 @@ class Dispatcher:
             input_type = TensorType(
                 dtype=DType.from_torch(arg.dtype),
                 shape=list(arg.shape),
-                device=DeviceRef.GPU(),
+                device=torch_device_to_max_device(arg.device),
             )
             self.list_of_input_specs.append(input_type)
-            self.input_tensors.append(arg._max_data)
+            self.input_tensors.append(getattr(arg, "_max_data", arg))
             return Placeholder(len(self.list_of_input_specs) - 1)
         elif isinstance(arg, Placeholder):
             # Second pass on the arguments
@@ -67,6 +98,7 @@ class Dispatcher:
         else:
             raise NotImplementedError(f"Argument type {type(arg)} not supported")
 
+    @profile
     def run_with_max_graph(self, tensor, func, types, args, kwargs: dict):
         new_args_with_placeholders = self.traversal(args)
         new_kwargs_with_placeholders = self.traversal(kwargs)
@@ -104,6 +136,7 @@ class MaxTensor(torch.Tensor):
     """Custom tensor subclass that holds MAX engine data"""
 
     @staticmethod
+    @profile
     def __new__(cls, data, max_data=None, device=None):
         # Create tensor with proper device
         if isinstance(data, torch.Tensor):
@@ -114,55 +147,66 @@ class MaxTensor(torch.Tensor):
                 device=device or torch.device("max_gpu"),
                 requires_grad=data.requires_grad,
             )
+            raise ValueError("data should not be a torch.Tensor")
         else:
             # data is a shape tuple
             r = torch.Tensor._make_wrapper_subclass(
                 cls,
                 data,
                 dtype=torch.float32,  # TODO fix this
-                device=device or torch.device("max_gpu"),
+                device=device,
                 requires_grad=False,
             )
         r._max_data = max_data
         return r
 
+    @profile
     def __torch_dispatch__(self, func, types, args, kwargs=None):
         if kwargs is None:
             kwargs = {}
-        if func == aten._to_copy.default and kwargs.get("device") != torch.device(
-            "max_gpu"
-        ):
-            if kwargs.get("device") == torch.device("cpu"):
-                # TODO: transfer on the cpu with max²²
-                return torch.from_dlpack(args[0]._max_data).to("cpu")
-            else:
-                raise NotImplementedError("Transfer to non-CPU devices not implemented")
+        if func == aten._to_copy.default:
+            device = kwargs.get("device")
+            if device.type != "max_device":
+                if kwargs.get("device") == torch.device("cpu"):
+                    # TODO: transfer on the cpu with max
+                    return torch.from_dlpack(args[0]._max_data).to("cpu")
+                else:
+                    raise NotImplementedError(
+                        "Transfer to non-CPU devices not implemented"
+                    )
         return Dispatcher.execute_with_max(self, func, types, args, kwargs)
 
 
 def register_max_ops():
     private_use_name = "PrivateUse1"
-    max_graph_device = DeviceRef.CPU() if device_name == "max_cpu" else DeviceRef.GPU()
 
     @torch.library.impl("aten::arange", private_use_name)
+    @profile
     def arange_max(end, dtype=None, layout=None, device=None, pin_memory=None):
         print(f"DEBUG: arange called with end={end}, device={device}")
         if dtype is None:
             dtype = torch.int64
-        # Create the computation graph
+        if device is None:
+            device = current_torch_device()
+            # Create the computation graph
         with Graph("arange_graph", input_types=tuple()) as graph:
             out = ops.range(
-                0, end, 1, device=max_graph_device, dtype=DType.from_torch(dtype)
+                0,
+                end,
+                1,
+                device=torch_device_to_max_device(device),
+                dtype=DType.from_torch(dtype),
             )
             graph.output(out)
 
         # Execute on MAX engine
-        session = engine.InferenceSession(devices=list(get_accelerators()))
+        accelerators = list(get_accelerators())
+        session = engine.InferenceSession(devices=accelerators)
         model = session.load(graph)
         output = model.execute()[0]
 
         # Return MaxTensor with GPU data
-        result = MaxTensor((int(end),), max_data=output, device=torch.device("max_gpu"))
+        result = make_max_tensor_from_max(output)
         print(f"DEBUG: Created MaxTensor with shape {result.shape} (data kept on GPU)")
         return result
 
@@ -170,8 +214,9 @@ def register_max_ops():
 def make_max_tensor_from_max(tensor: max.driver.Tensor) -> MaxTensor:
     """Convert a max.driver.Tensor to a MaxTensor"""
     shape = tuple(tensor.shape)
-    max_data = tensor
-    return MaxTensor(shape, max_data=max_data, device=torch.device("max_gpu"))
+    return MaxTensor(
+        shape, max_data=tensor, device=max_device_to_torch_device(tensor.device)
+    )
 
 
 def rename_privateuse_backend():
@@ -179,8 +224,6 @@ def rename_privateuse_backend():
 
 
 def _register_device_module():
-    from torch_max_backend import torch_max_device_module
-
     torch._register_device_module(device_name, torch_max_device_module)
 
 
@@ -190,6 +233,7 @@ def generate_methods_for_privateuse_backend():
     )
 
 
+@profile
 def _register():
     rename_privateuse_backend()
     _register_device_module()

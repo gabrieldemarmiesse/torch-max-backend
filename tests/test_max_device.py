@@ -41,7 +41,7 @@ def test_max_device_basic_arange_sqrt(equivalent_devices):
             result_cpu, torch.tensor([0.0, 1.0, 1.4142, 1.7320]), atol=1e-4
         )
 
-        b = torch.arange(4, device="max_gpu", dtype=torch.float32)
+        b = torch.arange(4, device=device, dtype=torch.float32)
         chained = sqrt_result + b
         chained_cpu = chained.to("cpu")
         assert torch.allclose(
