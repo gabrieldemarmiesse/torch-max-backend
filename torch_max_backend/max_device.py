@@ -9,11 +9,94 @@ from torch_max_backend import get_accelerators
 from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
 import max.driver
 from torch.ops import aten
+from collections.abc import Callable
 
 
 class Placeholder:
     def __init__(self, index):
         self.index = index
+
+
+def get_max_equivalent(func) -> Callable:
+    if func in MAPPING_TORCH_ATEN_TO_MAX:
+        return MAPPING_TORCH_ATEN_TO_MAX[func]
+    elif func.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX:
+        return MAPPING_TORCH_ATEN_TO_MAX[func.overloadpacket]
+    else:
+        raise NotImplementedError(f"Operation {func} not implemented for MaxTensor")
+
+
+class Dispatcher:
+    def __init__(self):
+        self.input_tensors = []
+        self.list_of_input_specs = []
+        self.graph = None
+
+    def traversal(self, arg):
+        if isinstance(arg, torch.Tensor):
+            # First pass on the arguments
+            # create an input spec
+            input_type = TensorType(
+                dtype=DType.from_torch(arg.dtype),
+                shape=list(arg.shape),
+                device=DeviceRef.GPU(),
+            )
+            self.list_of_input_specs.append(input_type)
+            self.input_tensors.append(arg._max_data)
+            return Placeholder(len(self.list_of_input_specs) - 1)
+        elif isinstance(arg, Placeholder):
+            # Second pass on the arguments
+            return self.graph.inputs[arg.index]
+        elif isinstance(arg, int | float):
+            return arg
+        elif isinstance(arg, list):
+            return [self.traversal(x) for x in arg]
+        elif isinstance(arg, tuple):
+            return tuple(self.traversal(x) for x in arg)
+        elif isinstance(arg, dict):
+            return {k: self.traversal(v) for k, v in arg.items()}
+        elif isinstance(arg, torch.dtype):
+            return arg
+        elif isinstance(arg, torch.layout):
+            return arg
+        elif isinstance(arg, torch.device):
+            return arg
+        elif arg is None:
+            return arg
+        else:
+            raise NotImplementedError(f"Argument type {type(arg)} not supported")
+
+    def run_with_max_graph(self, tensor, func, types, args, kwargs: dict):
+        new_args_with_placeholders = self.traversal(args)
+        new_kwargs_with_placeholders = self.traversal(kwargs)
+        with Graph("add_graph", input_types=self.list_of_input_specs) as graph:
+            self.graph = graph
+            replaced_args = self.traversal(new_args_with_placeholders)
+            replaced_kwargs = self.traversal(new_kwargs_with_placeholders)
+
+            func_to_use = get_max_equivalent(func)
+            out = func_to_use(*replaced_args, **replaced_kwargs)
+            # can be a tuple or a single tensor
+            if isinstance(out, tuple):
+                graph.output(*out)
+                is_tuple = True
+            else:
+                graph.output(out)
+                is_tuple = False
+
+            session = engine.InferenceSession(devices=list(get_accelerators()))
+            model = session.load(graph)
+            output = model.execute(*self.input_tensors)
+
+            if is_tuple:
+                return tuple(make_max_tensor_from_max(o) for o in output)
+            else:
+                return make_max_tensor_from_max(output[0])
+
+    @staticmethod
+    def execute_with_max(tensor, func, types, args, kwargs=None):
+        dispatcher = Dispatcher()
+        return dispatcher.run_with_max_graph(tensor, func, types, args, kwargs)
 
 
 class MaxTensor(torch.Tensor):
@@ -49,101 +132,11 @@ class MaxTensor(torch.Tensor):
             "max_gpu"
         ):
             if kwargs.get("device") == torch.device("cpu"):
-                # TODO: transfer on the cpu with max
+                # TODO: transfer on the cpu with max²²
                 return torch.from_dlpack(args[0]._max_data).to("cpu")
             else:
                 raise NotImplementedError("Transfer to non-CPU devices not implemented")
-        input_tensors = []
-        list_of_input_specs = []
-
-        def extract_tensors(arg):
-            if isinstance(arg, torch.Tensor):
-                # create an input spec
-                input_type = TensorType(
-                    dtype=DType.from_torch(arg.dtype),
-                    shape=list(arg.shape),
-                    device=DeviceRef.GPU(),
-                )
-                list_of_input_specs.append(input_type)
-                input_tensors.append(arg._max_data)
-
-                return Placeholder(len(list_of_input_specs) - 1)
-            elif isinstance(arg, int | float):
-                return arg
-            elif isinstance(arg, list):
-                return [extract_tensors(x) for x in arg]
-            elif isinstance(arg, tuple):
-                return tuple(extract_tensors(x) for x in arg)
-            elif isinstance(arg, dict):
-                return {k: extract_tensors(v) for k, v in arg.items()}
-            elif isinstance(arg, torch.dtype):
-                return arg
-            elif isinstance(arg, torch.layout):
-                return arg
-            elif isinstance(arg, torch.device):
-                return arg
-            elif arg is None:
-                return arg
-            else:
-                raise NotImplementedError(f"Argument type {type(arg)} not supported")
-
-        new_args_with_placeholders = extract_tensors(args)
-        new_kwargs_with_placeholders = extract_tensors(kwargs)
-
-        with Graph("add_graph", input_types=list_of_input_specs) as graph:
-
-            def replace_with_inputs(arg):
-                if isinstance(arg, Placeholder):
-                    return graph.inputs[arg.index]
-                elif isinstance(arg, int | float):
-                    return arg
-                elif isinstance(arg, list):
-                    return [replace_with_inputs(x) for x in arg]
-                elif isinstance(arg, tuple):
-                    return tuple(replace_with_inputs(x) for x in arg)
-                elif isinstance(arg, dict):
-                    return {k: replace_with_inputs(v) for k, v in arg.items()}
-                elif isinstance(arg, torch.dtype):
-                    return arg
-                elif isinstance(arg, torch.layout):
-                    return arg
-                elif isinstance(arg, torch.device):
-                    return arg
-                elif arg is None:
-                    return arg
-                else:
-                    raise NotImplementedError(
-                        f"Argument type {type(arg)} not supported"
-                    )
-
-            replaced_args = replace_with_inputs(new_args_with_placeholders)
-            replaced_kwargs = replace_with_inputs(new_kwargs_with_placeholders)
-
-            if func in MAPPING_TORCH_ATEN_TO_MAX:
-                func_to_use = MAPPING_TORCH_ATEN_TO_MAX[func]
-            elif func.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX:
-                func_to_use = MAPPING_TORCH_ATEN_TO_MAX[func.overloadpacket]
-            else:
-                raise NotImplementedError(
-                    f"Operation {func} not implemented for MaxTensor"
-                )
-            out = func_to_use(*replaced_args, **replaced_kwargs)
-            # can be a tuple or a single tensor
-            if isinstance(out, tuple):
-                graph.output(*out)
-                is_tuple = True
-            else:
-                graph.output(out)
-                is_tuple = False
-
-        session = engine.InferenceSession(devices=list(get_accelerators()))
-        model = session.load(graph)
-        output = model.execute(*input_tensors)
-
-        if is_tuple:
-            return tuple(make_max_tensor_from_max(o) for o in output)
-        else:
-            return make_max_tensor_from_max(output[0])
+        return Dispatcher.execute_with_max(self, func, types, args, kwargs)
 
 
 class MaxDeviceModule:
