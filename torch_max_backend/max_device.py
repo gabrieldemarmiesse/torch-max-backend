@@ -4,13 +4,13 @@ from max.dtype import DType
 from max.graph.type import DeviceRef
 from max.graph import Graph, TensorType
 from max import engine
-import numpy as np
 from torch_max_backend import get_accelerators
 from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
 import max.driver
 from torch.ops import aten
 from collections.abc import Callable
-from typing import Literal
+
+device_name = "max_device"
 
 
 class Placeholder:
@@ -140,55 +140,8 @@ class MaxTensor(torch.Tensor):
         return Dispatcher.execute_with_max(self, func, types, args, kwargs)
 
 
-def get_max_device_module(device_name: Literal["max_cpu", "max_gpu"]):
-    class MaxDeviceModule:
-        @staticmethod
-        def _is_in_bad_fork():
-            return False
-
-        @staticmethod
-        def manual_seed_all(seed):
-            np.random.seed(seed)
-
-        @staticmethod
-        def device_count():
-            return 1  # TODO: change
-
-        @staticmethod
-        def get_rng_state(device=None):
-            return torch.tensor(np.random.get_state()[1])
-
-        @staticmethod
-        def set_rng_state(new_state, device=None):
-            if isinstance(new_state, torch.Tensor):
-                new_state = new_state.cpu().numpy()
-            np_state = ("MT19937", new_state, 624, 0, 0.0)
-            np.random.set_state(np_state)
-
-        @staticmethod
-        def is_available():
-            return True  # TODO change
-
-        @staticmethod
-        def current_device():
-            return 0  # TODO change
-
-        @staticmethod
-        def get_amp_supported_dtype():
-            return [torch.float16, torch.bfloat16]  # TODO change
-
-        # TODO: necessary?
-        def max_gpu(self):
-            print("hello")
-
-
-class Custom:
-    def __init__(self, t):
-        self.t = t
-
-
-def register_max_ops(device_name: Literal["max_cpu", "max_gpu"]):
-    private_use_name = "PrivateUse1" if device_name == "max_cpu" else "PrivateUse2"
+def register_max_ops():
+    private_use_name = "PrivateUse1"
     max_graph_device = DeviceRef.CPU() if device_name == "max_cpu" else DeviceRef.GPU()
 
     @torch.library.impl("aten::arange", private_use_name)
@@ -221,39 +174,27 @@ def make_max_tensor_from_max(tensor: max.driver.Tensor) -> MaxTensor:
     return MaxTensor(shape, max_data=max_data, device=torch.device("max_gpu"))
 
 
-def rename_privateuse_backend(device_name: Literal["max_cpu", "max_gpu"]):
-    if device_name == "max_cpu":
-        torch.utils.rename_privateuse1_backend("max_cpu")
-    elif device_name == "max_gpu":
-        torch.utils.rename_privateuse2_backend("max_gpu")
+def rename_privateuse_backend():
+    torch.utils.rename_privateuse1_backend(device_name)
 
 
-def generate_methods_for_privateuse_backend(device_name: Literal["max_cpu", "max_gpu"]):
-    if device_name == "max_cpu":
-        torch.utils.generate_methods_for_privateuse1_backend(
-            for_tensor=True,
-            for_module=True,
-            for_packed_sequence=True,
-            for_storage=False,
-        )
-    elif device_name == "max_gpu":
-        torch.utils.generate_methods_for_privateuse2_backend(
-            for_tensor=True,
-            for_module=True,
-            for_packed_sequence=True,
-            for_storage=False,
-        )
+def _register_device_module():
+    from . import torch_max_device_module
+
+    torch._register_device_module(device_name, torch_max_device_module)
 
 
-def _register(device_name: Literal["max_cpu", "max_gpu"]):
-    device_module = get_max_device_module(device_name)
-    rename_privateuse_backend(device_name)
+def generate_methods_for_privateuse_backend():
+    torch.utils.generate_methods_for_privateuse1_backend(
+        for_tensor=True, for_module=True, for_packed_sequence=True, for_storage=False
+    )
 
-    torch._register_device_module(device_name, device_module)
 
-    register_max_ops(device_name)
-
-    generate_methods_for_privateuse_backend(device_name)
+def _register():
+    rename_privateuse_backend()
+    _register_device_module()
+    register_max_ops()
+    generate_methods_for_privateuse_backend()
 
 
 registered = False
@@ -263,6 +204,5 @@ def register_max_devices():
     global registered
     if registered:
         return
-    _register("max_cpu")
-    _register("max_gpu")
+    _register()
     registered = True
