@@ -7,6 +7,10 @@ accelerators = list(get_accelerators())
 _current_device = 0
 
 
+def cpu():
+    return torch.device(f"max_device:{len(accelerators) - 1}")
+
+
 def _is_in_bad_fork():
     return False
 
