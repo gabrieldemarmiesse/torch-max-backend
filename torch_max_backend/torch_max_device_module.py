@@ -1,4 +1,4 @@
-from torch_max_backend import get_accelerators
+from .utils import get_accelerators
 import torch
 import numpy as np
 

@@ -1,7 +1,6 @@
 import torch
 import max.graph.ops as ops
 from max.dtype import DType
-from max.graph.type import DeviceRef
 from max.graph import Graph, TensorType
 from max import engine
 from torch_max_backend import get_accelerators
@@ -9,9 +8,9 @@ from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
 import max.driver
 from torch.ops import aten
 from collections.abc import Callable
-from max.torch.torch import max_device_ref
 from torch_max_backend import torch_max_device_module
 from line_profiler import profile
+from torch_max_backend.aten_functions import torch_device_to_max_device
 
 device_name = "max_device"
 
@@ -31,20 +30,6 @@ def find_equivalent_max_device(x: torch.device) -> torch.device:
         return torch.device(f"max_device:{x.index}")
     else:
         raise NotImplementedError(f"Cannot convert to {x.type}")
-
-
-def torch_device_to_max_device(x: torch.device) -> DeviceRef:
-    if x.type == "max_device":
-        if x.index is None:
-            index = torch_max_device_module.current_device()
-        else:
-            index = x.index
-        if index == torch_max_device_module.device_count() - 1:
-            return DeviceRef.CPU()
-        else:
-            return DeviceRef.GPU(index)
-    else:
-        return max_device_ref(x)
 
 
 def max_device_to_torch_device(x: max.driver.Device) -> torch.device:
@@ -182,7 +167,7 @@ class MaxTensor(torch.Tensor):
             if device.type != "max_device":
                 kwargs["device"] = find_equivalent_max_device(device)
                 output = Dispatcher.execute_with_max(self, func, types, args, kwargs)
-                return torch.from_dlpack(output)
+                return torch.from_dlpack(output._max_data)
 
         return Dispatcher.execute_with_max(self, func, types, args, kwargs)
 

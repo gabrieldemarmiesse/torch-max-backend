@@ -5,17 +5,15 @@ from max.graph import Graph
 from max.torch.torch import max_device_ref
 import max.graph.value
 from max import engine
-from max.driver import Accelerator, accelerator_count, CPU
 from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
-import warnings
 from torch._dynamo.backends.common import aot_autograd
-from max.driver import Device
 from functorch.compile import make_boxed_func
 from torch_max_backend.aten_functions import DECOMPOSITION_TABLE
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 import time
 import traceback
 from typing import Any
+from .utils import get_accelerators
 
 
 class MaxCompilerError(Exception):
@@ -282,20 +280,6 @@ class _GraphFactory:
                 "No output node found in the graph, this should never happen."
             )
         return self.graph, output_blueprint
-
-
-def get_accelerators() -> list[Device]:
-    result = []
-    if accelerator_count() > 0:
-        for i in range(accelerator_count()):
-            try:
-                result.append(Accelerator(i))
-            except ValueError as e:
-                warnings.warn(f"Failed to create accelerator {i}. {e}")
-    # This way, people can do torch.device("max_device:0") even if there is
-    # no accelerator and get gpu or cpu automatically.
-    result.append(CPU())
-    return result
 
 
 class BaseMaxCompiler:

@@ -22,6 +22,22 @@ from torch._ops import OpOverloadPacket, OpOverload
 
 from torch_max_backend.flags import verbose_enabled
 from max.graph import TensorType
+from . import torch_max_device_module
+
+
+def torch_device_to_max_device(x: torch.device) -> DeviceRef:
+    if x.type == "max_device":
+        if x.index is None:
+            index = torch_max_device_module.current_device()
+        else:
+            index = x.index
+        if index == torch_max_device_module.device_count() - 1:
+            return DeviceRef.CPU()
+        else:
+            return DeviceRef.GPU(index)
+    else:
+        return max_device_ref(x)
+
 
 Scalar = int | float | Dim
 SymIntType = int | Dim
@@ -476,7 +492,7 @@ def aten__to_copy(
 ):
     result = tensor
     if device is not None:
-        result = max_ops.transfer_to(result, device=max_device_ref(device))
+        result = max_ops.transfer_to(result, device=torch_device_to_max_device(device))
     if dtype is not None:
         result = max_ops.cast(result, dtype=DType.from_torch(dtype))
     return result
@@ -632,7 +648,7 @@ def aten_arange(
 
     if device is None:
         device = torch.get_default_device()
-    device = max_device_ref(device)
+    device = torch_device_to_max_device(device)
 
     if end is None:
         # Single argument form: torch.arange(end)
@@ -1123,7 +1139,7 @@ def aten_full(
 
     if device is None:
         device = torch.get_default_device()
-    device = max_device_ref(device)
+    device = torch_device_to_max_device(device)
 
     # Create a scalar constant with the fill value
     scalar = max_ops.constant(np.array(fill_value), dtype=dtype, device=device)
@@ -1155,7 +1171,7 @@ def aten_full_like(
     if device is None:
         target_device = input.device
     else:
-        target_device = max_device_ref(device)
+        target_device = torch_device_to_max_device(device)
 
     # Get the shape from the input tensor
     target_shape = input.shape
@@ -1857,7 +1873,7 @@ def aten_scalar_tensor(
         device = torch.get_default_device()
 
     return max_ops.constant(
-        value, dtype=DType.from_torch(dtype), device=max_device_ref(device)
+        value, dtype=DType.from_torch(dtype), device=torch_device_to_max_device(device)
     )
 
 
