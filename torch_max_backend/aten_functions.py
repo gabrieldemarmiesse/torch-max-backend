@@ -464,57 +464,21 @@ def aten_softmax(input, dim=-1, dtype=None):
 
 # _to_copy(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, bool non_blocking=False, MemoryFormat? memory_format=None) -> Tensor
 @map_to(aten._to_copy)
-def aten__to_copy(tensor, *args, **kwargs):
-    # Let's support simple stuff for now.
-    # TODO: refactor this, this is so ugly
-    kwargs = kwargs.copy()
-    device = None
-    dtype = None
-    if len(args) > 1:
-        raise ValueError(
-            f"Only one argument is supported for torch.to equivalent for now. got {args}"
-        )
-    device = kwargs.pop("device", None)
-    dtype = kwargs.pop("dtype", None)
-    kwargs.pop("layout", None)  # Ignore layout for now
-    if dtype is not None:
-        dtype = DType.from_torch(dtype)
-
-    # Handle device string conversion
-    if isinstance(device, str):
-        if device == "cpu":
-            device = DeviceRef.CPU()
-        elif device == "cuda":
-            device = DeviceRef.GPU()
-        else:
-            raise ValueError(f"Unsupported device string: {device}")
-    elif isinstance(device, torch.device):
-        device = max_device_ref(device)
-
-    if kwargs:
-        raise ValueError(
-            f"Unsupported arguments for torch.to equivalent: {kwargs}. Only 'device' and 'dtype' are supported."
-        )
-    if args:
-        first_arg = args[0]
-        if first_arg == "cpu":
-            device = DeviceRef.CPU()
-        elif first_arg == "cuda":
-            device = DeviceRef.GPU()
-        elif isinstance(first_arg, torch.device):
-            device = max_device_ref(first_arg)
-        elif isinstance(first_arg, torch.dtype):
-            dtype = DType.from_torch(first_arg)
-
+def aten__to_copy(
+    tensor,
+    *,
+    dtype: torch.dtype | None = None,
+    layout=None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    non_blocking: bool = False,
+    memory_format=None,
+):
     result = tensor
     if device is not None:
-        result = max_ops.transfer_to(result, device=device)
+        result = max_ops.transfer_to(result, device=max_device_ref(device))
     if dtype is not None:
-        result = max_ops.cast(result, dtype=dtype)
-    if device is None and dtype is None:
-        raise ValueError(
-            "Either 'device' or 'dtype' must be specified for torch.to equivalent."
-        )
+        result = max_ops.cast(result, dtype=DType.from_torch(dtype))
     return result
 
 
