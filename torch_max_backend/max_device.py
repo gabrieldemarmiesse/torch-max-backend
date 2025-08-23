@@ -20,6 +20,19 @@ def current_torch_device() -> torch.device:
     return torch.device(f"max_device:{torch_max_device_module.current_device()}")
 
 
+def find_equivalent_max_device(x: torch.device) -> torch.device:
+    if x.type == "max_device":
+        return x
+    elif x.type == "cpu":
+        return torch_max_device_module.cpu()
+    elif x.type in ("cuda", "hip"):
+        if x.index is None:
+            raise NotImplementedError("must have an index")
+        return torch.device(f"max_device:{x.index}")
+    else:
+        raise NotImplementedError(f"Cannot convert to {x.type}")
+
+
 def torch_device_to_max_device(x: torch.device) -> DeviceRef:
     if x.type == "max_device":
         if x.index is None:
@@ -167,13 +180,10 @@ class MaxTensor(torch.Tensor):
         if func == aten._to_copy.default:
             device = kwargs.get("device")
             if device.type != "max_device":
-                if kwargs.get("device") == torch.device("cpu"):
-                    # TODO: transfer on the cpu with max
-                    return torch.from_dlpack(args[0]._max_data).to("cpu")
-                else:
-                    raise NotImplementedError(
-                        "Transfer to non-CPU devices not implemented"
-                    )
+                kwargs["device"] = find_equivalent_max_device(device)
+                output = Dispatcher.execute_with_max(self, func, types, args, kwargs)
+                return torch.from_dlpack(output)
+
         return Dispatcher.execute_with_max(self, func, types, args, kwargs)
 
 
