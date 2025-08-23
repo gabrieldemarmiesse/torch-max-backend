@@ -192,55 +192,6 @@ class Custom:
 
 
 def register_max_ops():
-    @torch.library.impl("aten::_to_copy", "cpu")
-    def _to_copy(
-        self,
-        *,
-        dtype=None,
-        layout=None,
-        device=None,
-        pin_memory=None,
-        non_blocking=False,
-        memory_format=None,
-    ):
-        if device != torch.device("max_gpu"):
-            aten.to_copy.default(
-                self,
-                dtype=dtype,
-                layout=layout,
-                device=device,
-                pin_memory=pin_memory,
-                non_blocking=non_blocking,
-                memory_format=memory_format,
-            )
-
-        input_type = TensorType(
-            dtype=DType.from_torch(self.dtype),
-            shape=list(self.shape),
-            device=DeviceRef.CPU(),
-        )
-        with Graph("to_copy_graph", input_types=[input_type]) as graph:
-            out = ops.transfer_to(self, device=DeviceRef.GPU())
-            if dtype is not None:
-                out = ops.cast(out, dtype=DType.from_torch(dtype))
-            graph.output(out)
-        session = engine.InferenceSession(devices=list(get_accelerators()))
-        model = session.load(graph)
-        output = model.execute(self._max_data)[0]
-        return make_max_tensor_from_max(output)
-
-    @torch.library.impl("aten::empty.memory_format", "PrivateUse1")
-    def empty_max(
-        size, dtype=None, layout=None, device=None, pin_memory=None, memory_format=None
-    ):
-        raise NotImplementedError("aten::empty is not implemented for max_gpu")
-        # Create a meta tensor first, then create the storage for max_gpu
-        meta_tensor = torch.empty(size, dtype=dtype or torch.float32, device="meta")
-        # Now we need to make this tensor appear as max_gpu
-        # For now, return meta tensor - PyTorch will handle device assignment
-        meta_tensor._max_data = None
-        return meta_tensor
-
     @torch.library.impl("aten::arange", "PrivateUse1")
     def arange_max(end, dtype=None, layout=None, device=None, pin_memory=None):
         print(f"DEBUG: arange called with end={end}, device={device}")
