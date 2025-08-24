@@ -23,6 +23,8 @@ class MaxCompilerError(Exception):
 
 import datetime as dt
 
+session = None
+
 
 def gather_stats_on_graph(gm: torch.fx.GraphModule):
     # count the number of times we see each function.
@@ -297,7 +299,9 @@ class BaseMaxCompiler:
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
         if profiling_enabled():
             graph_defined_time = time.time_ns()
-        session = engine.InferenceSession(devices=list(get_accelerators()))
+        global session
+        if session is None:
+            session = engine.InferenceSession(devices=list(get_accelerators()))
         self.model = session.load(graph)
         if profiling_enabled():
             compiling_done_time = time.time_ns()
