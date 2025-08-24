@@ -152,7 +152,7 @@ def aten_floordiv(x, y):
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
 @map_to(aten._adaptive_avg_pool2d)
 def aten__adaptive_avg_pool2d(
-    input: TensorValue, output_size: tuple[SymIntType, SymIntType]
+    input: TensorValue, output_size: list[SymIntType]
 ) -> TensorValue:
     # For now, we'll implement this using global average pooling for (1, 1) output
     # and regular avg pooling for other sizes
@@ -451,12 +451,12 @@ def flash_attention_gpu(
 
 # _softmax(Tensor self, int dim, bool half_to_float) -> Tensor
 @map_to(aten._softmax)
-def aten__softmax(input, dim, half_to_float):
+def aten__softmax(self, dim: int, half_to_float: bool):
     if half_to_float:
         dtype = torch.float32
     else:
         dtype = None
-    return aten_softmax(input, dim=dim, dtype=dtype)
+    return aten_softmax(self, dim=dim, dtype=dtype)
 
 
 @map_to(aten.softmax)
