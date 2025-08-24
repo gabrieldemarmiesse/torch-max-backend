@@ -151,7 +151,9 @@ def aten_floordiv(x, y):
 
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
 @map_to(aten._adaptive_avg_pool2d)
-def aten__adaptive_avg_pool2d(input, output_size):
+def aten__adaptive_avg_pool2d(
+    input: TensorType, output_size: tuple[SymIntType, SymIntType]
+) -> TensorValue:
     # For now, we'll implement this using global average pooling for (1, 1) output
     # and regular avg pooling for other sizes
     if output_size == (1, 1) or output_size == 1:
@@ -201,7 +203,13 @@ def aten__adaptive_avg_pool2d(input, output_size):
 # _native_batch_norm_legit_no_training(Tensor input, Tensor? weight, Tensor? bias, Tensor running_mean, Tensor running_var, float momentum, float eps) -> (Tensor, Tensor, Tensor)
 @map_to(aten._native_batch_norm_legit_no_training)
 def aten__native_batch_norm_legit_no_training(
-    input, weight, bias, running_mean, running_var, momentum, eps
+    input: TensorValue,
+    weight: TensorValue | None,
+    bias: TensorValue | None,
+    running_mean: TensorValue,
+    running_var: TensorValue,
+    momentum: float,
+    eps: float,
 ) -> tuple[TensorValue, TensorValue, TensorValue]:
     """
     Implements batch normalization for inference (no training).
