@@ -564,7 +564,7 @@ def aten_alias(input: TensorValue) -> TensorValue:
 # amax(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 @map_to(aten.amax)
 def aten_amax(
-    input: TensorValue, dim: list[int] = [], keepdim: bool = False
+    input: TensorValue, dim: list[int] | int = [], keepdim: bool = False
 ) -> TensorValue:
     # If only input is provided, we find the maximum along the specified dimension
     if not dim:
@@ -586,7 +586,7 @@ def aten_amax(
 # amin(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 @map_to(aten.amin)
 def aten_amin(
-    input: TensorValue, dim: list[int] = [], keepdim: bool = False
+    input: TensorValue, dim: list[int] | int = [], keepdim: bool = False
 ) -> TensorValue:
     # If only input is provided, we find the minimum along the specified dimension
     if not dim:
