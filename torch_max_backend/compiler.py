@@ -258,6 +258,7 @@ class _GraphFactory:
         self.graph.__exit__(None, None, None)
         return output_blueprint
 
+    @profile
     def create_graph(self, gm: torch.fx.GraphModule) -> tuple[Graph, list[int | None]]:
         output_blueprint = None
         for node_idx, node in enumerate(gm.graph.nodes):
@@ -309,6 +310,7 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
+    @profile
     def __call__(self, *args) -> list[torch.Tensor | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
