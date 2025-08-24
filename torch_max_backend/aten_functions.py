@@ -768,7 +768,7 @@ def aten_atanh(x: TensorValue) -> TensorValue:
 def aten_avg_pool2d(
     input: TensorValue,
     kernel_size: list[int],
-    stride: list[int] = [],
+    stride: list[int] | None = None,
     padding: list[int] = [0, 0],
     ceil_mode: bool = False,
     count_include_pad: bool = True,
