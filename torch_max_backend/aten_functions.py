@@ -152,7 +152,7 @@ def aten_floordiv(x, y):
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
 @map_to(aten._adaptive_avg_pool2d)
 def aten__adaptive_avg_pool2d(
-    input: TensorType, output_size: tuple[SymIntType, SymIntType]
+    input: TensorValue, output_size: tuple[SymIntType, SymIntType]
 ) -> TensorValue:
     # For now, we'll implement this using global average pooling for (1, 1) output
     # and regular avg pooling for other sizes
