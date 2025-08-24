@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from torch_max_backend import register_max_devices
+from torch_max_backend.profiler import profile
 
 register_max_devices()
 
@@ -54,3 +55,7 @@ def equivalent_devices(request, gpu_available: bool):
         return ("cpu", f"max_device:{len(get_accelerators()) - 1}")
     else:
         return ("cuda", "max_device:0")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    profile.print_stats()

@@ -14,6 +14,7 @@ import time
 import traceback
 from typing import Any
 from .utils import get_accelerators
+from .profiler import profile
 
 
 class MaxCompilerError(Exception):
@@ -283,6 +284,7 @@ class _GraphFactory:
 
 
 class BaseMaxCompiler:
+    @profile
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         if profiling_enabled():
             compiler_start = time.time_ns()
