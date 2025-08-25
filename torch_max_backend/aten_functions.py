@@ -1142,6 +1142,24 @@ def aten_expand(
 
 # expm1(Tensor self) -> Tensor
 # fill.Scalar(Tensor self, Scalar value) -> Tensor
+@map_to(aten.fill)
+def aten_fill_scalar(input: TensorValue, value: Scalar) -> TensorValue:
+    """
+    Returns a tensor filled with the scalar value, with the same shape as the input tensor.
+    This creates a new tensor (functional version, not in-place).
+    """
+    # Use the input tensor's dtype and device
+    target_dtype = input.dtype
+    target_device = input.device
+    target_shape = input.shape
+
+    # Create a scalar constant with the fill value
+    scalar = max_ops.constant(np.array(value), dtype=target_dtype, device=target_device)
+
+    # Broadcast the scalar to the target shape
+    return max_ops.broadcast_to(scalar, target_shape)
+
+
 # flip(Tensor self, int[] dims) -> Tensor
 
 
