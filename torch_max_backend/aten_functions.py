@@ -564,22 +564,22 @@ def aten_alias(input: TensorValue) -> TensorValue:
 # amax(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 @map_to(aten.amax)
 def aten_amax(
-    input: TensorValue, dim: list[int] | int | None = [], keepdim: bool = False
+    input: TensorValue, dim: list[int] = [], keepdim: bool = False
 ) -> TensorValue:
-    # If only input is provided, we find the maximum along the specified dimension
+    # If empty dim list is provided, reduce over all dimensions
     if not dim:
         dim = [i for i in range(len(input.shape))]
-    elif isinstance(dim, int):
-        dim = [dim]
 
-    # Similar to mean, we can only reduce dimensions one at a time
+    # Reduce each dimension one by one, similar to aten_mean
     result = input
     for axis in dim:
         result = max_ops.max(result, axis=axis)
+
     if not keepdim:
-        # Squeeze the reduced dimensions
+        # Squeeze the reduced dimensions - sort in reverse order to avoid index shifting
         for axis in sorted(dim, reverse=True):
             result = max_ops.squeeze(result, axis=axis)
+
     return result
 
 
@@ -713,10 +713,43 @@ def aten_argmax(
             result = max_ops.squeeze(result, axis=0)
     else:
         # Compute argmax along specified dimension
-        result = max_ops.argmax(input, axis=dim)
+        # MAX only supports argmax on innermost axis, so we need to transpose
+        ndim = len(input.shape)
+
+        # Normalize negative axis
+        if dim < 0:
+            dim = ndim + dim
+
+        # If dim is not the last dimension, transpose to make it last
+        if dim != ndim - 1:
+            # Swap target dimension with last dimension
+            transposed_input = max_ops.transpose(input, dim, ndim - 1)
+
+            # Perform argmax on last axis
+            result = max_ops.argmax(transposed_input, axis=-1)
+
+            # Swap back if needed
+            if not keepdim:
+                # The result has one fewer dimension, so we need to be careful about indexing
+                result_ndim = ndim - 1
+                if dim < result_ndim:
+                    # Swap back: what was at position dim is now at position (result_ndim - 1)
+                    # We want to move it back to position dim
+                    result = max_ops.transpose(result, dim, result_ndim - 1)
+            else:
+                # For keepdim=True, the result still has the same number of dimensions
+                # Swap the dimensions back
+                result = max_ops.transpose(result, dim, ndim - 1)
+        else:
+            # Target axis is already the last dimension
+            result = max_ops.argmax(input, axis=dim)
+
         if not keepdim:
-            # Squeeze the reduced dimension
-            result = max_ops.squeeze(result, axis=dim)
+            # Find the dimension with size 1 and squeeze it
+            for i, size in enumerate(result.shape):
+                if size == 1:
+                    result = max_ops.squeeze(result, axis=i)
+                    break
     return result
 
 
@@ -1477,56 +1510,21 @@ def aten_lt(input: TensorValue, other: Scalar | TensorValue) -> TensorValue:
 
 # max.dim(Tensor self, int dim, bool keepdim=False) -> (Tensor values, Tensor indices)
 @map_to(aten.max)
-def aten_max(*args, **kwargs):
+def aten_max(
+    input: TensorValue, dim: int | None = None, keepdim: bool = False
+) -> TensorValue | tuple[TensorValue, TensorValue]:
     """
-    Implements torch.max with 3 variants:
-    1. torch.max(input) - single maximum value
-    2. torch.max(input, dim, keepdim=False) - (values, indices) tuple along dimension
-    3. torch.max(input, other) - element-wise maximum
+    Implements torch.max with dimension-based reduction.
+    Returns (values, indices) tuple when dim is specified, single value otherwise.
     """
-    # TODO: clean this up, remove *args and **kwargs
-    if len(args) == 1:
-        # Variant 1: torch.max(input) - single maximum value
-        input_tensor = args[0]
-        # Check if dim is specified in kwargs
-        if "dim" in kwargs:
-            dim = kwargs["dim"]
-            keepdim = kwargs.get("keepdim", False)
-            # Get both values and indices
-            values = aten_amax(input_tensor, dim=dim, keepdim=keepdim)
-            indices = aten_argmax(input_tensor, dim=dim, keepdim=keepdim)
-            return (values, indices)
-        else:
-            return aten_amax(input_tensor, dim=None, keepdim=False)
-
-    elif len(args) == 2:
-        input_tensor, second_arg = args
-
-        # Check if second argument is a tensor (element-wise max)
-        if hasattr(second_arg, "shape") and hasattr(second_arg, "dtype"):
-            # Variant 3: torch.max(input, other) - element-wise maximum
-            return max_ops.max(input_tensor, second_arg)
-        else:
-            # Variant 2: torch.max(input, dim) - (values, indices) tuple along dimension
-            dim = second_arg
-            keepdim = kwargs.get("keepdim", False)
-
-            # Get both values and indices
-            values = aten_amax(input_tensor, dim=dim, keepdim=keepdim)
-            indices = aten_argmax(input_tensor, dim=dim, keepdim=keepdim)
-
-            # Return as tuple (PyTorch returns namedtuple, but tuple should work)
-            return (values, indices)
-
-    elif len(args) == 3:
-        # Variant 2: torch.max(input, dim, keepdim)
-        input_tensor, dim, keepdim = args
-        values = aten_amax(input_tensor, dim=dim, keepdim=keepdim)
-        indices = aten_argmax(input_tensor, dim=dim, keepdim=keepdim)
-        return (values, indices)
-
+    if dim is None:
+        # Variant 1: torch.max(input) - single maximum value across all elements
+        return aten_amax(input, dim=list(range(len(input.shape))), keepdim=False)
     else:
-        raise ValueError(f"torch.max expects 1-3 arguments, got {len(args)}")
+        # Variant 2: torch.max(input, dim) - (values, indices) tuple along dimension
+        values = aten_amax(input, dim=[dim], keepdim=keepdim)
+        indices = aten_argmax(input, dim=dim, keepdim=keepdim)
+        return (values, indices)
 
 
 # max_pool2d_with_indices(Tensor self, int[2] kernel_size, int[2] stride=[], int[2] padding=0, int[2] dilation=1, bool ceil_mode=False) -> (Tensor, Tensor)
