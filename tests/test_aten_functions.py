@@ -266,6 +266,75 @@ def test_aten_max_different_dtypes(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
+@pytest.mark.parametrize("value", [-1.5, 42])
+def test_fill_scalar_basic(device: str, dtype: torch.dtype, shape: tuple, value: float):
+    """Test basic fill.Scalar functionality with different dtypes, shapes, and values"""
+
+    def fn(x):
+        return aten.fill.Scalar(x, value)
+
+    # Create input tensor
+    x = torch.randn(shape, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+@pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
+@pytest.mark.parametrize("value", [-5, 42])
+def test_fill_scalar_integer_dtypes(
+    device: str, dtype: torch.dtype, shape: tuple, value: int
+):
+    """Test fill.Scalar functionality with integer dtypes"""
+
+    def fn(x):
+        return aten.fill.Scalar(x, value)
+
+    # Create input tensor with integer values
+    x = torch.zeros(shape, dtype=dtype, device=device) + 1
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("value", [-5, 100])
+def test_fill_scalar_integer_values(device: str, value: int):
+    """Test fill.Scalar with integer values"""
+
+    def fn(x):
+        return aten.fill.Scalar(x, value)
+
+    # Test with float tensor
+    x = torch.randn(3, 4, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_fill_scalar_single_element(device: str):
+    """Test fill.Scalar with single element tensor"""
+
+    def fn(x):
+        return torch.ops.aten.fill.Scalar(x, 7.5)
+
+    # Single element tensor
+    x = torch.tensor([1.0], device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_fill_scalar_zero_dim(device: str):
+    """Test fill.Scalar with single element tensor"""
+
+    def fn(x):
+        return torch.ops.aten.fill.Scalar(x, 7.5)
+
+    # Single element tensor
+    x = torch.tensor(1.0, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_max_pool2d_error_message_not_supported_output(device: str):
     def fn(x):
         return aten.max_pool2d_with_indices(x, kernel_size=2, stride=2)
