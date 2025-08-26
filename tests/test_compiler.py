@@ -649,3 +649,30 @@ def test_decomposition_overload_packet(monkeypatch):
     # it's normally decomposed. We check that it's not the case since we
     # implemented it ourselves.
     assert aten.transpose.int in [node.target for node in input_gm.graph.nodes]
+
+
+def test_passing_options(device: str):
+    class MixedModule(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.randn(3, 4))
+
+        def forward(self, x):
+            # Mix get_attr with function calls
+            linear_out = x @ self.weight
+            return torch.sin(linear_out) + torch.cos(linear_out)
+
+    module = MixedModule().to(device)
+
+    x = torch.randn(2, 3).to(device)
+
+    module_compiled_and_freezed = torch.compile(
+        backend=max_backend, options=dict(freeze_weights=True)
+    )(module)
+
+    result_module = module(x)
+    result_module_compiled_and_freezed = module_compiled_and_freezed(x)
+
+    assert torch.allclose(
+        result_module, result_module_compiled_and_freezed, rtol=1e-03, atol=1e-05
+    )
