@@ -14,6 +14,7 @@ import time
 import traceback
 from typing import Any
 from .utils import get_accelerators
+from dataclasses import dataclass
 
 
 class MaxCompilerError(Exception):
@@ -21,6 +22,12 @@ class MaxCompilerError(Exception):
 
 
 import datetime as dt
+
+
+@dataclass
+class MaxCompilerOptions:
+    freeze_weights: bool
+
 
 session = None
 
@@ -148,7 +155,8 @@ def get_error_message(
 
 
 class _GraphFactory:
-    def __init__(self):
+    def __init__(self, options: MaxCompilerOptions):
+        self.options = options
         self.names_to_input_idx: dict[str, int] = {}
         self.shape_names_to_input_dim: dict[str, tuple[str, int]] = {}
         self.graph_inputs: list[max.graph.value.TensorType] = []
@@ -285,7 +293,13 @@ class _GraphFactory:
 
 
 class BaseMaxCompiler:
-    def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
+    def __init__(
+        self,
+        gm: torch.fx.GraphModule,
+        example_inputs: list,
+        options: MaxCompilerOptions,
+        mode=None,
+    ):
         if profiling_enabled():
             compiler_start = time.time_ns()
         if verbose_enabled():
@@ -293,7 +307,7 @@ class BaseMaxCompiler:
             gather_stats_on_graph(gm)
             gm.graph.print_tabular()
 
-        graph, self.output_blueprint = _GraphFactory().create_graph(gm)
+        graph, self.output_blueprint = _GraphFactory(options).create_graph(gm)
         if profiling_enabled():
             graph_defined_time = time.time_ns()
         global session
@@ -334,13 +348,18 @@ class BaseMaxCompiler:
         return result
 
 
-def _MaxCompilerBackpropCompatible(
-    gm: torch.fx.GraphModule, example_inputs: list, mode=None
-):
-    _max_compiler = BaseMaxCompiler(gm, example_inputs)
-    return make_boxed_func(_max_compiler.__call__)
+def max_backend(*args, options={}, **kwargs):
+    # extract the max_backend options, as they're not passed by default to the backend
+    options = dict(options)
+    max_options = MaxCompilerOptions(
+        freeze_weights=options.pop("freeze_weights", False)
+    )
 
+    def boxed_func(*args, **kwargs):
+        return make_boxed_func(
+            BaseMaxCompiler(*args, **kwargs, options=max_options).__call__
+        )
 
-max_backend = aot_autograd(
-    fw_compiler=_MaxCompilerBackpropCompatible, decompositions=DECOMPOSITION_TABLE
-)
+    return aot_autograd(fw_compiler=boxed_func, decompositions=DECOMPOSITION_TABLE)(
+        *args, options=options, **kwargs
+    )
