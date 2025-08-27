@@ -71,6 +71,7 @@ def find_equivalent_max_device(device: torch.device) -> max.driver.Device:
         return ordered_accelerators[-1]
     elif device.type in ("cuda", "hip"):
         # Find GPU accelerator (should be first in ordered list)
+        # TODO: allow setting the default device index globally like with cuda
         gpu_index = device.index if device.index is not None else 0
         gpu_accelerators = [acc for acc in ordered_accelerators if acc.label == "gpu"]
         if gpu_index < len(gpu_accelerators):
@@ -485,8 +486,3 @@ def enable_max_device():
     if _max_device_mode is None:
         _max_device_mode = MaxDeviceMode()
         _max_device_mode.__enter__()
-
-
-def register_max_devices():
-    """Register max_device support (called from __init__.py)"""
-    enable_max_device()
