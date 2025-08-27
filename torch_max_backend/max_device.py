@@ -8,6 +8,7 @@ from torch.ops import aten
 from collections.abc import Callable
 from torch_max_backend import get_accelerators, MAPPING_TORCH_ATEN_TO_MAX
 import numpy as np
+from max.graph.type import DeviceRef
 
 
 def get_ordered_accelerators():
@@ -171,7 +172,6 @@ def execute_with_max_graph(func, args, kwargs):
                 idx = len(input_specs)
                 # Determine device based on the actual data location
                 # For now, use CPU since we're storing numpy arrays
-                from max.graph.type import DeviceRef
 
                 device_ref = DeviceRef.CPU()
 
@@ -232,8 +232,6 @@ def execute_with_max_graph(func, args, kwargs):
     model = session.load(graph)
 
     # Convert input tensors to proper MAX format
-    import numpy as np
-
     max_inputs = []
     for tensor_data in input_tensors:
         if isinstance(tensor_data, np.ndarray):
@@ -351,7 +349,6 @@ def to(super_fn, self, *args, **kwargs):
             # Already a MaxTensor, handle dtype conversion if needed
             if dtype and dtype != self._dtype:
                 # Convert dtype by converting to CPU, changing dtype, then back
-                import numpy as np
 
                 if isinstance(self._max_data, np.ndarray):
                     cpu_tensor = torch.from_numpy(self._max_data.copy())
@@ -361,8 +358,6 @@ def to(super_fn, self, *args, **kwargs):
             return self
 
         # Convert regular tensor to MaxTensor
-        import numpy as np
-
         tensor_to_convert = self
         if dtype:
             tensor_to_convert = self.to(dtype=dtype)
@@ -373,8 +368,6 @@ def to(super_fn, self, *args, **kwargs):
 
     elif isinstance(self, MaxTensor):
         # Convert MaxTensor back to regular tensor
-        import numpy as np
-        import max.driver
 
         if isinstance(self._max_data, np.ndarray):
             result = torch.from_numpy(self._max_data.copy())
@@ -400,7 +393,6 @@ def to(super_fn, self, *args, **kwargs):
 # Factory functions for creating tensors directly on max_device
 def get_factory_wrapper(np_func):
     """Wrapper for numpy-based factory functions - following trying_stuff.py pattern"""
-    import numpy as np
 
     def inner(super_fn, *args, **kwargs):
         # Check device as string, supporting both "max_device" and "max_device:N"
