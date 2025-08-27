@@ -7,6 +7,7 @@ import max.driver
 from torch.ops import aten
 from collections.abc import Callable
 from torch_max_backend import get_accelerators, MAPPING_TORCH_ATEN_TO_MAX
+import numpy as np
 
 
 def get_ordered_accelerators():
@@ -448,9 +449,6 @@ def get_factory_wrapper(np_func):
 
     return inner
 
-
-# Register factory functions
-import numpy as np
 
 implements_factory(torch.rand)(get_factory_wrapper(np.random.rand))
 implements_factory(torch.arange)(get_factory_wrapper(np.arange))
