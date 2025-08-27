@@ -321,7 +321,7 @@ def to(super_fn, self, *args, **kwargs):
     if args:
         if len(args) == 1:
             arg = args[0]
-            if isinstance(arg, str | torch.device):
+            if isinstance(arg, str) or isinstance(arg, torch.device):
                 device = arg
             elif isinstance(arg, torch.dtype):
                 dtype = arg

@@ -3,7 +3,10 @@ from torchvision.models import densenet121
 from torchvision import transforms
 from PIL import Image
 import requests
-from torch_max_backend import max_backend, get_accelerators
+from torch_max_backend import max_backend, get_accelerators, register_max_devices
+
+# check compatibility
+register_max_devices()
 
 device = "cuda" if len(list(get_accelerators())) >= 2 else "cpu"
 
