@@ -472,7 +472,7 @@ def tensor(super_fn, data, *args, **kwargs):
 _max_device_mode = None
 
 
-def enable_max_device():
+def register_max_devices():
     """Enable the max_device globally"""
     global _max_device_mode
     if _max_device_mode is None:
