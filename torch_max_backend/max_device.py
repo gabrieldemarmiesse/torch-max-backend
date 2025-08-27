@@ -228,7 +228,20 @@ def execute_with_max_graph(func, args, kwargs):
     # Execute the graph
     session = engine.InferenceSession(devices=get_ordered_accelerators())
     model = session.load(graph)
-    output = model.execute(*input_tensors)
+
+    # Convert input tensors to proper MAX format
+    import numpy as np
+
+    max_inputs = []
+    for tensor_data in input_tensors:
+        if isinstance(tensor_data, np.ndarray):
+            # For numpy arrays, we need to pass them directly
+            max_inputs.append(tensor_data)
+        else:
+            # Already in proper format
+            max_inputs.append(tensor_data)
+
+    output = model.execute(*max_inputs)
 
     # Convert output back to MaxTensor
     if is_tuple:
@@ -359,12 +372,18 @@ def to(super_fn, self, *args, **kwargs):
     elif isinstance(self, MaxTensor):
         # Convert MaxTensor back to regular tensor
         import numpy as np
+        import max.driver
 
         if isinstance(self._max_data, np.ndarray):
             result = torch.from_numpy(self._max_data.copy())
+        elif isinstance(self._max_data, max.driver.Tensor):
+            # Convert MAX tensor back to numpy then torch
+            np_data = self._max_data.to_numpy()
+            # Copy to ensure writable array
+            result = torch.from_numpy(np_data.copy())
         else:
-            # If it's actual MAX data, we'd need to transfer it back
-            result = torch.zeros(self._shape, dtype=self._dtype)
+            # Unknown data type - this should not happen
+            raise RuntimeError(f"Unknown MaxTensor data type: {type(self._max_data)}")
 
         # Apply device and/or dtype conversion
         return result.to(*args, **kwargs)
@@ -436,6 +455,26 @@ import numpy as np
 implements_factory(torch.rand)(get_factory_wrapper(np.random.rand))
 implements_factory(torch.arange)(get_factory_wrapper(np.arange))
 implements_factory(torch.empty)(get_factory_wrapper(np.empty))
+
+
+# Add support for torch.tensor with device argument
+@implements_factory(torch.tensor)
+def tensor(super_fn, data, *args, **kwargs):
+    """Handle torch.tensor with max_device"""
+    device = kwargs.get("device", None)
+    if isinstance(device, str) and (
+        device == "max_device" or device.startswith("max_device:")
+    ):
+        # First create on CPU with proper dtype
+        kwargs_cpu = kwargs.copy()
+        kwargs_cpu["device"] = "cpu"
+        cpu_tensor = super_fn(data, *args, **kwargs_cpu)
+
+        # Then convert to MaxTensor
+        np_data = cpu_tensor.numpy()
+        return MaxTensor(cpu_tensor.shape, cpu_tensor.dtype, max_data=np_data)
+
+    return super_fn(data, *args, **kwargs)
 
 
 # Global mode holder
