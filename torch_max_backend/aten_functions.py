@@ -22,19 +22,25 @@ from torch._ops import OpOverloadPacket, OpOverload
 from typing import Literal
 from torch_max_backend.flags import verbose_enabled
 from max.graph import TensorType
-from . import torch_max_device_module
 
 
 def torch_device_to_max_device(x: torch.device) -> DeviceRef:
     if x.type == "max_device":
-        if x.index is None:
-            index = torch_max_device_module.current_device()
-        else:
-            index = x.index
-        if index == torch_max_device_module.device_count() - 1:
+        # For max_device, use ordered accelerators (GPU first, CPU last)
+        # index None or 0 = first accelerator (first GPU or CPU if no GPU)
+        # higher indices = additional GPUs, with CPU at the highest index
+        index = x.index if x.index is not None else 0
+        from torch_max_backend.max_device import get_ordered_accelerators
+
+        accelerators = get_ordered_accelerators()
+        if index >= len(accelerators):
+            raise ValueError(f"Invalid max_device index {index}")
+
+        device = accelerators[index]
+        if device.label == "cpu":
             return DeviceRef.CPU()
         else:
-            return DeviceRef.GPU(index)
+            return DeviceRef.GPU(device.id)  # Use the actual GPU ID
     else:
         return max_device_ref(x)
 
