@@ -334,13 +334,10 @@ class BaseMaxCompiler:
         return result
 
 
-def _MaxCompilerBackpropCompatible(
-    gm: torch.fx.GraphModule, example_inputs: list, mode=None
-):
-    _max_compiler = BaseMaxCompiler(gm, example_inputs)
-    return make_boxed_func(_max_compiler.__call__)
+def max_backend(*args, **kwargs):
+    def boxed_func(*args, **kwargs):
+        return make_boxed_func(BaseMaxCompiler(*args, **kwargs).__call__)
 
-
-max_backend = aot_autograd(
-    fw_compiler=_MaxCompilerBackpropCompatible, decompositions=DECOMPOSITION_TABLE
-)
+    return aot_autograd(fw_compiler=boxed_func, decompositions=DECOMPOSITION_TABLE)(
+        *args, **kwargs
+    )
