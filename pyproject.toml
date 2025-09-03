@@ -40,6 +40,12 @@ max = [
 mblack = [
     { index = "modular-nightly" },
 ]
+max-core = [
+    { index = "modular-nightly" },
+]
+mojo-compiler = [
+    { index = "modular-nightly" },
+]
 
 [[tool.uv.index]]
 name = "modular-nightly"
@@ -56,8 +62,10 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "mblack==25.6.0.dev2025081619",
-    "max==25.6.0.dev2025081619",
+    "mblack==25.6.0.dev2025090305",
+    "max==25.6.0.dev2025090305",
+    "max-core==25.6.0.dev2025090305",
+    "mojo-compiler==25.6.0.dev2025090305",
     "accelerate>=1.10.0",
     "hatchling",
     "ibm-fms>=1.2.1",
