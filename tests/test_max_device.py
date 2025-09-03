@@ -3,7 +3,7 @@
 import torch
 import pytest
 import numpy as np
-from torch_max_backend import register_max_devices
+from torch_max_backend import register_max_devices, max_backend
 from torch_max_backend.max_device import MaxTensor
 
 pytestmark = pytest.mark.xdist_group(name="group1")
@@ -302,3 +302,12 @@ def test_device_creation(equivalent_devices):
     arr_cpu = arr.to("cpu")
 
     assert torch.allclose(arr_cpu, torch.tensor([0.0, 1.0, 2.0, 3.0]), atol=1e-4)
+
+
+def test_compile_with_max_device(equivalent_devices):
+    @torch.compile(backend=max_backend)
+    def do_sqrt(device):
+        a = torch.arange(4, device=device, dtype=torch.float32)
+        return torch.sqrt(a)
+
+    function_equivalent_on_both_devices(do_sqrt, equivalent_devices)

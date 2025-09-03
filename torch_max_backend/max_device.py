@@ -9,6 +9,7 @@ from collections.abc import Callable
 from torch_max_backend import get_accelerators, MAPPING_TORCH_ATEN_TO_MAX
 import numpy as np
 from max.graph.type import DeviceRef
+from torch_max_backend import torch_max_device_module
 
 
 def get_ordered_accelerators():
@@ -452,10 +453,29 @@ def tensor(super_fn, data, *args, **kwargs):
 _max_device_mode = None
 
 
+def rename_privateuse_backend():
+    torch.utils.rename_privateuse1_backend("max_device")
+
+
+def register_device_module():
+    torch._register_device_module("max_device", torch_max_device_module)
+
+
+def generate_methods_for_privateuse_backend():
+    torch.utils.generate_methods_for_privateuse1_backend(
+        for_tensor=True, for_module=True, for_packed_sequence=True, for_storage=False
+    )
+
+
 def register_max_devices():
     """Enable the max_device globally"""
-    torch.utils.rename_privateuse1_backend("max_device")
     global _max_device_mode
-    if _max_device_mode is None:
-        _max_device_mode = MaxDeviceMode()
-        _max_device_mode.__enter__()
+    if _max_device_mode is not None:
+        # Already registered
+        return
+
+    rename_privateuse_backend()
+    register_device_module()
+    generate_methods_for_privateuse_backend()
+    _max_device_mode = MaxDeviceMode()
+    _max_device_mode.__enter__()
