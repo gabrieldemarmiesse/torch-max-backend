@@ -311,3 +311,13 @@ def test_max_device_basic_arange_sqrt(equivalent_devices):
         assert torch.allclose(
             chained_cpu, torch.tensor([0.0, 2.0, 3.4142, 4.7320]), atol=1e-4
         )
+
+
+def test_device_creation(equivalent_devices):
+    max_device = equivalent_devices[1]
+
+    torch_device = torch.device(max_device)
+    arr = torch.arange(4, device=torch_device, dtype=torch.float32)
+    arr_cpu = arr.to("cpu")
+
+    assert torch.allclose(arr_cpu, torch.tensor([0.0, 1.0, 2.0, 3.0]), atol=1e-4)

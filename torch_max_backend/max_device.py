@@ -472,8 +472,13 @@ def tensor(super_fn, data, *args, **kwargs):
 _max_device_mode = None
 
 
+def rename_privateuse_backend():
+    torch.utils.rename_privateuse1_backend("max_device")
+
+
 def register_max_devices():
     """Enable the max_device globally"""
+    rename_privateuse_backend()
     global _max_device_mode
     if _max_device_mode is None:
         _max_device_mode = MaxDeviceMode()
