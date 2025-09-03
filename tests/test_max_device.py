@@ -6,6 +6,8 @@ import numpy as np
 from torch_max_backend import register_max_devices
 from torch_max_backend.max_device import MaxTensor
 
+pytestmark = pytest.mark.xdist_group(name="group1")
+
 
 @pytest.fixture(autouse=True)
 def setup_max_device():

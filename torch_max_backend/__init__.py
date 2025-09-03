@@ -12,7 +12,7 @@ from torch_max_backend.compiler import (
     MAPPING_TORCH_ATEN_TO_MAX,
     MaxCompilerError,
 )
-from torch_max_backend.max_device import register_max_devices
+from torch_max_backend.max_device import register_max_devices, deregister_max_devices
 
 __all__ = [
     "max_backend",
@@ -20,4 +20,5 @@ __all__ = [
     "MAPPING_TORCH_ATEN_TO_MAX",
     "MaxCompilerError",
     "register_max_devices",
+    "deregister_max_devices",
 ]
