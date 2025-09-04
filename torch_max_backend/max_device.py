@@ -10,7 +10,7 @@ from torch_max_backend import get_accelerators, MAPPING_TORCH_ATEN_TO_MAX
 import numpy as np
 from max.graph.type import DeviceRef
 from torch_max_backend import torch_max_device_module
-
+from line_profiler import profile
 
 def get_ordered_accelerators():
     """Get accelerators ordered with GPUs first, then CPU last"""
@@ -95,7 +95,7 @@ class MaxTensor(torch.Tensor):
             require_grad=requires_grad,
         )
 
-    def __init__(self, shape, dtype, max_data=None, requires_grad=False):
+    def __init__(self, shape, dtype, max_data: max.driver.Tensor | None = None, requires_grad=False):
         # Store the MAX engine data
         self._max_data = max_data
         self._shape = shape
@@ -148,48 +148,55 @@ def implements(func):
 
     return _inner_fn
 
+class InputsManager:
+    def __init__(self):
+        self.input_tensors = list[max.driver.Tensor]() # Fix type
+        self.input_specs = list[TensorType]()
+        self.placeholder_map = dict[int, int]()
 
-def execute_with_max_graph(func, args, kwargs):
-    """Execute a torch operation using MAX graph compilation"""
-    # Collect input tensors and create placeholders
-    input_tensors = []
-    input_specs = []
-    placeholder_map = {}
-
-    def collect_tensors(arg, path=""):
+    def collect_tensors(self, arg, path=""):
         if isinstance(arg, MaxTensor):
-            if id(arg) not in placeholder_map:
-                idx = len(input_specs)
+            if id(arg) not in self.placeholder_map:
+                idx = len(self.input_specs)
                 # Determine device based on the actual data location
                 # For now, use CPU since we're storing numpy arrays
 
                 device_ref = arg._max_data.device
 
-                input_specs.append(
+                self.input_specs.append(
                     TensorType(
                         dtype=DType.from_torch(arg._dtype),
                         shape=list(arg._shape),
                         device=device_ref,
                     )
                 )
-                input_tensors.append(arg._max_data)
-                placeholder_map[id(arg)] = idx
-            return f"placeholder_{placeholder_map[id(arg)]}"
+                self.input_tensors.append(arg._max_data)
+                self.placeholder_map[id(arg)] = idx
+            return f"placeholder_{self.placeholder_map[id(arg)]}"
         elif isinstance(arg, list | tuple):
             return type(arg)(
-                collect_tensors(x, f"{path}[{i}]") for i, x in enumerate(arg)
+                self.collect_tensors(x, f"{path}[{i}]") for i, x in enumerate(arg)
             )
         elif isinstance(arg, dict):
-            return {k: collect_tensors(v, f"{path}[{k}]") for k, v in arg.items()}
+            return {k: self.collect_tensors(v, f"{path}[{k}]") for k, v in arg.items()}
         else:
             return arg
+        
+    def collect_tensors_from_args(self, args, kwargs):
+        return self.collect_tensors(args), self.collect_tensors(kwargs)
 
+
+@profile
+def execute_with_max_graph(func, args, kwargs):
+    """Execute a torch operation using MAX graph compilation"""
+    # Collect input tensors and create placeholders
+    inputs_manager = InputsManager()
+    
     # First pass: collect tensors
-    processed_args = collect_tensors(args)
-    processed_kwargs = collect_tensors(kwargs)
+    processed_args, processed_kwargs = inputs_manager.collect_tensors_from_args(args, kwargs)
 
     # Build and execute graph
-    with Graph("max_op_graph", input_types=input_specs) as graph:
+    with Graph("max_op_graph", input_types=inputs_manager.input_specs) as graph:
         # Replace placeholders with actual graph inputs
         def replace_placeholders(arg):
             if isinstance(arg, str) and arg.startswith("placeholder_"):
@@ -202,8 +209,7 @@ def execute_with_max_graph(func, args, kwargs):
             else:
                 return arg
 
-        graph_args = replace_placeholders(processed_args)
-        graph_kwargs = replace_placeholders(processed_kwargs)
+        graph_args, graph_kwargs = replace_placeholders((processed_args, processed_kwargs))
 
         # Get MAX equivalent function and execute
         func_to_use = get_max_equivalent(func)
@@ -222,7 +228,7 @@ def execute_with_max_graph(func, args, kwargs):
 
     # Convert input tensors to proper MAX format
     max_inputs = []
-    for tensor_data in input_tensors:
+    for tensor_data in inputs_manager.input_tensors:
         if isinstance(tensor_data, np.ndarray):
             # For numpy arrays, we need to pass them directly
             max_inputs.append(tensor_data)
@@ -419,9 +425,20 @@ def get_factory_wrapper(np_func):
 
 
 implements_factory(torch.rand)(get_factory_wrapper(np.random.rand))
-implements_factory(torch.arange)(get_factory_wrapper(np.arange))
 implements_factory(torch.empty)(get_factory_wrapper(np.empty))
 
+
+@implements_factory(torch.arange)
+def arange_equivalent(super_fn, *args, device=None, **kwargs):
+    """Special handling for torch.arange to support max_device"""
+    if device is not None:
+        if isinstance(device, str):
+            device = torch.device(device)
+        if device.type == "max_device":
+            kwargs["device"] = torch.device(device)
+            return execute_with_max_graph(aten.arange, args, kwargs)
+
+    return super_fn(*args, device=device, **kwargs)
 
 # Add support for torch.tensor with device argument
 @implements_factory(torch.tensor)
