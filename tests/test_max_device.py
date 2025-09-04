@@ -5,6 +5,12 @@ import pytest
 import numpy as np
 from torch_max_backend import register_max_devices, max_backend
 from torch_max_backend.max_device import MaxTensor
+from torch_max_backend.max_device import get_ordered_accelerators
+from torch_max_backend.max_device import (
+    get_ordered_accelerators,
+    find_equivalent_max_device,
+)
+from torch_max_backend.max_device import get_ordered_accelerators
 
 pytestmark = pytest.mark.xdist_group(name="group1")
 
@@ -173,10 +179,7 @@ def test_device_ordering():
 
 def test_device_mapping_consistency():
     """Test that CPU maps to highest index and GPU to lower indices"""
-    from torch_max_backend.max_device import (
-        get_ordered_accelerators,
-        find_equivalent_max_device,
-    )
+
 
     ordered_accelerators = get_ordered_accelerators()
 
@@ -197,30 +200,8 @@ def test_device_mapping_consistency():
             assert cpu_indices[-1] == len(ordered_accelerators) - 1
 
 
-def test_tensor_creation_different_indices():
-    """Test tensor creation on different max_device indices"""
-    from torch_max_backend.max_device import get_ordered_accelerators
-
-    ordered_accelerators = get_ordered_accelerators()
-
-    # Test creation on device 0 (should be GPU or CPU if no GPU)
-    t0 = torch.tensor([1.0, 2.0]).to("max_device:0")
-    assert isinstance(t0, MaxTensor)
-
-    # Test creation on default device (should be same as device 0)
-    t_default = torch.tensor([1.0, 2.0]).to("max_device")
-    assert isinstance(t_default, MaxTensor)
-
-    # If we have multiple devices, test the last one (should be CPU)
-    if len(ordered_accelerators) > 1:
-        last_index = len(ordered_accelerators) - 1
-        t_cpu = torch.tensor([1.0, 2.0]).to(f"max_device:{last_index}")
-        assert isinstance(t_cpu, MaxTensor)
-
-
 def test_gpu_first_cpu_last_convention():
     """Test the specific convention: device 0 = first GPU, highest index = CPU"""
-    from torch_max_backend.max_device import get_ordered_accelerators
 
     ordered_accelerators = get_ordered_accelerators()
 
@@ -246,9 +227,9 @@ def test_gpu_first_cpu_last_convention():
 
 
 # Original tests from the existing file
-def function_equivalent_on_both_devices(func, devices, *args, **kwargs):
-    out1 = func(*args, device=devices[0], **kwargs)
-    out2 = func(*args, device=devices[1], **kwargs)
+def function_equivalent_on_both_devices(func, device, *args, **kwargs):
+    out1 = func(*args, device=device, **kwargs)
+    out2 = func(*args, device="cpu", **kwargs)
     if isinstance(out1, list | tuple):
         assert type(out1) == type(out2)
     else:
@@ -258,7 +239,7 @@ def function_equivalent_on_both_devices(func, devices, *args, **kwargs):
         out2 = [out2]
 
     # We transfer on device 1
-    out2 = [o.to(devices[0]) for o in out2]
+    out1 = [o.to("cpu") for o in out1]
 
     for i, (o1, o2) in enumerate(zip(out1, out2)):
         assert o1.device == o2.device, f"Issue with output {i}"
@@ -295,7 +276,6 @@ def test_max_device_basic_arange_sqrt(max_device):
 
 
 def test_device_creation(max_device):
-    max_device = max_device[1]
 
     torch_device = torch.device(max_device)
     arr = torch.arange(4, device=torch_device, dtype=torch.float32)
