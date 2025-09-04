@@ -12,6 +12,28 @@ from max.graph.type import DeviceRef
 from torch_max_backend import torch_max_device_module
 from line_profiler import profile
 from torch.utils._python_dispatch import TorchDispatchMode
+import os
+from max.dtype import DType
+from max.torch.torch import max_device_ref
+import os
+import max.graph.ops as max_ops
+from max.dtype import DType
+from torch.ops import aten
+import torch
+from max.graph.type import DeviceRef
+import max.graph.type as max_type
+from max.graph import StaticDim, Dim, TensorValue
+import numpy as np
+import math
+from torch._decomp import core_aten_decompositions
+from torch._ops import OpOverloadPacket, OpOverload
+from typing import Literal
+from torch_max_backend.flags import verbose_enabled
+from max.graph import TensorType
+from torch_max_backend.aten_functions import DECOMPOSITION_TABLE
+
+class UseStockImplementation(Exception):
+    pass
 
 def get_ordered_accelerators():
     """Get accelerators ordered with GPUs first, then CPU last"""
@@ -81,7 +103,35 @@ def get_max_equivalent(func) -> Callable:
     else:
         raise NotImplementedError(f"Operation {func} not implemented for MaxTensor")
 
-MAX_TENSOR_IMPLEMENTATIONS = {}
+FILTERS = {}
+
+def map_to(func):
+    def decorator(func_to_map):
+        if os.environ.get("TORCH_MAX_BACKEND_BEARTYPE", "1") == "1":
+            from beartype import beartype
+            func_to_map = beartype(func_to_map)
+
+        FILTERS[func] = func_to_map
+        return func_to_map
+
+    return decorator
+
+
+@map_to(aten.arange)
+def aten_arange(
+    start,
+    end= None,
+    step = 1,
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,):
+    if device is None:
+        raise UseStockImplementation()
+    if device is not None and device.type != "max_device":
+        raise UseStockImplementation()
+
 
 class MaxTensor(torch.Tensor):
     """Custom tensor subclass that holds MAX engine data, similar to MyDeviceTensor in trying_stuff.py"""
@@ -118,12 +168,18 @@ class DispatchMax(TorchDispatchMode):
         """Dispatch torch operations to MAX implementations"""
         if kwargs is None:
             kwargs = {}
+
+        # Allow us to check if Pytorch is trying to build a normal tensor
+        if func.overloadpacket in FILTERS:
+            try:
+                FILTERS[func.overloadpacket](*args, **kwargs)
+            except UseStockImplementation:
+                return func(*args, **kwargs)
         
-        # Strange detection algorithm but yeah
+        # If using only normal torch tensors, we let torch handle the computing too
         for arg in list(args) + list(kwargs.values()):
             if isinstance(arg, torch.Tensor) and not isinstance(arg, MaxTensor):
                 return func(*args, **kwargs)
-        # TODO: handle cpu creation tensor
 
         # Try to use the general MAX graph execution
         try:
@@ -250,7 +306,8 @@ def execute_with_max_graph(func, args, kwargs):
 def make_max_tensor_from_max(tensor: max.driver.Tensor) -> MaxTensor:
     """Convert a max.driver.Tensor to a MaxTensor"""
     shape = tuple(tensor.shape)
-    dtype = torch.float32  # TODO: Get proper dtype from tensor
+
+    dtype = tensor.dtype.to_torch()
     return MaxTensor(shape, dtype=dtype, max_data=tensor)
 
 
@@ -303,27 +360,6 @@ def to(super_fn, self, *args, **kwargs):
         # We have to convert it to a pure pytorch tensor
         result = torch.from_dlpack(result._max_data)
     return result
-
-
-
-# Add support for torch.tensor with device argument
-@implements_factory(torch.tensor)
-def tensor(super_fn, data, *args, **kwargs):
-    """Handle torch.tensor with max_device"""
-    device = kwargs.get("device", None)
-    if isinstance(device, str) and (
-        device == "max_device" or device.startswith("max_device:")
-    ):
-        # First create on CPU with proper dtype
-        kwargs_cpu = kwargs.copy()
-        kwargs_cpu["device"] = "cpu"
-        cpu_tensor = super_fn(data, *args, **kwargs_cpu)
-
-        # Then convert to MaxTensor
-        np_data = cpu_tensor.numpy()
-        return MaxTensor(cpu_tensor.shape, cpu_tensor.dtype, max_data=np_data)
-
-    return super_fn(data, *args, **kwargs)
 
 
 # Global mode holder

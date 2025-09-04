@@ -52,7 +52,7 @@ def test_max_tensor_to_cpu(max_device):
 
 def test_factory_arange(max_device):
     """Test torch.arange with max_device"""
-    tensor = torch.arange(5, device=max_device)
+    tensor = torch.arange(5,  device=max_device)
 
     assert isinstance(tensor, MaxTensor)
     assert tensor.shape == (5,)
