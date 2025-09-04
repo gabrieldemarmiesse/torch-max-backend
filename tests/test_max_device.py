@@ -15,13 +15,13 @@ def setup_max_device():
     register_max_devices()
 
 
-def test_tensor_to_max_device():
+def test_tensor_to_max_device(max_device):
     """Test converting regular tensor to max_device"""
     # Create CPU tensor
     cpu_tensor = torch.tensor([1.0, 2.0, 3.0])
 
     # Convert to max_device
-    max_tensor = cpu_tensor.to("max_device")
+    max_tensor = cpu_tensor.to(max_device)
 
     # Check type and properties
     assert isinstance(max_tensor, MaxTensor)
@@ -29,11 +29,11 @@ def test_tensor_to_max_device():
     assert max_tensor._dtype == torch.float32
 
 
-def test_max_tensor_to_cpu():
+def test_max_tensor_to_cpu(max_device):
     """Test converting MaxTensor back to CPU"""
     # Create tensor on max_device
     cpu_tensor = torch.tensor([1.0, 2.0, 3.0])
-    max_tensor = cpu_tensor.to("max_device")
+    max_tensor = cpu_tensor.to(max_device)
 
     # Convert back to CPU
     result = max_tensor.to("cpu")
@@ -44,9 +44,9 @@ def test_max_tensor_to_cpu():
     torch.testing.assert_close(result, cpu_tensor)
 
 
-def test_factory_arange():
+def test_factory_arange(max_device):
     """Test torch.arange with max_device"""
-    tensor = torch.arange(5, device="max_device")
+    tensor = torch.arange(5, device=max_device)
 
     assert isinstance(tensor, MaxTensor)
     assert tensor.shape == (5,)
@@ -57,9 +57,9 @@ def test_factory_arange():
     torch.testing.assert_close(cpu_result, expected)
 
 
-def test_factory_rand():
+def test_factory_rand(max_device):
     """Test torch.rand with max_device"""
-    tensor = torch.rand(3, 4, device="max_device")
+    tensor = torch.rand(3, 4, device=max_device)
 
     assert isinstance(tensor, MaxTensor)
     assert tensor.shape == (3, 4)
@@ -70,9 +70,9 @@ def test_factory_rand():
     assert torch.all(cpu_result <= 1)
 
 
-def test_factory_empty():
+def test_factory_empty(max_device):
     """Test torch.empty with max_device"""
-    tensor = torch.empty(2, 3, device="max_device")
+    tensor = torch.empty(2, 3, device=max_device)
 
     assert isinstance(tensor, MaxTensor)
     assert tensor.shape == (2, 3)
@@ -89,17 +89,17 @@ def test_device_string_variations():
     assert isinstance(t2, MaxTensor)
 
 
-def test_tensor_properties():
+def test_tensor_properties(max_device):
     """Test that MaxTensor preserves tensor properties"""
     original = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
-    max_tensor = original.to("max_device")
+    max_tensor = original.to(max_device)
 
     assert max_tensor.shape == (2, 2)
     assert max_tensor._dtype == torch.float64
 
     # Test repr
     repr_str = repr(max_tensor)
-    assert "max_device" in repr_str
+    assert max_device in repr_str
     assert "size=(2, 2)" in repr_str
 
 
@@ -115,11 +115,11 @@ def test_round_trip_conversion(max_device):
     torch.testing.assert_close(result, original)
 
 
-def test_dtype_preservation():
+def test_dtype_preservation(max_device):
     """Test that dtypes are preserved during conversion"""
     for dtype in [torch.float32, torch.float64, torch.int32, torch.int64]:
         original = torch.tensor([1, 2, 3], dtype=dtype)
-        max_tensor = original.to("max_device")
+        max_tensor = original.to(max_device)
         result = max_tensor.to("cpu")
 
         assert result.dtype == dtype
