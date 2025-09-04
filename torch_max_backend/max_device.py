@@ -148,6 +148,18 @@ def implements(func):
 
     return _inner_fn
 
+
+def make_hashable(obj):
+    if isinstance(obj, dict):
+        return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
+    elif isinstance(obj, list):
+        return tuple(make_hashable(item) for item in obj)
+    elif isinstance(obj, tuple):
+        return tuple(make_hashable(item) for item in obj)
+    else:
+        return obj
+
+
 class InputsManager:
     def __init__(self):
         self.input_tensors = list[max.driver.Tensor]() # Fix type
@@ -186,15 +198,9 @@ class InputsManager:
         return self.collect_tensors(args), self.collect_tensors(kwargs)
 
 
-@profile
-def execute_with_max_graph(func, args, kwargs):
-    """Execute a torch operation using MAX graph compilation"""
-    # Collect input tensors and create placeholders
-    inputs_manager = InputsManager()
-    
-    # First pass: collect tensors
-    processed_args, processed_kwargs = inputs_manager.collect_tensors_from_args(args, kwargs)
+models_cache = {}
 
+def create_model(inputs_manager, processed_args, processed_kwargs, func):
     # Build and execute graph
     with Graph("max_op_graph", input_types=inputs_manager.input_specs) as graph:
         # Replace placeholders with actual graph inputs
@@ -224,8 +230,23 @@ def execute_with_max_graph(func, args, kwargs):
 
     # Execute the graph
     session = engine.InferenceSession(devices=get_ordered_accelerators())
-    model = session.load(graph)
+    return session.load(graph), is_tuple
 
+
+@profile
+def execute_with_max_graph(func, args, kwargs):
+    """Execute a torch operation using MAX graph compilation"""
+    # Collect input tensors and create placeholders
+    inputs_manager = InputsManager()
+    
+    # First pass: collect tensors
+    processed_args, processed_kwargs = inputs_manager.collect_tensors_from_args(args, kwargs)
+    cache_key = hash(make_hashable((func, processed_args, processed_kwargs)))
+    if cache_key in models_cache:
+        model, is_tuple = models_cache[cache_key]
+    else:
+        model, is_tuple = create_model(inputs_manager, processed_args, processed_kwargs, func)
+        models_cache[cache_key] = (model, is_tuple)
     # Convert input tensors to proper MAX format
     max_inputs = []
     for tensor_data in inputs_manager.input_tensors:
