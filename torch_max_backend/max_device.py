@@ -142,6 +142,7 @@ def make_hashable(obj):
         return tuple(make_hashable(item) for item in obj)
     elif isinstance(obj, tuple):
         return tuple(make_hashable(item) for item in obj)
+    
     else:
         return obj
 
@@ -156,21 +157,16 @@ class InputsManager:
         if isinstance(arg, MaxTensor):
             if id(arg) not in self.placeholder_map:
                 idx = len(self.input_specs)
-                # Determine device based on the actual data location
-                # For now, use CPU since we're storing numpy arrays
-
-                device_ref = arg._max_data.device
-
-                self.input_specs.append(
-                    TensorType(
+                input_type = TensorType(
                         dtype=DType.from_torch(arg._dtype),
                         shape=list(arg._shape),
-                        device=device_ref,
+                        device=arg._max_data.device,
                     )
-                )
+                self.input_specs.append(input_type)
                 self.input_tensors.append(arg._max_data)
                 self.placeholder_map[id(arg)] = idx
-            return f"placeholder_{self.placeholder_map[id(arg)]}"
+            # important for hashing
+            return f"placeholder_{self.placeholder_map[id(arg)]}_{input_type}"
         elif isinstance(arg, list | tuple):
             return type(arg)(
                 self.collect_tensors(x, f"{path}[{i}]") for i, x in enumerate(arg)
@@ -270,10 +266,7 @@ class MaxDeviceMode(TorchFunctionMode):
                 return func(*args, **kwargs)
 
         if func in self.IMPLEMENTATIONS:
-            try:
-                return self.IMPLEMENTATIONS[func](super_fn, *args, **kwargs or {})
-            except Exception as e:
-                raise RuntimeError(f"Error in MaxDeviceMode for {func}: {e}") from e
+            return self.IMPLEMENTATIONS[func](super_fn, *args, **kwargs or {})
 
         # No-op for non-factory functions
         return super_fn(*args, **kwargs or {})
