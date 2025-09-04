@@ -23,6 +23,11 @@ def get_ordered_accelerators():
     # Order: GPUs first, then CPU last
     return gpu_accelerators + cpu_accelerators
 
+def find_equivalent_torch_device(device: max.driver.Device) -> torch.device:
+    if device.label == "cpu":
+        return torch_max_device_module.cpu()
+    elif device.label == "gpu":
+        return torch.device(f"max_device:{device.index}")
 
 def find_equivalent_max_device(device: torch.device) -> max.driver.Device:
     """Find the equivalent MAX device for a given torch device
@@ -96,6 +101,10 @@ class MaxTensor(torch.Tensor):
         self._shape = shape
         self._dtype = dtype
 
+    @property
+    def device(self):
+        return find_equivalent_torch_device(self._max_data.device)
+
     def __repr__(self):
         st = super().__repr__()
         st = st.replace("device='meta'", "device='max_device'")
@@ -154,7 +163,7 @@ def execute_with_max_graph(func, args, kwargs):
                 # Determine device based on the actual data location
                 # For now, use CPU since we're storing numpy arrays
 
-                device_ref = DeviceRef.CPU()
+                device_ref = arg._max_data.device
 
                 input_specs.append(
                     TensorType(
@@ -199,7 +208,6 @@ def execute_with_max_graph(func, args, kwargs):
         # Get MAX equivalent function and execute
         func_to_use = get_max_equivalent(func)
         out = func_to_use(*graph_args, **graph_kwargs)
-
         # Handle output
         if isinstance(out, tuple):
             graph.output(*out)
@@ -391,21 +399,7 @@ def get_factory_wrapper(np_func):
                 np_data = np_func(*args)
             elif np_func == np.arange:
                 # arange takes end value and should match the requested dtype
-                if args:
-                    # Convert dtype from torch to numpy
-                    if dtype == torch.float32:
-                        np_dtype = np.float32
-                    elif dtype == torch.float64:
-                        np_dtype = np.float64
-                    elif dtype == torch.int32:
-                        np_dtype = np.int32
-                    elif dtype == torch.int64:
-                        np_dtype = np.int64
-                    else:
-                        np_dtype = np.float32  # default
-                    np_data = np_func(args[0], dtype=np_dtype)
-                else:
-                    np_data = np_func(10, dtype=np.float32)  # default
+                return execute_with_max_graph(aten.arange, args, kwargs)
             else:
                 # For functions like empty
                 if args:
