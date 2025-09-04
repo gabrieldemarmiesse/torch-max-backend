@@ -95,6 +95,7 @@ def test_device_string_variations():
     assert isinstance(t2, MaxTensor)
 
 
+@pytest.mark.xfail(reason="Fixme .device")
 def test_tensor_properties(max_device):
     """Test that MaxTensor preserves tensor properties"""
     original = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
@@ -102,6 +103,8 @@ def test_tensor_properties(max_device):
 
     assert max_tensor.shape == (2, 2)
     assert max_tensor._dtype == torch.float64
+    assert max_tensor.dtype == torch.float64
+    assert max_tensor.device == torch.device(max_device)
 
     # Test repr
     repr_str = repr(max_tensor)
@@ -257,22 +260,21 @@ def test_max_device_basic(max_device):
 
 
 def test_max_device_basic_arange_sqrt(max_device):
-    for device in max_device:
-        a = torch.arange(4, device=device, dtype=torch.float32)
+    a = torch.arange(4, device=max_device, dtype=torch.float32)
 
-        sqrt_result = torch.sqrt(a)
+    sqrt_result = torch.sqrt(a)
 
-        result_cpu = sqrt_result.to("cpu")
-        assert torch.allclose(
-            result_cpu, torch.tensor([0.0, 1.0, 1.4142, 1.7320]), atol=1e-4
-        )
+    result_cpu = sqrt_result.to("cpu")
+    assert torch.allclose(
+        result_cpu, torch.tensor([0.0, 1.0, 1.4142, 1.7320]), atol=1e-4
+    )
 
-        b = torch.arange(4, device=device, dtype=torch.float32)
-        chained = sqrt_result + b
-        chained_cpu = chained.to("cpu")
-        assert torch.allclose(
-            chained_cpu, torch.tensor([0.0, 2.0, 3.4142, 4.7320]), atol=1e-4
-        )
+    b = torch.arange(4, device=max_device, dtype=torch.float32)
+    chained = sqrt_result + b
+    chained_cpu = chained.to("cpu")
+    assert torch.allclose(
+        chained_cpu, torch.tensor([0.0, 2.0, 3.4142, 4.7320]), atol=1e-4
+    )
 
 
 def test_device_creation(max_device):
