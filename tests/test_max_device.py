@@ -103,12 +103,12 @@ def test_tensor_properties():
     assert "size=(2, 2)" in repr_str
 
 
-def test_round_trip_conversion():
+def test_round_trip_conversion(max_device):
     """Test CPU -> max_device -> CPU round trip"""
     original = torch.tensor([1.0, 2.0, 3.0, 4.0])
 
     # Round trip
-    max_tensor = original.to("max_device")
+    max_tensor = original.to(max_device)
     result = max_tensor.to("cpu")
 
     # Should be equal
@@ -267,16 +267,16 @@ def function_equivalent_on_both_devices(func, devices, *args, **kwargs):
         assert torch.allclose(o1, o2, rtol=1e-4, atol=1e-4), f"Issue with output {i}"
 
 
-def test_max_device_basic(equivalent_devices):
+def test_max_device_basic(max_device):
     def do_sqrt(device):
         a = torch.arange(4, device=device, dtype=torch.float32)
         return torch.sqrt(a)
 
-    function_equivalent_on_both_devices(do_sqrt, equivalent_devices)
+    function_equivalent_on_both_devices(do_sqrt, max_device)
 
 
-def test_max_device_basic_arange_sqrt(equivalent_devices):
-    for device in equivalent_devices:
+def test_max_device_basic_arange_sqrt(max_device):
+    for device in max_device:
         a = torch.arange(4, device=device, dtype=torch.float32)
 
         sqrt_result = torch.sqrt(a)
@@ -294,8 +294,8 @@ def test_max_device_basic_arange_sqrt(equivalent_devices):
         )
 
 
-def test_device_creation(equivalent_devices):
-    max_device = equivalent_devices[1]
+def test_device_creation(max_device):
+    max_device = max_device[1]
 
     torch_device = torch.device(max_device)
     arr = torch.arange(4, device=torch_device, dtype=torch.float32)
@@ -304,10 +304,10 @@ def test_device_creation(equivalent_devices):
     assert torch.allclose(arr_cpu, torch.tensor([0.0, 1.0, 2.0, 3.0]), atol=1e-4)
 
 
-def test_compile_with_max_device(equivalent_devices):
+def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)
     def do_sqrt(device):
         a = torch.arange(4, device=device, dtype=torch.float32)
         return torch.sqrt(a)
 
-    function_equivalent_on_both_devices(do_sqrt, equivalent_devices)
+    function_equivalent_on_both_devices(do_sqrt, max_device)

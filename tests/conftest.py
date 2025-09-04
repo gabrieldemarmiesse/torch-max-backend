@@ -27,6 +27,15 @@ def gpu_available() -> bool:
     return len(list(get_accelerators())) > 1
 
 
+@pytest.fixture
+def cuda_available() -> bool:
+    return torch.cuda.is_available()
+
+@pytest.fixture
+def max_gpu_available() -> bool:
+    return len(list(get_accelerators())) > 1
+
+
 @pytest.fixture(params=[(3,), (2, 3)])
 def tensor_shapes(request):
     return request.param
@@ -45,14 +54,14 @@ def cuda_device(gpu_available: bool):
     return "cuda"
 
 
-@pytest.fixture(params=["cpu", "cuda"])
-def equivalent_devices(request, gpu_available: bool):
-    if not gpu_available and request.param == "cuda":
-        pytest.skip("CUDA not available")
+@pytest.fixture(params=["cpu", "gpu"])
+def max_device(request, max_gpu_available: bool):
     if request.param == "cpu":
-        yield ("cpu", f"max_device:{len(get_accelerators()) - 1}")
+        yield (f"max_device:{len(get_accelerators()) - 1}")
     else:
-        yield ("cuda", "max_device:0")
+        if not max_gpu_available:
+            pytest.skip("You do not have a GPU supported by Max")
+        yield ("max_device:0")
 
 
 def pytest_sessionfinish(session, exitstatus):
