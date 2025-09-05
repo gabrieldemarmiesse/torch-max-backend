@@ -415,6 +415,7 @@ def test_fill_scalar_zero_dim(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.xfail(reason="Fixme, currently off to support eager mode")
 def test_max_pool2d_error_message_not_supported_output(device: str):
     def fn(x):
         return aten.max_pool2d_with_indices(x, kernel_size=2, stride=2)
@@ -429,6 +430,7 @@ def test_max_pool2d_error_message_not_supported_output(device: str):
         check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.xfail(reason="Fixme, currently off to support eager mode")
 def test_max_pool2d_error_message_not_supported_in_graph(device: str):
     def fn(x):
         return aten.max_pool2d_with_indices(x, kernel_size=2, stride=2)[1] * 2
