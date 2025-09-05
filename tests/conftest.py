@@ -31,6 +31,7 @@ def gpu_available() -> bool:
 def cuda_available() -> bool:
     return torch.cuda.is_available()
 
+
 @pytest.fixture
 def max_gpu_available() -> bool:
     return len(list(get_accelerators())) > 1
