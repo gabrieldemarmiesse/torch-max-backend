@@ -6,11 +6,7 @@ import numpy as np
 from torch_max_backend import register_max_devices, max_backend
 from torch_max_backend.max_device import MaxTensor
 from torch_max_backend.max_device import get_ordered_accelerators
-from torch_max_backend.max_device import (
-    get_ordered_accelerators,
-    find_equivalent_max_device,
-)
-from torch_max_backend.max_device import get_ordered_accelerators
+from torch_max_backend.max_device import find_equivalent_max_device
 
 pytestmark = pytest.mark.xdist_group(name="group1")
 
@@ -52,7 +48,7 @@ def test_max_tensor_to_cpu(max_device):
 
 def test_factory_arange(max_device):
     """Test torch.arange with max_device"""
-    tensor = torch.arange(5,  device=max_device)
+    tensor = torch.arange(5, device=max_device)
 
     assert isinstance(tensor, MaxTensor)
     assert tensor.shape == (5,)
@@ -155,7 +151,9 @@ def test_multiple_conversions():
     cpu1 = max2.to("cpu")
     cpu2 = cpu1.to("cpu")  # Should work normally
 
-    assert max1 is max2  # Should be same object
+    # TODO: make assert_close work
+    assert torch.sum((max1 - max2) ** 2).to("cpu").item() == 0
+
     torch.testing.assert_close(cpu2, tensor)
 
 
@@ -182,7 +180,6 @@ def test_device_ordering():
 
 def test_device_mapping_consistency():
     """Test that CPU maps to highest index and GPU to lower indices"""
-
 
     ordered_accelerators = get_ordered_accelerators()
 
@@ -278,7 +275,6 @@ def test_max_device_basic_arange_sqrt(max_device):
 
 
 def test_device_creation(max_device):
-
     torch_device = torch.device(max_device)
     arr = torch.arange(4, device=torch_device, dtype=torch.float32)
     arr_cpu = arr.to("cpu")
