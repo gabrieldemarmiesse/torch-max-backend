@@ -1075,6 +1075,7 @@ def aten_cumsum(
     return max_ops.cumsum(input, axis=dim)
 
 
+# TODO: handle inplace?
 # detach(Tensor(a) self) -> Tensor(a)
 @map_to(aten.detach)
 def aten_detach(input: TensorValue) -> TensorValue:
@@ -1590,6 +1591,7 @@ def aten_max(
         return (values, indices)
 
 
+# TODO: re-enable notimplementederror
 # max_pool2d_with_indices(Tensor self, int[2] kernel_size, int[2] stride=[], int[2] padding=0, int[2] dilation=1, bool ceil_mode=False) -> (Tensor, Tensor)
 @map_to(aten.max_pool2d_with_indices)
 def aten_max_pool2d_with_indices(
@@ -1629,7 +1631,7 @@ def aten_max_pool2d_with_indices(
         # NotImplementedError(
         #    "The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet."
         # ),
-        forward_result,
+        forward_result,  # This is wrong but needed for eager mode
     )
 
 
@@ -1943,6 +1945,7 @@ def aten_repeat(input: TensorValue, repeats: list[SymIntType]) -> TensorValue:
 # replication_pad3d(Tensor self, SymInt[6] padding) -> Tensor
 
 
+# TODO: handle in-place correctly
 # relu_(Tensor(a!) self) -> Tensor(a!)
 @map_to(aten.relu_)
 def aten_relu_(tensor: TensorValue) -> TensorValue:

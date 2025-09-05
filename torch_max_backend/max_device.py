@@ -293,7 +293,6 @@ def create_model(inputs_manager, processed_args, processed_kwargs, func):
         out = func_to_use(*graph_args, **graph_kwargs)
         # Handle output
         if isinstance(out, tuple):
-            out = tuple(x for x in out if not isinstance(x, NotImplementedError))
             graph.output(*out)
             is_tuple = True
         else:
