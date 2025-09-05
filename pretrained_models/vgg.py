@@ -5,14 +5,20 @@ import requests
 from io import BytesIO
 from torch_max_backend import max_backend, register_max_devices
 import os
+# ugly
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 # check compatibility
-register_max_devices()
-device = "cpu"
 
-model = models.vgg11(pretrained=True).to(device)
+
+device = "cuda"
+
+model = models.vgg11(pretrained=True)
+
+register_max_devices()
+
+model = model.to(device)
 model.eval()
 model = torch.compile(model, backend=max_backend)
 
@@ -54,6 +60,9 @@ def predict_image(image_path_or_url, top_k=5):
 
     with torch.no_grad():
         output = model(input_batch)
+        output = model(input_batch)
+
+    output = output.to("cpu")
 
     probabilities = torch.nn.functional.softmax(output[0], dim=0)
 

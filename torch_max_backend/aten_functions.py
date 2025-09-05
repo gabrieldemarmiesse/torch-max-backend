@@ -1075,6 +1075,12 @@ def aten_cumsum(
     return max_ops.cumsum(input, axis=dim)
 
 
+# detach(Tensor(a) self) -> Tensor(a)
+@map_to(aten.detach)
+def aten_detach(input: TensorValue) -> TensorValue:
+    return input
+
+
 # diagonal(Tensor(a) self, int offset=0, int dim1=0, int dim2=1) -> Tensor(a)
 
 
@@ -1588,7 +1594,7 @@ def aten_max(
 @map_to(aten.max_pool2d_with_indices)
 def aten_max_pool2d_with_indices(
     input, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False
-) -> tuple[TensorValue, NotImplementedError]:
+) -> tuple[TensorValue, TensorValue]:
     # the first output is the values, the second output is the indices
     # most of the time people just want the values so we'll implement that
     # for now.
@@ -1620,9 +1626,10 @@ def aten_max_pool2d_with_indices(
     forward_result = result.permute([0, 3, 1, 2])
     return (
         forward_result,
-        NotImplementedError(
-            "The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet."
-        ),
+        # NotImplementedError(
+        #    "The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet."
+        # ),
+        forward_result,
     )
 
 
@@ -1934,6 +1941,15 @@ def aten_repeat(input: TensorValue, repeats: list[SymIntType]) -> TensorValue:
 
 # replication_pad2d(Tensor self, SymInt[4] padding) -> Tensor
 # replication_pad3d(Tensor self, SymInt[6] padding) -> Tensor
+
+
+# relu_(Tensor(a!) self) -> Tensor(a!)
+@map_to(aten.relu_)
+def aten_relu_(tensor: TensorValue) -> TensorValue:
+    # inplace has no meaning in max since it's graph-based
+    return max_ops.relu(tensor)
+
+
 # resize_(Tensor(a!) self, SymInt[] size, *, MemoryFormat? memory_format=None) -> Tensor(a!)
 # round(Tensor self) -> Tensor
 

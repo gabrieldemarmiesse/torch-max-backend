@@ -137,6 +137,12 @@ def aten_empty(
         raise UseStockImplementation()
 
 
+@map_to(aten.detach.default)
+def aten_detach(self, *args, **kwargs):
+    if not isinstance(self, MaxTensor):
+        raise UseStockImplementation()
+
+
 class MaxTensor(torch.Tensor):
     """Custom tensor subclass that holds MAX engine data, similar to MyDeviceTensor in trying_stuff.py"""
 
@@ -166,9 +172,7 @@ class MaxTensor(torch.Tensor):
         return find_equivalent_torch_device(self._max_data.device)
 
     def __repr__(self):
-        st = repr(self.to("cpu"))
-        st = st.replace("device='cpu'", "device='max_device:TBD'")
-        return st
+        return repr(self._max_data)
 
 
 class DispatchMax(TorchDispatchMode):
@@ -196,6 +200,10 @@ class DispatchMax(TorchDispatchMode):
             raise RuntimeError(
                 f"No implementation for 'max_device' for {func}, args={args}, kwargs={kwargs}"
             )
+
+        # hack, TODO: remove
+        if func == aten.relu_.default:
+            args[0]._max_data = result._max_data
         return result
 
 
@@ -281,9 +289,11 @@ def create_model(inputs_manager, processed_args, processed_kwargs, func):
 
         # Get MAX equivalent function and execute
         func_to_use = get_max_equivalent(func)
+
         out = func_to_use(*graph_args, **graph_kwargs)
         # Handle output
         if isinstance(out, tuple):
+            out = tuple(x for x in out if not isinstance(x, NotImplementedError))
             graph.output(*out)
             is_tuple = True
         else:
@@ -348,7 +358,7 @@ class MaxDeviceMode(TorchFunctionMode):
         if func in self.IMPLEMENTATIONS:
             return self.IMPLEMENTATIONS[func](super_fn, *args, **kwargs or {})
 
-        # No-op for non-factory functions
+        # Call the aten functions underneath
         return super_fn(*args, **kwargs or {})
 
 
@@ -382,25 +392,6 @@ def to(super_fn, self, *args, **kwargs):
         else:
             return to_tensor(self, *args, **kwargs)
 
-    device = kwargs.get("device")
-    if len(args) >= 1:
-        if isinstance(args[0], str) or isinstance(args[0], torch.device):
-            device = args[0]
-
-    result = self.to(*args, **kwargs)
-
-    # Should we go back to pure pytorch? We check it here:
-    if isinstance(device, str):
-        device = torch.device(device)
-    if (
-        device is not None
-        and device.type != "max_device"
-        and isinstance(result, MaxTensor)
-    ):
-        # We have to convert it to a pure pytorch tensor
-        result = torch.from_dlpack(result._max_data)
-    return result
-
 
 def use_stock_to(self: torch.Tensor, device: torch.device | None) -> bool:
     if not isinstance(self, MaxTensor):
@@ -412,9 +403,14 @@ def use_stock_to(self: torch.Tensor, device: torch.device | None) -> bool:
 
 
 def to_dtype(
-    self, dtype, non_blocking=False, copy=False, memory_format=torch.preserve_format
+    self: torch.Tensor,
+    dtype,
+    non_blocking=False,
+    copy=False,
+    memory_format=torch.preserve_format,
 ):
     return to_device(
+        self,
         None,
         dtype=dtype,
         non_blocking=non_blocking,
@@ -424,11 +420,11 @@ def to_dtype(
 
 
 def to_device(
-    self,
-    device=None,
-    dtype=None,
+    self: torch.Tensor,
+    device: torch.device | str | None = None,
+    dtype: torch.dtype | None = None,
     non_blocking=False,
-    copy=False,
+    copy: bool = False,
     memory_format=torch.preserve_format,
 ):
     if isinstance(device, str):
@@ -444,7 +440,7 @@ def to_device(
 
     if not isinstance(self, MaxTensor):
         # Let's convert it to MaxTensor first
-        self = make_max_tensor_from_max(max.driver.Tensor.from_dlpack(self))
+        self = make_max_tensor_from_max(max.driver.Tensor.from_dlpack(self.detach()))
 
     if device is not None:
         self = make_max_tensor_from_max(
@@ -469,8 +465,15 @@ def to_device(
     return execute_with_max_graph(aten._to_copy, (self,), dict(dtype=dtype))
 
 
-def to_tensor(self, other, non_blocking=False, copy=False):
-    return to_device(other.device, other.dtype, non_blocking=non_blocking, copy=copy)
+def to_tensor(
+    self: torch.Tensor,
+    other: torch.Tensor,
+    non_blocking: bool = False,
+    copy: bool = False,
+):
+    return to_device(
+        self, other.device, other.dtype, non_blocking=non_blocking, copy=copy
+    )
 
 
 # Global mode holder
