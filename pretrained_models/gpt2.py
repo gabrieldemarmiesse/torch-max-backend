@@ -297,7 +297,7 @@ def main():
     device = "cuda" if len(list(get_accelerators())) >= 2 else "cpu"
     print(f"Using device: {device}")
 
-    model = GPT2.from_pretrained("gpt2-xl")
+    model = GPT2.from_pretrained("gpt2")
     model.eval()
     model.to(device)
 
@@ -307,7 +307,14 @@ def main():
     print("Testing GPT-2 generation without torch.compile")
     print("=" * 50)
 
-    prompts = ["The future of artificial intelligence"]
+    prompts = [
+        "The future of artificial intelligence",
+        "Once upon a time",
+        "In a galaxy far, far away",
+        "To be or not to be",
+        "The meaning of life is",
+        "The quick brown fox jumps over the lazy dog",
+    ]
 
     for prompt in prompts:
         print(f"\nPrompt: '{prompt}'")
@@ -361,6 +368,9 @@ def main():
         )
         generated_text = enc.decode(generated[0].tolist())
         print(f"Generated (compiled step): {generated_text}")
+        import time
+
+        time.sleep(7)
 
     print("\n" + "=" * 50)
     print("Testing completed successfully!")
