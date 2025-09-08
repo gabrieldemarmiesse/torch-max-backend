@@ -7,7 +7,7 @@ from torch._dynamo import mark_dynamic
 import os
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-# os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 
 # check compatibility
 # register_max_devices()
@@ -307,14 +307,7 @@ def main():
     print("Testing GPT-2 generation without torch.compile")
     print("=" * 50)
 
-    prompts = [
-        "The future of artificial intelligence",
-        "Once upon a time",
-        "In a galaxy far, far away",
-        "To be or not to be",
-        "The meaning of life is",
-        "The quick brown fox jumps over the lazy dog",
-    ]
+    prompts = ["The future of artificial intelligence"]
 
     for prompt in prompts:
         print(f"\nPrompt: '{prompt}'")
@@ -368,9 +361,6 @@ def main():
         )
         generated_text = enc.decode(generated[0].tolist())
         print(f"Generated (compiled step): {generated_text}")
-        import time
-
-        time.sleep(7)
 
     print("\n" + "=" * 50)
     print("Testing completed successfully!")
