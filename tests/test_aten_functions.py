@@ -346,6 +346,111 @@ def test_aten_min_different_dtypes(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x])
 
 
+# Bitwise operations tests
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.bool])
+def test_aten_bitwise_and_tensor(device: str, dtype: torch.dtype):
+    """Test aten.bitwise_and with two tensors"""
+
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    if dtype == torch.bool:
+        x = torch.tensor([[True, False], [True, True]], dtype=dtype, device=device)
+        y = torch.tensor([[True, True], [False, True]], dtype=dtype, device=device)
+    else:
+        x = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
+        y = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+@pytest.mark.parametrize("scalar", [0, 1, 15, 255])
+def test_aten_bitwise_and_scalar(device: str, dtype: torch.dtype, scalar: int):
+    """Test aten.bitwise_and with tensor and scalar"""
+
+    def fn(x):
+        return aten.bitwise_and(x, scalar)
+
+    x = torch.randint(0, 256, (3, 4), dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.bool])
+def test_aten_bitwise_not(device: str, dtype: torch.dtype):
+    """Test aten.bitwise_not"""
+
+    def fn(x):
+        return aten.bitwise_not(x)
+
+    if dtype == torch.bool:
+        x = torch.tensor([[True, False], [True, False]], dtype=dtype, device=device)
+    else:
+        x = torch.randint(-100, 100, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.bool])
+def test_aten_bitwise_or_tensor(device: str, dtype: torch.dtype):
+    """Test aten.bitwise_or with two tensors"""
+
+    def fn(x, y):
+        return aten.bitwise_or(x, y)
+
+    if dtype == torch.bool:
+        x = torch.tensor([[True, False], [False, False]], dtype=dtype, device=device)
+        y = torch.tensor([[False, True], [False, True]], dtype=dtype, device=device)
+    else:
+        x = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
+        y = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+@pytest.mark.parametrize("scalar", [0, 1, 15, 255])
+def test_aten_bitwise_or_scalar(device: str, dtype: torch.dtype, scalar: int):
+    """Test aten.bitwise_or with tensor and scalar"""
+
+    def fn(x):
+        return aten.bitwise_or(x, scalar)
+
+    x = torch.randint(0, 256, (3, 4), dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.bool])
+def test_aten_bitwise_xor_tensor(device: str, dtype: torch.dtype):
+    """Test aten.bitwise_xor with two tensors"""
+
+    def fn(x, y):
+        return aten.bitwise_xor(x, y)
+
+    if dtype == torch.bool:
+        x = torch.tensor([[True, False], [True, True]], dtype=dtype, device=device)
+        y = torch.tensor([[True, True], [False, True]], dtype=dtype, device=device)
+    else:
+        x = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
+        y = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+@pytest.mark.parametrize("scalar", [0, 1, 15, 255])
+def test_aten_bitwise_xor_scalar(device: str, dtype: torch.dtype, scalar: int):
+    """Test aten.bitwise_xor with tensor and scalar"""
+
+    def fn(x):
+        return aten.bitwise_xor(x, scalar)
+
+    x = torch.randint(0, 256, (3, 4), dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
 @pytest.mark.parametrize("value", [-1.5, 42])
