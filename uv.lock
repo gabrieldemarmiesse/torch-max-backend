@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1452,7 +1452,7 @@ wheels = [
 
 [[package]]
 name = "max"
-version = "25.6.0.dev2025090405"
+version = "25.6.0.dev2025090805"
 source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
 dependencies = [
     { name = "max-core" },
@@ -1460,33 +1460,33 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp311-cp311-macosx_13_0_arm64.whl", hash = "sha256:3193f06ac802ab1d3c4cf4306b35b0ac5435b3d8649f8ac3bd810d0dcc896f19" },
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp311-cp311-manylinux_2_34_aarch64.whl", hash = "sha256:10fcce337bbe6ad85841257cffabacfc26e3060651dfe0d083386163247b28ff" },
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp311-cp311-manylinux_2_34_x86_64.whl", hash = "sha256:7e4ae1f244165d9dd4cc0d5b6fa916e1f5dd6fda6d0b76a07930ff8fc727c28e" },
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp312-cp312-macosx_13_0_arm64.whl", hash = "sha256:b8870a2d507a0794bdabf6c5f75cd333adb71d9b4f2e8784101c44abfa0e97c7" },
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp312-cp312-manylinux_2_34_aarch64.whl", hash = "sha256:734653fc8b63ea2e0605f64bbd915496fce050d05dbe942d43cbc26016154e9d" },
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:75a4637292b5b80be1c4b8b1b8eb00ce6a5e2175feebcf9d1bb987c80968cdd5" },
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp313-cp313-macosx_13_0_arm64.whl", hash = "sha256:1edeab068f332bc5f14a45cf8b05c7efee2bdee1c6d9243951b80494058e0bc5" },
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:fe2ceb17f88d675569ece79a1c17204d36cc72618969510a71004670d3b126a2" },
-    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090405-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:245700a10da99f40c868d5d828328c8d5f5e7486973928f06e5a6977c466d6dc" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp311-cp311-macosx_13_0_arm64.whl", hash = "sha256:6e7b9659417ea162f34f48d36b4b1052fcc1d32d866c9be4b3121a4b6ce8612e" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp311-cp311-manylinux_2_34_aarch64.whl", hash = "sha256:be6f315c8d5f830b9d8056913df8c9be7fb79c1c37be017d522f74cb8ff9919b" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp311-cp311-manylinux_2_34_x86_64.whl", hash = "sha256:d954ba1a81b1d0d5cd531382f16b49c7122bf20b3adbc076eadba796742024f4" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp312-cp312-macosx_13_0_arm64.whl", hash = "sha256:39d6d690ce129c9bbe09be0e9872f1968196bd5941d4d921ec7d8a8daf93f5fb" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp312-cp312-manylinux_2_34_aarch64.whl", hash = "sha256:492b421d2445859ba93a8a4f5a2c50ae4f9cd094ed4cad3c9dd44af09d2df6ac" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:7ca9617ebb3e2338fd2e833f5344d3a8fb740e4a780a1429cd289afa226d58f8" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp313-cp313-macosx_13_0_arm64.whl", hash = "sha256:3f9f3c0faca6421da756ca781d85be7840afbd5a2290c43112ec9e65e9f36204" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:91f0d52f80de42d5849d24c0108886e42054647fd6f5f0d83861a11a0a69dbad" },
+    { url = "https://dl.modular.com/public/nightly/python/max-25.6.0.dev2025090805-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:92b5d5e3e77a3dc7d27492dc4e83ca35dc4f276a437bdad8d61a495207ad54ba" },
 ]
 
 [[package]]
 name = "max-core"
-version = "25.6.0.dev2025090405"
+version = "25.6.0.dev2025090805"
 source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
 dependencies = [
     { name = "mojo-compiler" },
 ]
 wheels = [
-    { url = "https://dl.modular.com/public/nightly/python/max_core-25.6.0.dev2025090405-py3-none-macosx_13_0_arm64.whl", hash = "sha256:f0a7ddb13f1ba06e52e1007cb4078f994b9495c86f24a35486b835271858eeeb" },
-    { url = "https://dl.modular.com/public/nightly/python/max_core-25.6.0.dev2025090405-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:2768494844f3da016e9f78f7f33af07f88cfa4a02897039ec3a74ea10e8eab06" },
-    { url = "https://dl.modular.com/public/nightly/python/max_core-25.6.0.dev2025090405-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:42e76423cadff39e9bb836c6681b18ea8e9304e681c00cb164dcd4c2a4bb2489" },
+    { url = "https://dl.modular.com/public/nightly/python/max_core-25.6.0.dev2025090805-py3-none-macosx_13_0_arm64.whl", hash = "sha256:26d985b3f6771be0529186b1d9e929f5bbe0ea25cae5d39d15c40b1691154bdb" },
+    { url = "https://dl.modular.com/public/nightly/python/max_core-25.6.0.dev2025090805-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:cfd54ed2d2e0cf16191bcb36aaa161890d3572b12a7a7ab92c191c5bf1a5ead4" },
+    { url = "https://dl.modular.com/public/nightly/python/max_core-25.6.0.dev2025090805-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:02ad97a47792324c7c88023e5f9edef3f7b8078872823095a97da7a1a3705182" },
 ]
 
 [[package]]
 name = "mblack"
-version = "25.6.0.dev2025090405"
+version = "25.6.0.dev2025090805"
 source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
 dependencies = [
     { name = "click" },
@@ -1495,7 +1495,7 @@ dependencies = [
     { name = "platformdirs" },
 ]
 wheels = [
-    { url = "https://dl.modular.com/public/nightly/python/mblack-25.6.0.dev2025090405-py3-none-any.whl", hash = "sha256:e8d22d67870b43ac216d21b99dbf7d6cbac3d68005683b95a8f63de027950691" },
+    { url = "https://dl.modular.com/public/nightly/python/mblack-25.6.0.dev2025090805-py3-none-any.whl", hash = "sha256:e7e8ac3cd0ac9fbb99af6e0ef363e48c710bf873a72c5db3fa59770df3d7bd18" },
 ]
 
 [[package]]
@@ -1582,12 +1582,12 @@ wheels = [
 
 [[package]]
 name = "mojo-compiler"
-version = "0.25.6.0.dev2025090405"
+version = "0.25.6.0.dev2025090805"
 source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
 wheels = [
-    { url = "https://dl.modular.com/public/nightly/python/mojo_compiler-0.25.6.0.dev2025090405-py3-none-macosx_13_0_arm64.whl", hash = "sha256:9a4994bb61072cc2c40ce72e4c9d127a6f667b770bdae19ebba27ff09d3d4482" },
-    { url = "https://dl.modular.com/public/nightly/python/mojo_compiler-0.25.6.0.dev2025090405-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:38c42519bdacd1985cc4c615e66d8b1e7231841a1fd941f2c0d26127f6596efd" },
-    { url = "https://dl.modular.com/public/nightly/python/mojo_compiler-0.25.6.0.dev2025090405-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:562465c981631ef24c6989f7247b29b96a09c72f09fe55ab202ea8a89d0b4611" },
+    { url = "https://dl.modular.com/public/nightly/python/mojo_compiler-0.25.6.0.dev2025090805-py3-none-macosx_13_0_arm64.whl", hash = "sha256:694c8b6b55aaa8fea24cb34acb800ce1049ce3e2905808e33c6def6eabbb8929" },
+    { url = "https://dl.modular.com/public/nightly/python/mojo_compiler-0.25.6.0.dev2025090805-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:901afb23cb2e0893af5c4fe2ea2d3ad62c8c5bbce71a5d191cababaf01123ff2" },
+    { url = "https://dl.modular.com/public/nightly/python/mojo_compiler-0.25.6.0.dev2025090805-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:99036211cd5329aeda3a683f486958a76e91b189061408fba8d661d99a4d1365" },
 ]
 
 [[package]]
@@ -3229,10 +3229,10 @@ dev = [
     { name = "ipython" },
     { name = "line-profiler", specifier = ">=5.0.0" },
     { name = "llms-from-scratch", specifier = ">=1.0.17" },
-    { name = "max", specifier = "==25.6.0.dev2025090405", index = "https://dl.modular.com/public/nightly/python/simple/" },
-    { name = "max-core", specifier = "==25.6.0.dev2025090405", index = "https://dl.modular.com/public/nightly/python/simple/" },
-    { name = "mblack", specifier = "==25.6.0.dev2025090405", index = "https://dl.modular.com/public/nightly/python/simple/" },
-    { name = "mojo-compiler", specifier = "==0.25.6.0.dev2025090405", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "max", specifier = "==25.6.0.dev2025090805", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "max-core", specifier = "==25.6.0.dev2025090805", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "mblack", specifier = "==25.6.0.dev2025090805", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "mojo-compiler", specifier = "==0.25.6.0.dev2025090805", index = "https://dl.modular.com/public/nightly/python/simple/" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-forked", specifier = ">=1.6.0" },
