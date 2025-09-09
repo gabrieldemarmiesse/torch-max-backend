@@ -22,6 +22,27 @@ from torch._ops import OpOverloadPacket, OpOverload
 from typing import Literal
 from torch_max_backend.flags import verbose_enabled
 from max.graph import TensorType
+import itertools
+
+
+def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
+    if len(shape_a) == 0:
+        raise ValueError("Broadcast is not possible because one of the shapes is empty")
+    if len(shape_b) == 0:
+        raise ValueError("Broadcast is not possible because one of the shapes is empty")
+    result = []
+    for dim_a, dim_b in itertools.zip_longest(reversed(shape_a), reversed(shape_b)):
+        if dim_a == dim_b:
+            result.append(dim_a)
+        elif dim_a in (Dim(1), None):
+            result.append(dim_b)
+        elif dim_b in (Dim(1), None):
+            result.append(dim_a)
+        else:
+            raise ValueError(
+                f"Broadcast is not possible between shapes {shape_a} and {shape_b}"
+            )
+    return list(reversed(result))
 
 
 def torch_device_to_max_device(x: torch.device) -> DeviceRef:
@@ -904,11 +925,19 @@ def aten_avg_pool2d(
 
 # avg_pool2d_backward(Tensor grad_output, Tensor self, int[2] kernel_size, int[2] stride, int[2] padding, bool ceil_mode, bool count_include_pad, int? divisor_override) -> Tensor
 # avg_pool3d(Tensor self, int[3] kernel_size, int[3] stride=[], int[3] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None) -> Tensor
+
 # bitwise_and.Scalar(Tensor self, Scalar other) -> Tensor
+
+
 # bitwise_and.Tensor(Tensor self, Tensor other) -> Tensor
-@map_to(aten.bitwise_and)
-def aten_bitwise_and(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
+@map_to(aten.bitwise_and.Tensor)
+def aten_bitwise_and(input: TensorValue, other: TensorValue) -> TensorValue:
     # For the moment we only support tensors of the same dimension
+
+    final_shape = find_broadcast_shape(input.shape, other.shape)
+    input = max_ops.broadcast_to(input, final_shape)
+    other = max_ops.broadcast_to(other, final_shape)
+
     return max_ops.custom(
         name="bitwise_and",
         device=input.device,
