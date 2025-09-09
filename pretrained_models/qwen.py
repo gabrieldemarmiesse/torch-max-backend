@@ -1,5 +1,5 @@
 import os
-from torch_max_backend import max_backend, get_accelerators, register_max_devices
+from torch_max_backend import get_accelerators
 from torch._dynamo import mark_dynamic
 
 # TODO: cleanup
@@ -7,8 +7,6 @@ from torch._dynamo import mark_dynamic
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 
-# check compatibility
-register_max_devices()
 
 model_name = "Qwen/Qwen3-0.6B"
 USE_REASONING_MODEL = False  # The base model
@@ -46,7 +44,7 @@ model.load_state_dict(torch.load(model_file, weights_only=True, map_location="cp
 
 print(f"Using device: {device}")
 model.to(device)
-model = torch.compile(model, backend=max_backend, fullgraph=True)
+model = torch.compile(model, backend="inductor", fullgraph=True)
 from llms_from_scratch.qwen3 import Qwen3Tokenizer
 
 if USE_REASONING_MODEL:
