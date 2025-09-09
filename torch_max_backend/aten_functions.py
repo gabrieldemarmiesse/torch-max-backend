@@ -904,13 +904,33 @@ def aten_avg_pool2d(
 
 # avg_pool2d_backward(Tensor grad_output, Tensor self, int[2] kernel_size, int[2] stride, int[2] padding, bool ceil_mode, bool count_include_pad, int? divisor_override) -> Tensor
 # avg_pool3d(Tensor self, int[3] kernel_size, int[3] stride=[], int[3] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None) -> Tensor
+
+
 # bitwise_and.Scalar(Tensor self, Scalar other) -> Tensor
 # bitwise_and.Tensor(Tensor self, Tensor other) -> Tensor
+@map_to(aten.bitwise_and)
+def aten_bitwise_and(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
+    return input & other
+
+
 # bitwise_not(Tensor self) -> Tensor
+@map_to(aten.bitwise_not)
+def aten_bitwise_not(input: TensorValue) -> TensorValue:
+    return ~input
+
+
 # bitwise_or.Scalar(Tensor self, Scalar other) -> Tensor
 # bitwise_or.Tensor(Tensor self, Tensor other) -> Tensor
+@map_to(aten.bitwise_or)
+def aten_bitwise_or(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
+    return input | other
+
+
 # bitwise_xor.Scalar(Tensor self, Scalar other) -> Tensor
 # bitwise_xor.Tensor(Tensor self, Tensor other) -> Tensor
+@map_to(aten.bitwise_xor)
+def aten_bitwise_xor(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
+    return input ^ other
 
 
 # bmm(Tensor self, Tensor mat2) -> Tensor
