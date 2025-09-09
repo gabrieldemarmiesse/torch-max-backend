@@ -1,8 +1,17 @@
-USE_REASONING_MODEL = True
 import torch
 import torch.nn as nn
 from torch_max_backend import max_backend
 import os
+import json
+from pathlib import Path
+from safetensors.torch import load_file
+from huggingface_hub import hf_hub_download, snapshot_download
+import re
+from tokenizers import Tokenizer
+
+
+USE_REASONING_MODEL = True
+
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 
@@ -543,13 +552,6 @@ def load_weights_into_qwen(model, param_config, params):
         )
 
 
-import json
-import os
-from pathlib import Path
-from safetensors.torch import load_file
-from huggingface_hub import hf_hub_download, snapshot_download
-
-
 if USE_REASONING_MODEL:
     repo_id = f"Qwen/Qwen3-{CHOOSE_MODEL}"
 else:
@@ -577,9 +579,6 @@ else:
 load_weights_into_qwen(model, QWEN3_CONFIG, weights_dict)
 model.to(device)
 del weights_dict
-
-import re
-from tokenizers import Tokenizer
 
 
 class Qwen3Tokenizer:
