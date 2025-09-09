@@ -280,8 +280,6 @@ def test_outer(device: str):
 
 def test_log1p_basic(device: str):
     """Test basic log1p functionality"""
-    if device == "cuda":
-        pytest.xfail("log1p not working on gpus yet")
 
     def fn(x):
         return torch.log1p(x)
@@ -293,8 +291,6 @@ def test_log1p_basic(device: str):
 
 def test_log1p_small_values(device: str):
     """Test log1p with small values where it's most beneficial"""
-    if device == "cuda":
-        pytest.xfail("log1p not working on gpus yet")
 
     def fn(x):
         return torch.log1p(x)
@@ -342,8 +338,6 @@ def test_log_various_ranges(device: str):
 
 def test_log1p_various_ranges(device: str):
     """Test log1p with various value ranges"""
-    if device == "cuda":
-        pytest.xfail("log1p not working on gpus yet")
 
     def fn(x):
         return torch.log1p(x)
@@ -378,8 +372,6 @@ def test_log_edge_cases(device: str):
 
 def test_log1p_edge_cases(device: str):
     """Test log1p with edge cases"""
-    if device == "cuda":
-        pytest.xfail("log1p not working on gpus yet")
 
     def fn(x):
         return torch.log1p(x)
@@ -449,8 +441,6 @@ def test_isnan_edge_cases(device: str):
 
 def test_tensor_log1p_method(device: str):
     """Test tensor.log1p() method"""
-    if device == "cuda":
-        pytest.xfail("log1p not working on gpus yet")
 
     def fn(x):
         return x.log1p()
