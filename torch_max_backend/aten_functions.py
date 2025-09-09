@@ -906,6 +906,19 @@ def aten_avg_pool2d(
 # avg_pool3d(Tensor self, int[3] kernel_size, int[3] stride=[], int[3] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None) -> Tensor
 # bitwise_and.Scalar(Tensor self, Scalar other) -> Tensor
 # bitwise_and.Tensor(Tensor self, Tensor other) -> Tensor
+@map_to(aten.bitwise_and)
+def aten_bitwise_and(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
+    # For the moment we only support tensors of the same dimension
+    return max_ops.custom(
+        name="bitwise_and",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_not(Tensor self) -> Tensor
 # bitwise_or.Scalar(Tensor self, Scalar other) -> Tensor
 # bitwise_or.Tensor(Tensor self, Tensor other) -> Tensor

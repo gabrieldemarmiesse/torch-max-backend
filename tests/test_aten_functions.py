@@ -205,6 +205,33 @@ def test_aten_amax_all_dims(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x1d])
 
 
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_and(device: str, dtype: torch.dtype):
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_and_bool(device: str):
+    dtype = torch.bool
+
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_aten_amax_single_dim(device: str, dim: int, keepdim: bool):

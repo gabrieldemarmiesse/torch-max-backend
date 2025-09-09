@@ -14,6 +14,7 @@ import time
 import traceback
 from typing import Any
 from .utils import get_accelerators
+from pathlib import Path
 
 
 class MaxCompilerError(Exception):
@@ -161,7 +162,9 @@ class _GraphFactory:
         if self.graph is not None:
             raise RuntimeError("Graph has already been initialized.")
         self.graph = Graph(
-            "torch_max_backend", input_types=self.graph_inputs
+            "torch_max_backend",
+            input_types=self.graph_inputs,
+            custom_extensions=[Path(__file__).parent / "mojo_kernels"],
         ).__enter__()
         # Let's fill the tensor book
         for tensor_name, idx in self.names_to_input_idx.items():
