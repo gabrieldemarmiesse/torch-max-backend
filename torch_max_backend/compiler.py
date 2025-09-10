@@ -15,6 +15,8 @@ import traceback
 from typing import Any
 from .utils import get_accelerators
 from pathlib import Path
+from max.graph import KernelLibrary
+from max import mlir
 
 
 class MaxCompilerError(Exception):
@@ -24,6 +26,7 @@ class MaxCompilerError(Exception):
 import datetime as dt
 
 session = None
+kernel_library = None
 
 
 def gather_stats_on_graph(gm: torch.fx.GraphModule):
@@ -161,10 +164,19 @@ class _GraphFactory:
     def initialize_graph(self):
         if self.graph is not None:
             raise RuntimeError("Graph has already been initialized.")
+        global kernel_library
+        if kernel_library is None:
+            context = mlir.Context()
+            with context:
+                kernel_library = KernelLibrary(context)
+                kernel_library.load_paths(
+                    context, [Path(__file__).parent / "mojo_kernels"]
+                )
+
         self.graph = Graph(
             "torch_max_backend",
             input_types=self.graph_inputs,
-            custom_extensions=[Path(__file__).parent / "mojo_kernels"],
+            kernel_library=kernel_library,
         ).__enter__()
         # Let's fill the tensor book
         for tensor_name, idx in self.names_to_input_idx.items():
