@@ -31,3 +31,29 @@ struct BitwiseAndKernel:
             return x.load[width](idx) & y.load[width](idx)
 
         foreach[elementwise_bitwise_and, target=target](output, ctx)
+
+
+
+@compiler.register("bitwise_and_scalar")
+struct BitwiseAndScalarKernel:
+    @staticmethod
+    fn execute[
+        dtype: DType,
+        rank: Int,
+        //,
+        target: StaticString,
+        other: Scalar[dtype]
+    ](
+        output: OutputTensor[dtype = dtype, rank = rank],
+        x: InputTensor[dtype = dtype, rank = rank],
+        ctx: DeviceContextPtr,
+    ) raises:
+
+        @parameter
+        @always_inline
+        fn elementwise_bitwise_and[
+            width: Int
+        ](idx: IndexList[x.rank]) -> SIMD[x.dtype, width]:
+            return x.load[width](idx) & other
+
+        foreach[elementwise_bitwise_and, target=target](output, ctx)

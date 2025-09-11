@@ -209,6 +209,32 @@ def test_aten_amax_all_dims(device: str, dtype: torch.dtype):
 @pytest.mark.parametrize(
     "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
 )
+def test_aten_bitwise_and_scalar(device: str, dtype: torch.dtype):
+    def fn(x):
+        return aten.bitwise_and(x, 6)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("bool_value", [True, False])
+def test_aten_bitwise_and_scalar_bool(device: str, bool_value: bool):
+    dtype = torch.bool
+
+    def fn(x):
+        return aten.bitwise_and(x, bool_value)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
 def test_aten_bitwise_and(device: str, dtype: torch.dtype):
     def fn(x, y):
         return aten.bitwise_and(x, y)
