@@ -49,4 +49,4 @@ jobs:
         env:
           MODULAR_HOME: /tmp/modular/
         run: |
-          uv run pytest --forked -n auto -v --splits 8 --group ${{ matrix.test-index }}
+          uv run pytest -v --splits 8 --group ${{ matrix.test-index }}
