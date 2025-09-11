@@ -306,6 +306,136 @@ def test_aten_bitwise_and_broadcasting_ones_pad_dynamic_dim(device: str):
     check_functions_are_equivalent(fn, None, [x, y])
 
 
+# Tests for bitwise_or operations
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_or_scalar(device: str, dtype: torch.dtype):
+    def fn(x):
+        return aten.bitwise_or(x, 6)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("bool_value", [True, False])
+def test_aten_bitwise_or_scalar_bool(device: str, bool_value: bool):
+    dtype = torch.bool
+
+    def fn(x):
+        return aten.bitwise_or(x, bool_value)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_or(device: str, dtype: torch.dtype):
+    def fn(x, y):
+        return aten.bitwise_or(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_or_bool(device: str):
+    dtype = torch.bool
+
+    def fn(x, y):
+        return aten.bitwise_or(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_or_broadcasting(device: str):
+    def fn(x, y):
+        return aten.bitwise_or(x, y)
+
+    # Create test tensors with broadcasting shapes
+    x = torch.randint(0, 10, (3, 4, 5), dtype=torch.int32)
+    y = torch.randint(0, 10, (4, 5), dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+# Tests for bitwise_xor operations
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_xor_scalar(device: str, dtype: torch.dtype):
+    def fn(x):
+        return aten.bitwise_xor(x, 6)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("bool_value", [True, False])
+def test_aten_bitwise_xor_scalar_bool(device: str, bool_value: bool):
+    dtype = torch.bool
+
+    def fn(x):
+        return aten.bitwise_xor(x, bool_value)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_xor(device: str, dtype: torch.dtype):
+    def fn(x, y):
+        return aten.bitwise_xor(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_xor_bool(device: str):
+    dtype = torch.bool
+
+    def fn(x, y):
+        return aten.bitwise_xor(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_xor_broadcasting(device: str):
+    def fn(x, y):
+        return aten.bitwise_xor(x, y)
+
+    # Create test tensors with broadcasting shapes
+    x = torch.randint(0, 10, (3, 4, 5), dtype=torch.int32)
+    y = torch.randint(0, 10, (4, 5), dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_aten_amax_single_dim(device: str, dim: int, keepdim: bool):
