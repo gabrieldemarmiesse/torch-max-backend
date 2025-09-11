@@ -42,18 +42,19 @@ struct BitwiseAndScalarKernel:
         rank: Int,
         //,
         target: StaticString,
-        other: Scalar[dtype]
+        other: Int
     ](
         output: OutputTensor[dtype = dtype, rank = rank],
         x: InputTensor[dtype = dtype, rank = rank],
         ctx: DeviceContextPtr,
     ) raises:
+        alias other_as_scalar = Scalar[dtype](other)
 
         @parameter
         @always_inline
         fn elementwise_bitwise_and[
             width: Int
         ](idx: IndexList[x.rank]) -> SIMD[x.dtype, width]:
-            return x.load[width](idx) & other
+            return x.load[width](idx) & other_as_scalar
 
         foreach[elementwise_bitwise_and, target=target](output, ctx)
