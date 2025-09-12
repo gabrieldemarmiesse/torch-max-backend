@@ -7,9 +7,10 @@ from huggingface_hub import hf_hub_download, snapshot_download
 import torch
 import torch.nn as nn
 from torch_max_backend import max_backend
+from torch._dynamo import mark_dynamic
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
 
 
 USE_INSTRUCT_MODEL = True
@@ -653,6 +654,7 @@ def generate_text_basic_stream(model, token_ids, max_new_tokens, eos_token_id=No
     model.eval()
     with torch.no_grad():
         for _ in range(max_new_tokens):
+            mark_dynamic(token_ids, 1)
             out = model(token_ids)[:, -1]
             next_token = torch.argmax(out, dim=-1, keepdim=True)
 
