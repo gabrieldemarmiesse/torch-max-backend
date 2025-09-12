@@ -782,6 +782,156 @@ def test_aten_squeeze_edge_cases(device: str, shape: tuple):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_aten_logical_and_bool_tensors(device: str):
+    """Test aten.logical_and with boolean tensors"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([True, False, True, False], device=device)
+    y = torch.tensor([True, True, False, False], device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_numeric_tensors(device: str):
+    """Test aten.logical_and with numeric tensors (converted to bool)"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([1, 0, 2, -1], dtype=torch.float32, device=device)
+    y = torch.tensor([3, 0, 0, 4], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.int32, torch.int64, torch.float32, torch.float64]
+)
+def test_aten_logical_and_different_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.logical_and with different numeric data types"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([1, 0, 2, -1], dtype=dtype, device=device)
+    y = torch.tensor([3, 0, 0, 4], dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_2d_tensors(device: str):
+    """Test aten.logical_and with 2D tensors"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.randint(0, 2, (3, 4), dtype=torch.bool, device=device)
+    y = torch.randint(0, 2, (3, 4), dtype=torch.bool, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_broadcasting(device: str):
+    """Test aten.logical_and with broadcasting"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.randint(0, 3, (3, 4), dtype=torch.int32, device=device)
+    y = torch.randint(0, 3, (4,), dtype=torch.int32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_mixed_types(device: str):
+    """Test aten.logical_and with mixed boolean and numeric types"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([True, False, True, False], device=device)
+    y = torch.tensor([1, 0, 2, 0], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_zeros_and_ones(device: str):
+    """Test aten.logical_and with patterns of zeros and ones"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([0, 1, 0, 1], dtype=torch.float32, device=device)
+    y = torch.tensor([0, 0, 1, 1], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_all_false(device: str):
+    """Test aten.logical_and with all false values"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.zeros(4, dtype=torch.float32, device=device)
+    y = torch.zeros(4, dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_all_true(device: str):
+    """Test aten.logical_and with all true values"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.ones(4, dtype=torch.float32, device=device)
+    y = torch.ones(4, dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_negative_values(device: str):
+    """Test aten.logical_and with negative values (should be treated as true)"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([-1, -2, 0, 3], dtype=torch.float32, device=device)
+    y = torch.tensor([4, 0, -5, 6], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_3d_tensors(device: str):
+    """Test aten.logical_and with 3D tensors"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.randint(0, 2, (2, 3, 4), dtype=torch.bool, device=device)
+    y = torch.randint(0, 2, (2, 3, 4), dtype=torch.bool, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_scalar_like(device: str):
+    """Test aten.logical_and with scalar-like tensors"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor(True, device=device)
+    y = torch.tensor(False, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+@pytest.mark.parametrize(
+    "shape_pair", [((3, 1), (3, 4)), ((1, 4), (3, 4)), ((3, 1, 1), (3, 4, 5))]
+)
+def test_aten_logical_and_broadcasting_shapes(device: str, shape_pair: tuple):
+    """Test aten.logical_and with various broadcasting shapes"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x_shape, y_shape = shape_pair
+    x = torch.randint(0, 2, x_shape, dtype=torch.int32, device=device)
+    y = torch.randint(0, 2, y_shape, dtype=torch.int32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_aten_amax_single_dim(device: str, dim: int, keepdim: bool):
