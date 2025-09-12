@@ -14,6 +14,10 @@ import time
 import traceback
 from typing import Any
 from .utils import get_accelerators
+from pathlib import Path
+from max.graph import KernelLibrary
+from max import mlir
+from dataclasses import dataclass
 
 
 class MaxCompilerError(Exception):
@@ -22,7 +26,29 @@ class MaxCompilerError(Exception):
 
 import datetime as dt
 
-session = None
+
+@dataclass
+class GlobalMaxObjects:
+    session: engine.InferenceSession
+    kernel_library: KernelLibrary
+    context: mlir.Context
+
+
+_global_max_objects: GlobalMaxObjects | None = None
+
+
+def global_max_objects() -> GlobalMaxObjects:
+    global _global_max_objects
+    if _global_max_objects is None:
+        context = mlir.Context()
+        with context:
+            kernel_library = KernelLibrary(context)
+            kernel_library.load_paths(context, [Path(__file__).parent / "mojo_kernels"])
+        session = engine.InferenceSession(devices=list(get_accelerators()))
+        _global_max_objects = GlobalMaxObjects(
+            session=session, kernel_library=kernel_library, context=context
+        )
+    return _global_max_objects
 
 
 def gather_stats_on_graph(gm: torch.fx.GraphModule):
@@ -160,8 +186,12 @@ class _GraphFactory:
     def initialize_graph(self):
         if self.graph is not None:
             raise RuntimeError("Graph has already been initialized.")
+
         self.graph = Graph(
-            "torch_max_backend", input_types=self.graph_inputs
+            "torch_max_backend",
+            input_types=self.graph_inputs,
+            kernel_library=global_max_objects().kernel_library,
+            context=global_max_objects().context,
         ).__enter__()
         # Let's fill the tensor book
         for tensor_name, idx in self.names_to_input_idx.items():
@@ -296,10 +326,7 @@ class BaseMaxCompiler:
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
         if profiling_enabled():
             graph_defined_time = time.time_ns()
-        global session
-        if session is None:
-            session = engine.InferenceSession(devices=list(get_accelerators()))
-        self.model = session.load(graph)
+        self.model = global_max_objects().session.load(graph)
         if profiling_enabled():
             compiling_done_time = time.time_ns()
             defining = dt.timedelta(
