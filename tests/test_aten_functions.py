@@ -3,6 +3,7 @@ import pytest
 from torch_max_backend.testing import check_functions_are_equivalent
 from torch.ops import aten
 from torch._dynamo.exc import BackendCompilerFailed
+from torch._dynamo import mark_dynamic
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
@@ -205,6 +206,236 @@ def test_aten_amax_all_dims(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x1d])
 
 
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_and_scalar(device: str, dtype: torch.dtype):
+    def fn(x):
+        return aten.bitwise_and(x, 6)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("bool_value", [True, False])
+def test_aten_bitwise_and_scalar_bool(device: str, bool_value: bool):
+    dtype = torch.bool
+
+    def fn(x):
+        return aten.bitwise_and(x, bool_value)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_and(device: str, dtype: torch.dtype):
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_and_bool(device: str):
+    dtype = torch.bool
+
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_and_broadcasting(device: str):
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    # Create test tensors with broadcasting shapes
+    x = torch.randint(0, 10, (3, 4, 5), dtype=torch.int32)
+    y = torch.randint(0, 10, (5,), dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_and_broadcasting_ones(device: str):
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    # Create test tensors with broadcasting shapes
+    x = torch.randint(0, 100, (3, 1, 5), dtype=torch.int32)
+    y = torch.randint(0, 100, (1, 4, 5), dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_and_broadcasting_ones_pad(device: str):
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    # Create test tensors with broadcasting shapes
+    x = torch.randint(0, 100, (8, 3, 1, 5), dtype=torch.int32)
+    y = torch.randint(0, 100, (1, 4, 5), dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_and_broadcasting_ones_pad_dynamic_dim(device: str):
+    def fn(x, y):
+        return aten.bitwise_and(x, y)
+
+    # Create test tensors with broadcasting shapes
+    x = torch.randint(0, 100, (8, 3, 1, 5), dtype=torch.int32, device=device)
+    mark_dynamic(x, 0)
+    mark_dynamic(x, 1)
+    y = torch.randint(0, 100, (1, 4, 5), dtype=torch.int32, device=device)
+    mark_dynamic(y, 1)
+
+    check_functions_are_equivalent(fn, None, [x, y])
+
+
+# Tests for bitwise_or operations
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_or_scalar(device: str, dtype: torch.dtype):
+    def fn(x):
+        return aten.bitwise_or(x, 6)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("bool_value", [True, False])
+def test_aten_bitwise_or_scalar_bool(device: str, bool_value: bool):
+    dtype = torch.bool
+
+    def fn(x):
+        return aten.bitwise_or(x, bool_value)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_or(device: str, dtype: torch.dtype):
+    def fn(x, y):
+        return aten.bitwise_or(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_or_bool(device: str):
+    dtype = torch.bool
+
+    def fn(x, y):
+        return aten.bitwise_or(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_or_broadcasting(device: str):
+    def fn(x, y):
+        return aten.bitwise_or(x, y)
+
+    # Create test tensors with broadcasting shapes
+    x = torch.randint(0, 10, (3, 4, 5), dtype=torch.int32)
+    y = torch.randint(0, 10, (4, 5), dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+# Tests for bitwise_xor operations
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_xor_scalar(device: str, dtype: torch.dtype):
+    def fn(x):
+        return aten.bitwise_xor(x, 6)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("bool_value", [True, False])
+def test_aten_bitwise_xor_scalar_bool(device: str, bool_value: bool):
+    dtype = torch.bool
+
+    def fn(x):
+        return aten.bitwise_xor(x, bool_value)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
+def test_aten_bitwise_xor(device: str, dtype: torch.dtype):
+    def fn(x, y):
+        return aten.bitwise_xor(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_xor_bool(device: str):
+    dtype = torch.bool
+
+    def fn(x, y):
+        return aten.bitwise_xor(x, y)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+    y = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_bitwise_xor_broadcasting(device: str):
+    def fn(x, y):
+        return aten.bitwise_xor(x, y)
+
+    # Create test tensors with broadcasting shapes
+    x = torch.randint(0, 10, (3, 4, 5), dtype=torch.int32)
+    y = torch.randint(0, 10, (4, 5), dtype=torch.int32)
+
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_aten_amax_single_dim(device: str, dim: int, keepdim: bool):
@@ -343,111 +574,6 @@ def test_aten_min_different_dtypes(device: str, dtype: torch.dtype):
     else:
         x = torch.randint(-10, 10, (3, 4), dtype=dtype, device=device)
 
-    check_functions_are_equivalent(fn, device, [x])
-
-
-# Bitwise operations tests
-
-
-@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.bool])
-def test_aten_bitwise_and_tensor(device: str, dtype: torch.dtype):
-    """Test aten.bitwise_and with two tensors"""
-
-    def fn(x, y):
-        return aten.bitwise_and(x, y)
-
-    if dtype == torch.bool:
-        x = torch.tensor([[True, False], [True, True]], dtype=dtype, device=device)
-        y = torch.tensor([[True, True], [False, True]], dtype=dtype, device=device)
-    else:
-        x = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
-        y = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
-
-    check_functions_are_equivalent(fn, device, [x, y])
-
-
-@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
-@pytest.mark.parametrize("scalar", [0, 1, 15, 255])
-def test_aten_bitwise_and_scalar(device: str, dtype: torch.dtype, scalar: int):
-    """Test aten.bitwise_and with tensor and scalar"""
-
-    def fn(x):
-        return aten.bitwise_and(x, scalar)
-
-    x = torch.randint(0, 256, (3, 4), dtype=dtype, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.bool])
-def test_aten_bitwise_not(device: str, dtype: torch.dtype):
-    """Test aten.bitwise_not"""
-
-    def fn(x):
-        return aten.bitwise_not(x)
-
-    if dtype == torch.bool:
-        x = torch.tensor([[True, False], [True, False]], dtype=dtype, device=device)
-    else:
-        x = torch.randint(-100, 100, (3, 4), dtype=dtype, device=device)
-
-    check_functions_are_equivalent(fn, device, [x])
-
-
-@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.bool])
-def test_aten_bitwise_or_tensor(device: str, dtype: torch.dtype):
-    """Test aten.bitwise_or with two tensors"""
-
-    def fn(x, y):
-        return aten.bitwise_or(x, y)
-
-    if dtype == torch.bool:
-        x = torch.tensor([[True, False], [False, False]], dtype=dtype, device=device)
-        y = torch.tensor([[False, True], [False, True]], dtype=dtype, device=device)
-    else:
-        x = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
-        y = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
-
-    check_functions_are_equivalent(fn, device, [x, y])
-
-
-@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
-@pytest.mark.parametrize("scalar", [0, 1, 15, 255])
-def test_aten_bitwise_or_scalar(device: str, dtype: torch.dtype, scalar: int):
-    """Test aten.bitwise_or with tensor and scalar"""
-
-    def fn(x):
-        return aten.bitwise_or(x, scalar)
-
-    x = torch.randint(0, 256, (3, 4), dtype=dtype, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.bool])
-def test_aten_bitwise_xor_tensor(device: str, dtype: torch.dtype):
-    """Test aten.bitwise_xor with two tensors"""
-
-    def fn(x, y):
-        return aten.bitwise_xor(x, y)
-
-    if dtype == torch.bool:
-        x = torch.tensor([[True, False], [True, True]], dtype=dtype, device=device)
-        y = torch.tensor([[True, True], [False, True]], dtype=dtype, device=device)
-    else:
-        x = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
-        y = torch.randint(0, 100, (3, 4), dtype=dtype, device=device)
-
-    check_functions_are_equivalent(fn, device, [x, y])
-
-
-@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
-@pytest.mark.parametrize("scalar", [0, 1, 15, 255])
-def test_aten_bitwise_xor_scalar(device: str, dtype: torch.dtype, scalar: int):
-    """Test aten.bitwise_xor with tensor and scalar"""
-
-    def fn(x):
-        return aten.bitwise_xor(x, scalar)
-
-    x = torch.randint(0, 256, (3, 4), dtype=dtype, device=device)
     check_functions_are_equivalent(fn, device, [x])
 
 

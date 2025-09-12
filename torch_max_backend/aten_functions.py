@@ -22,6 +22,27 @@ from torch._ops import OpOverloadPacket, OpOverload
 from typing import Literal
 from torch_max_backend.flags import verbose_enabled
 from max.graph import TensorType
+import itertools
+
+
+def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
+    if len(shape_a) == 0:
+        raise ValueError("Broadcast is not possible because one of the shapes is empty")
+    if len(shape_b) == 0:
+        raise ValueError("Broadcast is not possible because one of the shapes is empty")
+    result = []
+    for dim_a, dim_b in itertools.zip_longest(reversed(shape_a), reversed(shape_b)):
+        if dim_a == dim_b:
+            result.append(dim_a)
+        elif dim_a in (Dim(1), None):
+            result.append(dim_b)
+        elif dim_b in (Dim(1), None):
+            result.append(dim_a)
+        else:
+            raise ValueError(
+                f"Broadcast is not possible between shapes {shape_a} and {shape_b}"
+            )
+    return list(reversed(result))
 
 
 def torch_device_to_max_device(x: torch.device) -> DeviceRef:
@@ -907,30 +928,105 @@ def aten_avg_pool2d(
 
 
 # bitwise_and.Scalar(Tensor self, Scalar other) -> Tensor
+@map_to(aten.bitwise_and.Scalar)
+def aten_bitwise_and_scalar(input: TensorValue, other: Scalar) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_and_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_and.Tensor(Tensor self, Tensor other) -> Tensor
-@map_to(aten.bitwise_and)
-def aten_bitwise_and(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
-    return input & other
+@map_to(aten.bitwise_and.Tensor)
+def aten_bitwise_and(input: TensorValue, other: TensorValue) -> TensorValue:
+    # For the moment we only support tensors of the same dimension
+
+    final_shape = find_broadcast_shape(input.shape, other.shape)
+    input = max_ops.broadcast_to(input, final_shape)
+    other = max_ops.broadcast_to(other, final_shape)
+
+    return max_ops.custom(
+        name="bitwise_and",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
 
 
 # bitwise_not(Tensor self) -> Tensor
-@map_to(aten.bitwise_not)
-def aten_bitwise_not(input: TensorValue) -> TensorValue:
-    return ~input
 
 
 # bitwise_or.Scalar(Tensor self, Scalar other) -> Tensor
+@map_to(aten.bitwise_or.Scalar)
+def aten_bitwise_or_scalar(input: TensorValue, other: Scalar) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_or_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_or.Tensor(Tensor self, Tensor other) -> Tensor
-@map_to(aten.bitwise_or)
-def aten_bitwise_or(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
-    return input | other
+@map_to(aten.bitwise_or.Tensor)
+def aten_bitwise_or(input: TensorValue, other: TensorValue) -> TensorValue:
+    # For the moment we only support tensors of the same dimension
+
+    final_shape = find_broadcast_shape(input.shape, other.shape)
+    input = max_ops.broadcast_to(input, final_shape)
+    other = max_ops.broadcast_to(other, final_shape)
+
+    return max_ops.custom(
+        name="bitwise_or",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
 
 
 # bitwise_xor.Scalar(Tensor self, Scalar other) -> Tensor
+@map_to(aten.bitwise_xor.Scalar)
+def aten_bitwise_xor_scalar(input: TensorValue, other: Scalar) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_xor_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_xor.Tensor(Tensor self, Tensor other) -> Tensor
-@map_to(aten.bitwise_xor)
-def aten_bitwise_xor(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
-    return input ^ other
+@map_to(aten.bitwise_xor.Tensor)
+def aten_bitwise_xor(input: TensorValue, other: TensorValue) -> TensorValue:
+    # For the moment we only support tensors of the same dimension
+
+    final_shape = find_broadcast_shape(input.shape, other.shape)
+    input = max_ops.broadcast_to(input, final_shape)
+    other = max_ops.broadcast_to(other, final_shape)
+
+    return max_ops.custom(
+        name="bitwise_xor",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
 
 
 # bmm(Tensor self, Tensor mat2) -> Tensor
