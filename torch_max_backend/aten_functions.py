@@ -128,6 +128,8 @@ def map_to(func):
             # We assume we cover all overloads in the packet
             for overload_name in func:
                 popped = DECOMPOSITION_TABLE.pop(getattr(func, overload_name), None)
+                if popped is not None:
+                    pass
                 if verbose_enabled() and popped is not None:
                     global number_of_decompositions_removed
                     number_of_decompositions_removed += 1
@@ -2394,43 +2396,11 @@ def aten_unbind(input: TensorValue, dim: int = 0) -> list[TensorValue]:
     return result
 
 
+# For some reason, aot_autograd always decomposes repeat_interleave. No need to have an
+# implementation here if it's never used.
 # repeat_interleave.Tensor(Tensor repeats, *, SymInt? output_size=None) -> Tensor
 # repeat_interleave.self_Tensor(Tensor self, Tensor repeats, int? dim=None, *, SymInt? output_size=None) -> Tensor
 # repeat_interleave.self_int(Tensor self, SymInt repeats, int? dim=None, *, SymInt? output_size=None) -> Tensor
-@map_to(aten.repeat_interleave)
-def aten_repeat_interleave(
-    input: TensorValue, repeats: int, dim: int = 0
-) -> TensorValue:
-    """
-    Equivalent to torch.repeat_interleave - repeats elements of a tensor along a dimension.
-    Each element is repeated 'repeats' times before moving to the next element.
-    """
-    # Handle negative dim
-    if dim < 0:
-        dim = len(input.shape) + dim
-
-    # Get the current shape
-    shape = input.shape
-
-    # Create a new shape where the specified dimension is expanded
-    new_shape = list(shape)
-    new_shape[dim] = int(new_shape[dim]) * repeats
-
-    # Use expand to repeat elements along the dimension
-    # First, add a new dimension after the target dim, then expand and reshape
-    expanded_shape = list(shape)
-    expanded_shape.insert(dim + 1, repeats)
-
-    # Add the new dimension
-    unsqueezed = max_ops.unsqueeze(input, axis=dim + 1)
-
-    # Expand along the new dimension
-    expanded = max_ops.broadcast_to(unsqueezed, expanded_shape)
-
-    # Reshape to merge the repeated dimension
-    result = max_ops.reshape(expanded, new_shape)
-
-    return result
 
 
 # t(Tensor(a) self) -> Tensor(a)
