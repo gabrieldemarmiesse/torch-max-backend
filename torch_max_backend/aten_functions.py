@@ -2207,7 +2207,11 @@ def aten_squeeze(input: TensorValue, dim: int | list[int]) -> TensorValue:
         dim = [dim]
     result = input
     for d in sorted(dim, reverse=True):
-        result = max_ops.squeeze(input, axis=d)
+        # Handle negative dimensions
+        actual_dim = d if d >= 0 else len(result.shape) + d
+        # Only squeeze if the dimension has size 1
+        if actual_dim < len(result.shape) and result.shape[actual_dim] == 1:
+            result = max_ops.squeeze(result, axis=actual_dim)
     return result
 
 

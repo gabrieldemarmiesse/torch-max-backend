@@ -531,6 +531,257 @@ def test_aten_repeat_interleave_large_repeats(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_aten_split_with_sizes_basic(device: str):
+    """Test aten.split_with_sizes with basic splits"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [2, 3, 5], dim=0)
+
+    x = torch.randn(10, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dim", [0, 1, 2])
+def test_aten_split_with_sizes_different_dims(device: str, dim: int):
+    """Test aten.split_with_sizes on different dimensions"""
+
+    def fn(x):
+        # Adjust split sizes based on dimension
+        if dim == 0:
+            return aten.split_with_sizes(x, [1, 2, 1], dim=dim)  # sum=4, dim size=4
+        elif dim == 1:
+            return aten.split_with_sizes(x, [1, 2, 1], dim=dim)  # sum=4, dim size=4
+        else:  # dim == 2
+            return aten.split_with_sizes(x, [2, 2, 1], dim=dim)  # sum=5, dim size=5
+
+    x = torch.randn(4, 4, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dim", [-1, -2, -3])
+def test_aten_split_with_sizes_negative_dims(device: str, dim: int):
+    """Test aten.split_with_sizes with negative dimension indices"""
+
+    def fn(x):
+        # Adjust split sizes based on dimension
+        if dim == -1:  # last dim, size=5
+            return aten.split_with_sizes(x, [2, 2, 1], dim=dim)
+        elif dim == -2:  # middle dim, size=4
+            return aten.split_with_sizes(x, [1, 2, 1], dim=dim)
+        else:  # dim == -3, first dim, size=4
+            return aten.split_with_sizes(x, [1, 2, 1], dim=dim)
+
+    x = torch.randn(4, 4, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_uneven(device: str):
+    """Test aten.split_with_sizes with uneven splits"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [1, 3, 2, 4], dim=1)
+
+    x = torch.randn(3, 10, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_single_split(device: str):
+    """Test aten.split_with_sizes with single split (entire tensor)"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [5], dim=0)
+
+    x = torch.randn(5, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
+def test_aten_split_with_sizes_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.split_with_sizes with different data types"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [2, 2, 2], dim=0)
+
+    if dtype == torch.bool:
+        x = torch.randint(0, 2, (6, 4), dtype=dtype, device=device)
+    elif dtype == torch.int32:
+        x = torch.randint(0, 10, (6, 4), dtype=dtype, device=device)
+    else:
+        x = torch.randn(6, 4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_1d(device: str):
+    """Test aten.split_with_sizes with 1D tensor"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [3, 3, 4], dim=0)
+
+    x = torch.randn(10, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_3d(device: str):
+    """Test aten.split_with_sizes with 3D tensor"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [1, 1, 2], dim=2)
+
+    x = torch.randn(2, 3, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_many_splits(device: str):
+    """Test aten.split_with_sizes with many small splits"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [1, 1, 1, 1, 1, 1, 1, 1], dim=0)
+
+    x = torch.randn(8, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("split_sizes", [[2, 0, 3], [0, 5, 0], [0, 0, 5]])
+def test_aten_split_with_sizes_zero_size(device: str, split_sizes: list[int]):
+    """Test aten.split_with_sizes with zero-sized splits"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, split_sizes, dim=0)
+
+    x = torch.randn(5, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_exact_split(device: str):
+    """Test aten.split_with_sizes where sizes exactly match dimension"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [2, 2, 2, 2, 2], dim=1)
+
+    x = torch.randn(3, 10, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_single_dim(device: str):
+    """Test aten.squeeze with single dimension"""
+
+    def fn(x):
+        return aten.squeeze(x, 1)
+
+    x = torch.randn(3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+def test_aten_squeeze_different_dims(device: str, dim: int):
+    """Test aten.squeeze on different dimensions"""
+
+    def fn(x):
+        return aten.squeeze(x, dim)
+
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_negative_dim(device: str):
+    """Test aten.squeeze with negative dimension"""
+
+    def fn(x):
+        return aten.squeeze(x, -2)
+
+    x = torch.randn(3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_multiple_dims(device: str):
+    """Test aten.squeeze with multiple dimensions"""
+
+    def fn(x):
+        return aten.squeeze(x, [0, 2])
+
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_no_change(device: str):
+    """Test aten.squeeze when dimension is not size 1"""
+
+    def fn(x):
+        return aten.squeeze(x, 1)
+
+    x = torch.randn(3, 4, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
+def test_aten_squeeze_different_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.squeeze with different data types"""
+
+    def fn(x):
+        return aten.squeeze(x, 1)
+
+    if dtype == torch.bool:
+        x = torch.randint(0, 2, (3, 1, 5), dtype=dtype, device=device)
+    elif dtype == torch.int32:
+        x = torch.randint(0, 10, (3, 1, 5), dtype=dtype, device=device)
+    else:
+        x = torch.randn(3, 1, 5, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_all_ones(device: str):
+    """Test aten.squeeze with tensor of all size-1 dimensions"""
+
+    def fn(x):
+        return aten.squeeze(x, [0, 1, 2, 3])
+
+    x = torch.randn(1, 1, 1, 1, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_2d(device: str):
+    """Test aten.squeeze with 2D tensor"""
+
+    def fn(x):
+        return aten.squeeze(x, 0)
+
+    x = torch.randn(1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_5d(device: str):
+    """Test aten.squeeze with 5D tensor"""
+
+    def fn(x):
+        return aten.squeeze(x, [1, 3])
+
+    x = torch.randn(2, 1, 3, 1, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_empty_dims(device: str):
+    """Test aten.squeeze with empty dimensions list"""
+
+    def fn(x):
+        return aten.squeeze(x, [])
+
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("shape", [(1,), (1, 1), (1, 1, 1)])
+def test_aten_squeeze_edge_cases(device: str, shape: tuple):
+    """Test aten.squeeze with edge case shapes"""
+
+    def fn(x):
+        return aten.squeeze(x, list(range(len(shape))))
+
+    x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_aten_amax_single_dim(device: str, dim: int, keepdim: bool):
