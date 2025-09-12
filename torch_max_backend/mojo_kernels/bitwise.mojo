@@ -160,3 +160,28 @@ struct BitwiseXorScalarKernel:
             return x.load[width](idx) ^ other_as_scalar
 
         foreach[elementwise_bitwise_xor, target=target](output, ctx)
+
+
+
+@compiler.register("bitwise_not")
+struct BitwiseNotKernel:
+    @staticmethod
+    fn execute[
+        dtype: DType,
+        rank: Int,
+        //,
+        target: StaticString,
+    ](
+        output: OutputTensor[dtype = dtype, rank = rank],
+        x: InputTensor[dtype = dtype, rank = rank],
+        ctx: DeviceContextPtr,
+    ) raises:
+
+        @parameter
+        @always_inline
+        fn elementwise_bitwise_not[
+            width: Int
+        ](idx: IndexList[x.rank]) -> SIMD[x.dtype, width]:
+            return ~x.load[width](idx)
+
+        foreach[elementwise_bitwise_not, target=target](output, ctx)

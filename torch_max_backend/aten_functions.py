@@ -128,6 +128,8 @@ def map_to(func):
             # We assume we cover all overloads in the packet
             for overload_name in func:
                 popped = DECOMPOSITION_TABLE.pop(getattr(func, overload_name), None)
+                if popped is not None:
+                    pass
                 if verbose_enabled() and popped is not None:
                     global number_of_decompositions_removed
                     number_of_decompositions_removed += 1
@@ -961,6 +963,16 @@ def aten_bitwise_and(input: TensorValue, other: TensorValue) -> TensorValue:
 
 
 # bitwise_not(Tensor self) -> Tensor
+@map_to(aten.bitwise_not)
+def aten_bitwise_not(input: TensorValue) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_not",
+        device=input.device,
+        values=[input],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
 
 
 # bitwise_or.Scalar(Tensor self, Scalar other) -> Tensor
@@ -1549,10 +1561,7 @@ def broadcast_shape(shapes):
     # Helper: recognize "dimension == 1"
     def is_one(d):
         # Covers ints == 1 and Dim-like objects that compare equal to 1
-        try:
-            return d == 1
-        except Exception:
-            return False
+        return d == 1
 
     # Walk from left to right over aligned dims (already padded)
     out = []
@@ -2197,7 +2206,11 @@ def aten_squeeze(input: TensorValue, dim: int | list[int]) -> TensorValue:
         dim = [dim]
     result = input
     for d in sorted(dim, reverse=True):
-        result = max_ops.squeeze(input, axis=d)
+        # Handle negative dimensions
+        actual_dim = d if d >= 0 else len(result.shape) + d
+        # Only squeeze if the dimension has size 1
+        if actual_dim < len(result.shape) and result.shape[actual_dim] == 1:
+            result = max_ops.squeeze(result, axis=actual_dim)
     return result
 
 
@@ -2325,27 +2338,21 @@ def aten_triu(input: TensorValue, diagonal: int = 0) -> TensorValue:
     # TODO: Implement dynamic triu using coordinate-based masking
     shape = input.shape
 
-    try:
-        # Try to handle static dimensions
-        for i in range(len(shape)):
-            if not isinstance(shape[i], StaticDim):
-                # For dynamic shapes, just return the input unchanged for now
-                # This is not correct but will allow the graph to compile
-                # TODO: Implement proper dynamic triu
-                return input
+    # Try to handle static dimensions
+    for i in range(len(shape)):
+        if not isinstance(shape[i], StaticDim):
+            # For dynamic shapes, just return the input unchanged for now
+            # This is not correct but will allow the graph to compile
+            # TODO: Implement proper dynamic triu
+            return input
 
-        shape_ints = [int(dim) for dim in shape]
+    shape_ints = [int(dim) for dim in shape]
 
-        numpy_mask = np.ones(shape_ints, dtype=input.dtype.to_numpy())
-        numpy_mask = np.triu(numpy_mask, k=diagonal)
-        mask_in_graph = max_ops.constant(
-            numpy_mask, dtype=input.dtype, device=input.device
-        )
-        result = input * mask_in_graph
-        return result
-    except Exception:
-        # Fallback: return input unchanged
-        return input
+    numpy_mask = np.ones(shape_ints, dtype=input.dtype.to_numpy())
+    numpy_mask = np.triu(numpy_mask, k=diagonal)
+    mask_in_graph = max_ops.constant(numpy_mask, dtype=input.dtype, device=input.device)
+    result = input * mask_in_graph
+    return result
 
 
 # split.Tensor(Tensor(a -> *) self, SymInt split_size, int dim=0) -> Tensor(a)[]
@@ -2389,43 +2396,11 @@ def aten_unbind(input: TensorValue, dim: int = 0) -> list[TensorValue]:
     return result
 
 
+# For some reason, aot_autograd always decomposes repeat_interleave. No need to have an
+# implementation here if it's never used.
 # repeat_interleave.Tensor(Tensor repeats, *, SymInt? output_size=None) -> Tensor
 # repeat_interleave.self_Tensor(Tensor self, Tensor repeats, int? dim=None, *, SymInt? output_size=None) -> Tensor
 # repeat_interleave.self_int(Tensor self, SymInt repeats, int? dim=None, *, SymInt? output_size=None) -> Tensor
-@map_to(aten.repeat_interleave)
-def aten_repeat_interleave(
-    input: TensorValue, repeats: int, dim: int = 0
-) -> TensorValue:
-    """
-    Equivalent to torch.repeat_interleave - repeats elements of a tensor along a dimension.
-    Each element is repeated 'repeats' times before moving to the next element.
-    """
-    # Handle negative dim
-    if dim < 0:
-        dim = len(input.shape) + dim
-
-    # Get the current shape
-    shape = input.shape
-
-    # Create a new shape where the specified dimension is expanded
-    new_shape = list(shape)
-    new_shape[dim] = int(new_shape[dim]) * repeats
-
-    # Use expand to repeat elements along the dimension
-    # First, add a new dimension after the target dim, then expand and reshape
-    expanded_shape = list(shape)
-    expanded_shape.insert(dim + 1, repeats)
-
-    # Add the new dimension
-    unsqueezed = max_ops.unsqueeze(input, axis=dim + 1)
-
-    # Expand along the new dimension
-    expanded = max_ops.broadcast_to(unsqueezed, expanded_shape)
-
-    # Reshape to merge the repeated dimension
-    result = max_ops.reshape(expanded, new_shape)
-
-    return result
 
 
 # t(Tensor(a) self) -> Tensor(a)

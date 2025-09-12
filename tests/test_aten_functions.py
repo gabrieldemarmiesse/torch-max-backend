@@ -209,6 +209,31 @@ def test_aten_amax_all_dims(device: str, dtype: torch.dtype):
 @pytest.mark.parametrize(
     "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
 )
+def test_aten_bitwise_not(device: str, dtype: torch.dtype):
+    def fn(x):
+        return aten.bitwise_not(x)
+
+    # Create test tensors
+    x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_bitwise_not_bool(device: str):
+    dtype = torch.bool
+
+    def fn(x):
+        return aten.bitwise_not(x)
+
+    # Create test tensors
+    x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64]
+)
 def test_aten_bitwise_and_scalar(device: str, dtype: torch.dtype):
     def fn(x):
         return aten.bitwise_and(x, 6)
@@ -433,6 +458,477 @@ def test_aten_bitwise_xor_broadcasting(device: str):
     x = torch.randint(0, 10, (3, 4, 5), dtype=torch.int32)
     y = torch.randint(0, 10, (4, 5), dtype=torch.int32)
 
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+@pytest.mark.parametrize("repeats", [1, 2, 3, 5])
+@pytest.mark.parametrize("dim", [0, 1, -1])
+def test_aten_repeat_interleave_basic(device: str, repeats: int, dim: int):
+    """Test aten.repeat_interleave with basic parameters"""
+
+    def fn(x):
+        return aten.repeat_interleave(x, repeats, dim)
+
+    x = torch.randn(3, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
+def test_aten_repeat_interleave_different_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.repeat_interleave with different data types"""
+
+    def fn(x):
+        return aten.repeat_interleave(x, 2, 0)
+
+    if dtype == torch.bool:
+        x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+    elif dtype == torch.int32:
+        x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+    else:
+        x = torch.randn(3, 4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_repeat_interleave_1d(device: str):
+    """Test aten.repeat_interleave with 1D tensor"""
+
+    def fn(x):
+        return aten.repeat_interleave(x, 3, 0)
+
+    x = torch.randn(5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_repeat_interleave_3d(device: str):
+    """Test aten.repeat_interleave with 3D tensor"""
+
+    def fn(x):
+        return aten.repeat_interleave(x, 2, 1)
+
+    x = torch.randn(2, 3, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("shape", [(1, 5), (5, 1), (1, 1)])
+def test_aten_repeat_interleave_edge_cases(device: str, shape: tuple):
+    """Test aten.repeat_interleave with edge case shapes"""
+
+    def fn(x):
+        return aten.repeat_interleave(x, 2, 0)
+
+    x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_repeat_interleave_large_repeats(device: str):
+    """Test aten.repeat_interleave with large repeat count"""
+
+    def fn(x):
+        return aten.repeat_interleave(x, 10, 0)
+
+    x = torch.randn(2, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_basic(device: str):
+    """Test aten.split_with_sizes with basic splits"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [2, 3, 5], dim=0)
+
+    x = torch.randn(10, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dim", [0, 1, 2])
+def test_aten_split_with_sizes_different_dims(device: str, dim: int):
+    """Test aten.split_with_sizes on different dimensions"""
+
+    def fn(x):
+        # Adjust split sizes based on dimension
+        if dim == 0:
+            return aten.split_with_sizes(x, [1, 2, 1], dim=dim)  # sum=4, dim size=4
+        elif dim == 1:
+            return aten.split_with_sizes(x, [1, 2, 1], dim=dim)  # sum=4, dim size=4
+        else:  # dim == 2
+            return aten.split_with_sizes(x, [2, 2, 1], dim=dim)  # sum=5, dim size=5
+
+    x = torch.randn(4, 4, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dim", [-1, -2, -3])
+def test_aten_split_with_sizes_negative_dims(device: str, dim: int):
+    """Test aten.split_with_sizes with negative dimension indices"""
+
+    def fn(x):
+        # Adjust split sizes based on dimension
+        if dim == -1:  # last dim, size=5
+            return aten.split_with_sizes(x, [2, 2, 1], dim=dim)
+        elif dim == -2:  # middle dim, size=4
+            return aten.split_with_sizes(x, [1, 2, 1], dim=dim)
+        else:  # dim == -3, first dim, size=4
+            return aten.split_with_sizes(x, [1, 2, 1], dim=dim)
+
+    x = torch.randn(4, 4, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_uneven(device: str):
+    """Test aten.split_with_sizes with uneven splits"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [1, 3, 2, 4], dim=1)
+
+    x = torch.randn(3, 10, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_single_split(device: str):
+    """Test aten.split_with_sizes with single split (entire tensor)"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [5], dim=0)
+
+    x = torch.randn(5, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
+def test_aten_split_with_sizes_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.split_with_sizes with different data types"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [2, 2, 2], dim=0)
+
+    if dtype == torch.bool:
+        x = torch.randint(0, 2, (6, 4), dtype=dtype, device=device)
+    elif dtype == torch.int32:
+        x = torch.randint(0, 10, (6, 4), dtype=dtype, device=device)
+    else:
+        x = torch.randn(6, 4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_1d(device: str):
+    """Test aten.split_with_sizes with 1D tensor"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [3, 3, 4], dim=0)
+
+    x = torch.randn(10, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_3d(device: str):
+    """Test aten.split_with_sizes with 3D tensor"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [1, 1, 2], dim=2)
+
+    x = torch.randn(2, 3, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_many_splits(device: str):
+    """Test aten.split_with_sizes with many small splits"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [1, 1, 1, 1, 1, 1, 1, 1], dim=0)
+
+    x = torch.randn(8, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("split_sizes", [[2, 0, 3], [0, 5, 0], [0, 0, 5]])
+def test_aten_split_with_sizes_zero_size(device: str, split_sizes: list[int]):
+    """Test aten.split_with_sizes with zero-sized splits"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, split_sizes, dim=0)
+
+    x = torch.randn(5, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_split_with_sizes_exact_split(device: str):
+    """Test aten.split_with_sizes where sizes exactly match dimension"""
+
+    def fn(x):
+        return aten.split_with_sizes(x, [2, 2, 2, 2, 2], dim=1)
+
+    x = torch.randn(3, 10, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_single_dim(device: str):
+    """Test aten.squeeze with single dimension"""
+
+    def fn(x):
+        return aten.squeeze(x, 1)
+
+    x = torch.randn(3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+def test_aten_squeeze_different_dims(device: str, dim: int):
+    """Test aten.squeeze on different dimensions"""
+
+    def fn(x):
+        return aten.squeeze(x, dim)
+
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_negative_dim(device: str):
+    """Test aten.squeeze with negative dimension"""
+
+    def fn(x):
+        return aten.squeeze(x, -2)
+
+    x = torch.randn(3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_multiple_dims(device: str):
+    """Test aten.squeeze with multiple dimensions"""
+
+    def fn(x):
+        return aten.squeeze(x, [0, 2])
+
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_no_change(device: str):
+    """Test aten.squeeze when dimension is not size 1"""
+
+    def fn(x):
+        return aten.squeeze(x, 1)
+
+    x = torch.randn(3, 4, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
+def test_aten_squeeze_different_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.squeeze with different data types"""
+
+    def fn(x):
+        return aten.squeeze(x, 1)
+
+    if dtype == torch.bool:
+        x = torch.randint(0, 2, (3, 1, 5), dtype=dtype, device=device)
+    elif dtype == torch.int32:
+        x = torch.randint(0, 10, (3, 1, 5), dtype=dtype, device=device)
+    else:
+        x = torch.randn(3, 1, 5, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_all_ones(device: str):
+    """Test aten.squeeze with tensor of all size-1 dimensions"""
+
+    def fn(x):
+        return aten.squeeze(x, [0, 1, 2, 3])
+
+    x = torch.randn(1, 1, 1, 1, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_2d(device: str):
+    """Test aten.squeeze with 2D tensor"""
+
+    def fn(x):
+        return aten.squeeze(x, 0)
+
+    x = torch.randn(1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_5d(device: str):
+    """Test aten.squeeze with 5D tensor"""
+
+    def fn(x):
+        return aten.squeeze(x, [1, 3])
+
+    x = torch.randn(2, 1, 3, 1, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_squeeze_empty_dims(device: str):
+    """Test aten.squeeze with empty dimensions list"""
+
+    def fn(x):
+        return aten.squeeze(x, [])
+
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("shape", [(1,), (1, 1), (1, 1, 1)])
+def test_aten_squeeze_edge_cases(device: str, shape: tuple):
+    """Test aten.squeeze with edge case shapes"""
+
+    def fn(x):
+        return aten.squeeze(x, list(range(len(shape))))
+
+    x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_logical_and_bool_tensors(device: str):
+    """Test aten.logical_and with boolean tensors"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([True, False, True, False], device=device)
+    y = torch.tensor([True, True, False, False], device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_numeric_tensors(device: str):
+    """Test aten.logical_and with numeric tensors (converted to bool)"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([1, 0, 2, -1], dtype=torch.float32, device=device)
+    y = torch.tensor([3, 0, 0, 4], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.int32, torch.int64, torch.float32, torch.float64]
+)
+def test_aten_logical_and_different_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.logical_and with different numeric data types"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([1, 0, 2, -1], dtype=dtype, device=device)
+    y = torch.tensor([3, 0, 0, 4], dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_2d_tensors(device: str):
+    """Test aten.logical_and with 2D tensors"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.randint(0, 2, (3, 4), dtype=torch.bool, device=device)
+    y = torch.randint(0, 2, (3, 4), dtype=torch.bool, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_broadcasting(device: str):
+    """Test aten.logical_and with broadcasting"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.randint(0, 3, (3, 4), dtype=torch.int32, device=device)
+    y = torch.randint(0, 3, (4,), dtype=torch.int32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_mixed_types(device: str):
+    """Test aten.logical_and with mixed boolean and numeric types"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([True, False, True, False], device=device)
+    y = torch.tensor([1, 0, 2, 0], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_zeros_and_ones(device: str):
+    """Test aten.logical_and with patterns of zeros and ones"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([0, 1, 0, 1], dtype=torch.float32, device=device)
+    y = torch.tensor([0, 0, 1, 1], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_all_false(device: str):
+    """Test aten.logical_and with all false values"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.zeros(4, dtype=torch.float32, device=device)
+    y = torch.zeros(4, dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_all_true(device: str):
+    """Test aten.logical_and with all true values"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.ones(4, dtype=torch.float32, device=device)
+    y = torch.ones(4, dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_negative_values(device: str):
+    """Test aten.logical_and with negative values (should be treated as true)"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor([-1, -2, 0, 3], dtype=torch.float32, device=device)
+    y = torch.tensor([4, 0, -5, 6], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_3d_tensors(device: str):
+    """Test aten.logical_and with 3D tensors"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.randint(0, 2, (2, 3, 4), dtype=torch.bool, device=device)
+    y = torch.randint(0, 2, (2, 3, 4), dtype=torch.bool, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+def test_aten_logical_and_scalar_like(device: str):
+    """Test aten.logical_and with scalar-like tensors"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x = torch.tensor(True, device=device)
+    y = torch.tensor(False, device=device)
+    check_functions_are_equivalent(fn, device, [x, y])
+
+
+@pytest.mark.parametrize(
+    "shape_pair", [((3, 1), (3, 4)), ((1, 4), (3, 4)), ((3, 1, 1), (3, 4, 5))]
+)
+def test_aten_logical_and_broadcasting_shapes(device: str, shape_pair: tuple):
+    """Test aten.logical_and with various broadcasting shapes"""
+
+    def fn(x, y):
+        return aten.logical_and(x, y)
+
+    x_shape, y_shape = shape_pair
+    x = torch.randint(0, 2, x_shape, dtype=torch.int32, device=device)
+    y = torch.randint(0, 2, y_shape, dtype=torch.int32, device=device)
     check_functions_are_equivalent(fn, device, [x, y])
 
 
