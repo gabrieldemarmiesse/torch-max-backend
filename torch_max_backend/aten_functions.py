@@ -961,6 +961,16 @@ def aten_bitwise_and(input: TensorValue, other: TensorValue) -> TensorValue:
 
 
 # bitwise_not(Tensor self) -> Tensor
+@map_to(aten.bitwise_not)
+def aten_bitwise_not(input: TensorValue) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_not",
+        device=input.device,
+        values=[input],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
 
 
 # bitwise_or.Scalar(Tensor self, Scalar other) -> Tensor
