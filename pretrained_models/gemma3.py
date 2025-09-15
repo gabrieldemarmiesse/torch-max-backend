@@ -11,6 +11,7 @@ from torch._dynamo import mark_dynamic
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
+os.environ["TORCH_MAX_BACKEND_DEBUG_GRAPH"] = "1"
 
 
 USE_INSTRUCT_MODEL = True
@@ -656,6 +657,7 @@ def generate_text_basic_stream(model, token_ids, max_new_tokens, eos_token_id=No
         for _ in range(max_new_tokens):
             mark_dynamic(token_ids, 1)
             out = model(token_ids)[:, -1]
+            raise RuntimeError("Debugging")
             next_token = torch.argmax(out, dim=-1, keepdim=True)
 
             if eos_token_id is not None and torch.all(next_token == eos_token_id):

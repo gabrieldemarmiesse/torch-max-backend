@@ -9,7 +9,7 @@ from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
 from torch._dynamo.backends.common import aot_autograd
 from functorch.compile import make_boxed_func
 from torch_max_backend.aten_functions import DECOMPOSITION_TABLE
-from torch_max_backend.flags import profiling_enabled, verbose_enabled
+from torch_max_backend.flags import profiling_enabled, verbose_enabled, debug_graph
 import time
 import traceback
 from typing import Any
@@ -18,6 +18,10 @@ from pathlib import Path
 from max.graph import KernelLibrary
 from max import mlir
 from dataclasses import dataclass
+from max.graph import TensorValue
+import max.graph.ops as max_ops
+from max.driver.tensor import load_max_tensor
+from max.experimental.tensor import Tensor as ExperimentalTensor
 
 
 class MaxCompilerError(Exception):
@@ -36,6 +40,8 @@ class GlobalMaxObjects:
 
 _global_max_objects: GlobalMaxObjects | None = None
 
+output_directory = Path("/tmp/.torch_max_backend_debug")
+
 
 def global_max_objects() -> GlobalMaxObjects:
     global _global_max_objects
@@ -45,10 +51,59 @@ def global_max_objects() -> GlobalMaxObjects:
             kernel_library = KernelLibrary(context)
             kernel_library.load_paths(context, [Path(__file__).parent / "mojo_kernels"])
         session = engine.InferenceSession(devices=list(get_accelerators()))
+        if debug_graph():
+            session.set_debug_print_options(
+                "BINARY_MAX_CHECKPOINT", output_directory=output_directory
+            )
+
         _global_max_objects = GlobalMaxObjects(
             session=session, kernel_library=kernel_library, context=context
         )
     return _global_max_objects
+
+
+def add_prints(node_idx: int, func_name: str, func_output: Any):
+    if not debug_graph():
+        return
+    if isinstance(func_output, TensorValue):
+        func_output = [func_output]
+
+    for i, output_tensor in enumerate(func_output):
+        label = f"node-idx-{node_idx:09}-output-{i}-function-{func_name}"
+        max_ops.print(output_tensor, label)
+
+
+def debug_graph_if_required():
+    if not debug_graph():
+        return
+    # We sort the files in the directory
+    files = sorted(output_directory.glob("*.max"))
+    if len(files) == 0:
+        raise ValueError(
+            "No .max files found in the output directory for debugging, this is likely a bug."
+        )
+
+    for file in files:
+        # extract infos
+        _, _, node_idx, _, output_idx, _, func_name = file.stem.split("-")
+        loaded_tensor = load_max_tensor(file)
+        shape = tuple(loaded_tensor.shape)
+        dtype = loaded_tensor.dtype
+        from max.experimental import functional as F
+
+        print(shape, dtype, func_name)
+        import numpy as np
+
+        loaded_tensor = ExperimentalTensor.from_dlpack(loaded_tensor)
+        nan_values = F.is_nan(loaded_tensor)
+        nan_values = np.from_dlpack(nan_values)
+        if nan_values.any() == True:
+            raise ValueError(
+                f"The output tensor of node {node_idx} function {func_name} output {output_idx} contains NaNs. "
+                f"It has shape {shape} and dtype {dtype}. "
+                f"This is likely a bug in the Max backend. Please open an issue."
+            )
+    raise ValueError("Found no error in the debugged graph.")
 
 
 def gather_stats_on_graph(gm: torch.fx.GraphModule):
@@ -261,6 +316,8 @@ class _GraphFactory:
                 f"{e}\n"
                 f"{traceback.format_exc()}"
             )
+        add_prints(node_idx, str(node.target), func_output)
+
         self.tensor_book[node.name] = func_output
 
     def handle_get_attr(self, node: torch.fx.Node):
@@ -345,6 +402,8 @@ class BaseMaxCompiler:
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
+        debug_graph_if_required()
+
         # Reconstruct the original output structure with None values
         result = []
         for i in self.output_blueprint:
@@ -363,8 +422,6 @@ class BaseMaxCompiler:
 
 class max_backend:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list):
-        gm.graph.print_tabular()
-
         def boxed_func(*args, **kwargs):
             return make_boxed_func(BaseMaxCompiler(*args, **kwargs).__call__)
 
