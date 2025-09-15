@@ -73,7 +73,7 @@ def add_prints(node_idx: int, func_name: str, func_output: Any):
         max_ops.print(output_tensor, label)
 
 
-def debug_graph_if_required():
+def debug_graph_if_required(gm: torch.fx.GraphModule):
     if not debug_graph():
         return
     # We sort the files in the directory
@@ -98,8 +98,18 @@ def debug_graph_if_required():
         nan_values = F.is_nan(loaded_tensor)
         nan_values = np.from_dlpack(nan_values)
         if nan_values.any() == True:
+            # Let's grab the right node and get infos
+            for i, node in enumerate(gm.graph.nodes):
+                if i == int(node_idx):
+                    break
+            else:
+                raise ValueError(
+                    f"Could not find node {node_idx} in the graph, this is likely a bug."
+                )
+
             raise ValueError(
-                f"The output tensor of node {node_idx} function {func_name} output {output_idx} contains NaNs. "
+                f"The output tensor of node {node_idx} function {func_name} with args {node.args} "
+                f", kwargs {node.kwargs} and output {output_idx} contains NaNs. "
                 f"It has shape {shape} and dtype {dtype}. "
                 f"This is likely a bug in the Max backend. Please open an issue."
             )
@@ -373,6 +383,7 @@ class _GraphFactory:
 
 class BaseMaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
+        self.gm = gm
         if profiling_enabled():
             compiler_start = time.time_ns()
         if verbose_enabled():
@@ -402,7 +413,7 @@ class BaseMaxCompiler:
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
-        debug_graph_if_required()
+        debug_graph_if_required(self.gm)
 
         # Reconstruct the original output structure with None values
         result = []

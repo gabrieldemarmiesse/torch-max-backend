@@ -481,7 +481,10 @@ def flash_attention_gpu(
 # _softmax(Tensor self, int dim, bool half_to_float) -> Tensor
 @map_to(aten._softmax)
 def aten__softmax(self: TensorValue, dim: int, half_to_float: bool):
-    if half_to_float:
+    # half_to_float is meant for float16 (half precision) tensors
+    # For bfloat16, we should also cast to float32 when half_to_float is True
+    # to ensure numerical stability
+    if half_to_float and self.dtype in [DType.float16, DType.bfloat16]:
         dtype = torch.float32
     else:
         dtype = None
@@ -498,12 +501,19 @@ def aten_softmax(input, dim=-1, dtype=None):
     if dim < 0:
         dim = len(input.shape) + dim
 
-    # Manual implementation
+    # Manual implementation to handle -inf values correctly
     # Compute max along the specified axis for numerical stability, keeping dimensions
     x_max = aten_amax(input, dim=[dim], keepdim=True)
 
     # Subtract max for numerical stability
-    x_shifted = input - x_max
+    # Special handling: when x_max is -inf, subtracting gives nan
+    # Replace -inf max with 0 to avoid nan in subtraction
+    x_max_safe = max_ops.where(
+        max_ops.is_inf(x_max) & (x_max < 0),  # Check for -inf
+        max_ops.zeros_like(x_max),  # Replace -inf with 0
+        x_max,
+    )
+    x_shifted = input - x_max_safe
 
     # Compute exponential
     x_exp = max_ops.exp(x_shifted)
@@ -512,7 +522,12 @@ def aten_softmax(input, dim=-1, dtype=None):
     x_sum = aten_sum(x_exp, dim=[dim], keepdim=True)
 
     # Divide to get softmax
-    return x_exp / x_sum
+    # When sum is 0 (all inputs were -inf), avoid division by zero
+    # Replace 0 sum with 1 to avoid nan (result will be 0/1 = 0)
+    x_sum_safe = max_ops.where(x_sum == 0, max_ops.ones_like(x_sum), x_sum)
+    result = x_exp / x_sum_safe
+
+    return result
 
 
 # _to_copy(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, bool non_blocking=False, MemoryFormat? memory_format=None) -> Tensor

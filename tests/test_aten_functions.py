@@ -714,6 +714,239 @@ def test_aten_squeeze_no_change(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_softmax_bfloat16_basic(device: str):
+    """Test softmax with bfloat16 dtype for basic inputs"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    x = torch.randn(4, 8, dtype=torch.bfloat16, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_bfloat16_large_values(device: str):
+    """Test softmax with bfloat16 and large input values that might cause overflow"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    # Create tensor with large values that might cause overflow in exp
+    x = torch.tensor(
+        [[100.0, 200.0, 300.0], [-100.0, -200.0, -300.0], [1000.0, 2000.0, 3000.0]],
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_bfloat16_small_values(device: str):
+    """Test softmax with bfloat16 and very small values"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    # Create tensor with very small values
+    x = torch.tensor(
+        [[1e-7, 2e-7, 3e-7], [1e-8, 2e-8, 3e-8]], dtype=torch.bfloat16, device=device
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dim", [0, 1, -1, -2])
+def test_softmax_bfloat16_different_dims(device: str, dim: int):
+    """Test softmax with bfloat16 on different dimensions"""
+
+    def fn(x):
+        return aten.softmax(x, dim=dim)
+
+    x = torch.randn(3, 4, 5, dtype=torch.bfloat16, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_bfloat16_uniform_values(device: str):
+    """Test softmax with bfloat16 when all values are the same"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    # All values are the same - should result in uniform distribution
+    x = torch.ones(3, 6, dtype=torch.bfloat16, device=device) * 5.0
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_bfloat16_mixed_signs(device: str):
+    """Test softmax with bfloat16 with mixed positive and negative values"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    x = torch.tensor(
+        [
+            [-10.0, 0.0, 10.0, -5.0, 5.0],
+            [100.0, -100.0, 50.0, -50.0, 0.0],
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+        ],
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_bfloat16_edge_cases(device: str):
+    """Test softmax with bfloat16 edge cases including inf and very large differences"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    # Test with values that have large differences
+    x = torch.tensor(
+        [[-1000.0, 1000.0], [0.0, 1000.0], [-500.0, 500.0]],
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_bfloat16_single_element(device: str):
+    """Test softmax with bfloat16 on single element tensors"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    x = torch.tensor([[5.0]], dtype=torch.bfloat16, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_bfloat16_4d_tensor(device: str):
+    """Test softmax with bfloat16 on 4D tensors (common in neural networks)"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    x = torch.randn(2, 3, 4, 5, dtype=torch.bfloat16, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_bfloat16_extreme_range(device: str):
+    """Test softmax with bfloat16 with extreme value ranges"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    # Test with maximum range that bfloat16 can represent
+    x = torch.tensor(
+        [[3.38e38, -3.38e38, 0.0], [1e10, 1e-10, 1.0]],
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16]
+)
+def test_softmax_different_dtypes(device: str, dtype: torch.dtype):
+    """Test softmax with different floating point dtypes"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device) * 10
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test__softmax_float16_half_to_float(device: str):
+    """Test _softmax with float16 and half_to_float=True"""
+
+    def fn(x):
+        return aten._softmax(x, dim=-1, half_to_float=True)
+
+    x = torch.randn(4, 6, dtype=torch.float16, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test__softmax_bfloat16_no_half_to_float(device: str):
+    """Test _softmax with bfloat16 and half_to_float=False"""
+
+    def fn(x):
+        return aten._softmax(x, dim=-1, half_to_float=False)
+
+    x = torch.randn(4, 6, dtype=torch.bfloat16, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_with_masked_fill_nan_bug(device: str):
+    """Test to reproduce NaN bug with masked_fill followed by softmax"""
+
+    def fn(x, mask):
+        # Apply masked_fill with -inf to mask out certain positions
+        masked = aten.masked_fill(x, mask, float("-inf"))
+        # Apply softmax which should handle -inf correctly
+        return aten._softmax(masked, dim=-1, half_to_float=False)
+
+    # Create input tensor with shape similar to the error (1, 4, 19, 19)
+    x = torch.randn(1, 4, 19, 19, dtype=torch.bfloat16, device=device)
+
+    # Create a mask that will set some values to -inf
+    mask = torch.rand(1, 4, 19, 19, device=device) > 0.7  # ~30% of values masked
+
+    check_functions_are_equivalent(fn, device, [x, mask])
+
+
+def test_softmax_with_all_masked_nan_bug(device: str):
+    """Test softmax when entire row is masked (all -inf)"""
+
+    def fn(x, mask):
+        masked = aten.masked_fill(x, mask, float("-inf"))
+        return aten._softmax(masked, dim=-1, half_to_float=False)
+
+    x = torch.randn(1, 4, 5, 5, dtype=torch.bfloat16, device=device)
+
+    # Create a mask that masks entire rows
+    mask = torch.zeros(1, 4, 5, 5, dtype=torch.bool, device=device)
+    mask[0, 0, 0, :] = True  # Mask entire first row of first batch/channel
+    mask[0, 1, 2, :] = True  # Mask entire third row of second channel
+
+    check_functions_are_equivalent(fn, device, [x, mask])
+
+
+def test_softmax_direct_inf_values(device: str):
+    """Test softmax with direct -inf values"""
+
+    def fn(x):
+        return aten._softmax(x, dim=-1, half_to_float=False)
+
+    # Create tensor with some -inf values directly
+    x = torch.randn(1, 2, 4, 4, dtype=torch.bfloat16, device=device)
+    x[0, 0, 0, 1] = float("-inf")
+    x[0, 0, 0, 3] = float("-inf")
+    x[0, 1, 1, :] = float("-inf")  # Entire row is -inf
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_softmax_mixed_inf_finite(device: str):
+    """Test softmax with mix of -inf and finite values"""
+
+    def fn(x):
+        return aten.softmax(x, dim=-1)
+
+    # Create specific test case with -inf and finite values
+    x = torch.tensor(
+        [
+            [1.0, 2.0, float("-inf"), 3.0],
+            [float("-inf"), float("-inf"), 1.0, 2.0],
+            [float("-inf"), float("-inf"), float("-inf"), float("-inf")],  # All -inf
+            [1.0, 1.0, 1.0, 1.0],
+        ],
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    x = x.unsqueeze(0).unsqueeze(0)  # Make it 4D: (1, 1, 4, 4)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
 def test_aten_squeeze_different_dtypes(device: str, dtype: torch.dtype):
     """Test aten.squeeze with different data types"""
