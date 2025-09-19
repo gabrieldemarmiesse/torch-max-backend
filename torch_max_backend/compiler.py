@@ -73,7 +73,7 @@ def add_prints(node_idx: int, func_name: str, func_output: Any):
         max_ops.print(output_tensor, label)
 
 
-def debug_graph_if_required(gm: torch.fx.GraphModule):
+def debug_graph_if_required(gm: torch.fx.GraphModule, args):
     if not debug_graph():
         return
     # We sort the files in the directory
@@ -413,7 +413,7 @@ class BaseMaxCompiler:
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
-        debug_graph_if_required(self.gm)
+        debug_graph_if_required(self.gm, args)
 
         # Reconstruct the original output structure with None values
         result = []
