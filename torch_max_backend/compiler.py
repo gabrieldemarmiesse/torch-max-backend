@@ -363,8 +363,6 @@ class BaseMaxCompiler:
 
 class max_backend:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list):
-        gm.graph.print_tabular()
-
         def boxed_func(*args, **kwargs):
             return make_boxed_func(BaseMaxCompiler(*args, **kwargs).__call__)
 

@@ -3,23 +3,21 @@ from torchvision import models, transforms
 from PIL import Image
 import requests
 from io import BytesIO
-from torch_max_backend import max_backend, register_max_devices
+from torch_max_backend import max_backend
 import os
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
-# check compatibility
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
 
 
 device = "cuda"
 
 model = models.vgg11(pretrained=True)
 
-register_max_devices()
 
 model = model.to(device)
 model.eval()
-model = torch.compile(model, backend=max_backend)
+model = torch.compile(model, backend=max_backend, fullgraph=True)
 
 preprocess = transforms.Compose(
     [
