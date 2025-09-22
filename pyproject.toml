@@ -81,5 +81,6 @@ dev = [
     "line-profiler>=5.0.0",
     "coverage>=7.10.6",
     "pytest-cov>=7.0.0",
+    "rich>=14.1.0",
 ]
 
