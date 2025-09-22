@@ -143,6 +143,7 @@ def debug_graph_if_required(gm: torch.fx.GraphModule, args):
                                 atol=1e-4,
                                 equal_nan=True,
                             ):
+                                print(type(func_args[1]))
                                 raise ValueError(
                                     f"The output tensor of node {node_idx} function {old_func} with args {pp(func_args)} "
                                     f", kwargs {pp(func_kwargs)} and output {output_idx} has different values between Max and PyTorch. "

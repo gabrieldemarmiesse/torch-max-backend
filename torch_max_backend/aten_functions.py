@@ -1842,9 +1842,10 @@ def aten_mm(x: TensorValue, y: TensorValue) -> TensorValue:
 
 # mul.Scalar(Tensor self, Scalar other) -> Tensor
 # mul.Tensor(Tensor self, Tensor other) -> Tensor
-@map_to(aten.mul)
+@map_to(aten.mul.Tensor)
 def aten_mul(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
-    input, other = type_promotion(input, other)
+    if not isinstance(other, Scalar):
+        input, other = type_promotion(input, other)
     return input * other
 
 
