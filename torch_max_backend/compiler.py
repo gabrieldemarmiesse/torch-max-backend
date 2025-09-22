@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from max.graph import TensorValue
 import max.graph.ops as max_ops
 from max.driver.tensor import load_max_tensor
-from max.experimental.tensor import Tensor as ExperimentalTensor
 
 
 class MaxCompilerError(Exception):
@@ -41,6 +40,10 @@ class GlobalMaxObjects:
 _global_max_objects: GlobalMaxObjects | None = None
 
 output_directory = Path("/tmp/.torch_max_backend_debug")
+output_directory_max = output_directory / "max"
+output_directory_max.mkdir(parents=True, exist_ok=True)
+output_directory_torch = output_directory / "torch"
+output_directory_torch.mkdir(parents=True, exist_ok=True)
 
 
 def global_max_objects() -> GlobalMaxObjects:
@@ -53,7 +56,7 @@ def global_max_objects() -> GlobalMaxObjects:
         session = engine.InferenceSession(devices=list(get_accelerators()))
         if debug_graph():
             session.set_debug_print_options(
-                "BINARY_MAX_CHECKPOINT", output_directory=output_directory
+                "BINARY_MAX_CHECKPOINT", output_directory=output_directory_max
             )
 
         _global_max_objects = GlobalMaxObjects(
@@ -69,50 +72,128 @@ def add_prints(node_idx: int, func_name: str, func_output: Any):
         func_output = [func_output]
 
     for i, output_tensor in enumerate(func_output):
-        label = f"node-idx-{node_idx:09}-output-{i}-function-{func_name}"
+        label = get_tensor_label(node_idx, i, func_name)
         max_ops.print(output_tensor, label)
+
+
+def get_tensor_label(node_idx: int, i: int, func_name: str) -> str:
+    return f"node-idx-{node_idx:09}-output-{i}-function-{func_name}"
+
+
+def pp(x) -> str:
+    if isinstance(x, torch.Tensor):
+        return repr(x)[:-1] + f", shape={x.shape})"
+    if isinstance(x, list):
+        return "[" + ", ".join(pp(y) for y in x) + "]"
+    if isinstance(x, tuple):
+        return "(" + ", ".join(pp(y) for y in x) + ")"
+    return repr(x)
 
 
 def debug_graph_if_required(gm: torch.fx.GraphModule, args):
     if not debug_graph():
         return
+
+    # Let's insert checks in the graph
+    for node_idx, node in enumerate(gm.graph.nodes):
+        if node.op == "call_function" or node.op == "call_method":
+
+            def make_debug_function(node_idx, old_func):
+                def new_function(*func_args, **func_kwargs):
+                    print(f"Debugging node {node_idx} function {old_func}")
+                    result = old_func(*func_args, **func_kwargs)
+                    to_check = result
+                    if isinstance(to_check, torch.Tensor):
+                        to_check = [to_check]
+                    for output_idx, tensor in enumerate(to_check):
+                        if isinstance(tensor, torch.Tensor):
+                            # Load the corresponding tensor from MAX
+                            filename = output_directory_max / (
+                                get_tensor_label(node_idx, output_idx, str(old_func))
+                                + ".max"
+                            )
+                            if not filename.exists():
+                                print(
+                                    f"Debugging file {filename} does not exist, skipping."
+                                )
+                                continue
+                            loaded_tensor = torch.from_dlpack(load_max_tensor(filename))
+                            true_tensor_from_torch = tensor.to("cpu")
+                            # Check dtype
+                            if loaded_tensor.dtype != true_tensor_from_torch.dtype:
+                                raise ValueError(
+                                    f"The output tensor of node {node_idx} function {old_func} with args {func_args} "
+                                    f", kwargs {func_kwargs} and output {output_idx} has different dtypes between Max and PyTorch. "
+                                    f"Max dtype is {loaded_tensor.dtype}, PyTorch dtype is {true_tensor_from_torch.dtype}. "
+                                    f"This is likely a bug in the Max backend. Please open an issue."
+                                )
+                            # Check shape
+                            if loaded_tensor.shape != true_tensor_from_torch.shape:
+                                raise ValueError(
+                                    f"The output tensor of node {node_idx} function {old_func} with args {func_args} "
+                                    f", kwargs {func_kwargs} and output {output_idx} has different shapes between Max and PyTorch. "
+                                    f"Max shape is {loaded_tensor.shape}, PyTorch shape is {true_tensor_from_torch.shape}. "
+                                    f"This is likely a bug in the Max backend. Please open an issue."
+                                )
+                            # Check values
+                            if not torch.allclose(
+                                loaded_tensor,
+                                true_tensor_from_torch,
+                                rtol=1e-4,
+                                atol=1e-4,
+                                equal_nan=True,
+                            ):
+                                raise ValueError(
+                                    f"The output tensor of node {node_idx} function {old_func} with args {pp(func_args)} "
+                                    f", kwargs {pp(func_kwargs)} and output {output_idx} has different values between Max and PyTorch. "
+                                    f"Expected {true_tensor_from_torch} but got {loaded_tensor}. "
+                                    f"This is likely a bug in the Max backend. Please open an issue."
+                                )
+
+                    return result
+
+                return new_function
+
+            node.target = make_debug_function(node_idx, node.target)
+
+    gm(*args)
+
     # We sort the files in the directory
-    files = sorted(output_directory.glob("*.max"))
-    if len(files) == 0:
-        raise ValueError(
-            "No .max files found in the output directory for debugging, this is likely a bug."
-        )
-
-    for file in files:
-        # extract infos
-        _, _, node_idx, _, output_idx, _, func_name = file.stem.split("-")
-        loaded_tensor = load_max_tensor(file)
-        shape = tuple(loaded_tensor.shape)
-        dtype = loaded_tensor.dtype
-        from max.experimental import functional as F
-
-        print(shape, dtype, func_name)
-        import numpy as np
-
-        loaded_tensor = ExperimentalTensor.from_dlpack(loaded_tensor)
-        nan_values = F.is_nan(loaded_tensor)
-        nan_values = np.from_dlpack(nan_values)
-        if nan_values.any() == True:
-            # Let's grab the right node and get infos
-            for i, node in enumerate(gm.graph.nodes):
-                if i == int(node_idx):
-                    break
-            else:
-                raise ValueError(
-                    f"Could not find node {node_idx} in the graph, this is likely a bug."
-                )
-
-            raise ValueError(
-                f"The output tensor of node {node_idx} function {func_name} with args {node.args} "
-                f", kwargs {node.kwargs} and output {output_idx} contains NaNs. "
-                f"It has shape {shape} and dtype {dtype}. "
-                f"This is likely a bug in the Max backend. Please open an issue."
-            )
+    # files = sorted(output_directory.glob("*.max"))
+    # if len(files) == 0:
+    #    raise ValueError(
+    #        "No .max files found in the output directory for debugging, this is likely a bug."
+    #    )
+    #
+    # for file in files:
+    #    # extract infos
+    #    _, _, node_idx, _, output_idx, _, func_name = file.stem.split("-")
+    #    loaded_tensor = load_max_tensor(file)
+    #    shape = tuple(loaded_tensor.shape)
+    #    dtype = loaded_tensor.dtype
+    #
+    #    print(shape, dtype, func_name)
+    #    import numpy as np
+    #
+    #    loaded_tensor = ExperimentalTensor.from_dlpack(loaded_tensor)
+    #    nan_values = F.is_nan(loaded_tensor)
+    #    nan_values = np.from_dlpack(nan_values)
+    #    if nan_values.any() == True:
+    #        # Let's grab the right node and get infos
+    #        for i, node in enumerate(gm.graph.nodes):
+    #            if i == int(node_idx):
+    #                break
+    #        else:
+    #            raise ValueError(
+    #                f"Could not find node {node_idx} in the graph, this is likely a bug."
+    #            )
+    #
+    #        raise ValueError(
+    #            f"The output tensor of node {node_idx} function {func_name} with args {node.args} "
+    #            f", kwargs {node.kwargs} and output {output_idx} contains NaNs. "
+    #            f"It has shape {shape} and dtype {dtype}. "
+    #            f"This is likely a bug in the Max backend. Please open an issue."
+    #        )
     raise ValueError("Found no error in the debugged graph.")
 
 
