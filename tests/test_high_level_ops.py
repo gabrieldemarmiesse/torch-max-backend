@@ -2177,7 +2177,7 @@ def test_linear_small_dimensions(device: str):
     input = torch.randn(batch_size, in_features)
     weight = torch.randn(out_features, in_features)
 
-    check_functions_are_equivalent(fn, device, [input, weight])
+    check_functions_are_equivalent(fn, device, [input, weight], atol=1e-2, rtol=1e-2)
 
 
 def test_linear_medium_dimensions(device: str):
@@ -2321,7 +2321,7 @@ def test_linear_large_dimensions(device: str):
     input = torch.randn(batch_size, in_features)
     weight = torch.randn(out_features, in_features)
 
-    check_functions_are_equivalent(fn, device, [input, weight])
+    check_functions_are_equivalent(fn, device, [input, weight], atol=1e-2, rtol=1e-2)
 
 
 def test_linear_with_transpose(device: str):
@@ -2998,7 +2998,9 @@ def test_max_pool2d_with_conv2d_chain(device: str):
     weight2 = torch.randn(out_channels, hidden_channels, 3, 3)
     bias2 = torch.randn(out_channels)
 
-    check_functions_are_equivalent(fn, device, [x, weight1, bias1, weight2, bias2])
+    check_functions_are_equivalent(
+        fn, device, [x, weight1, bias1, weight2, bias2], atol=1e-3, rtol=1e-3
+    )
 
 
 def test_flatten_after_pooling(device: str):

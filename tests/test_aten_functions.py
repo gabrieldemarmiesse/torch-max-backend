@@ -20,7 +20,8 @@ def test_scaled_dot_product_flash_attention_basic(cuda_device: str, dtype: torch
     k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+    # TensorFloat-32 tensor cores are used by default, lowering precision
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
@@ -37,7 +38,8 @@ def test_scaled_dot_product_flash_attention_with_causal(cuda_device: str, dtype:
     k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+    # TensorFloat-32 tensor cores are used by default, lowering precision
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
@@ -60,7 +62,8 @@ def test_scaled_dot_product_flash_attention_with_scale(cuda_device: str, dtype):
     k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+    # TensorFloat-32 tensor cores are used by default, lowering precision
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
