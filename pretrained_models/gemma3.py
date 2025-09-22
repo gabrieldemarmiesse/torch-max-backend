@@ -17,16 +17,6 @@ os.environ["TORCH_MAX_BACKEND_DEBUG_GRAPH"] = "1"
 class Gemma3Model(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        assert (
-            cfg["layer_types"] is not None
-            and len(cfg["layer_types"]) == cfg["n_layers"]
-        )
-
-        # Main model parameters
-        self.tok_emb = nn.Embedding(
-            cfg["vocab_size"], cfg["emb_dim"], dtype=cfg["dtype"]
-        )
-
         self.cfg = cfg
 
     def _create_masks(self, seq_len, device):
@@ -77,8 +67,8 @@ class Gemma3Model(nn.Module):
     def forward(self, input_ids):
         # Forward pass
         _, seq_len = input_ids.shape
-        x = self.tok_emb(input_ids) * (self.cfg["emb_dim"] ** 0.5)
-        _, mask_local = self._create_masks(seq_len, x.device)
+        _ = input_ids + 1
+        _, mask_local = self._create_masks(seq_len, torch.device("cuda"))
         return mask_local
 
 
@@ -110,10 +100,6 @@ model(torch.tensor([1, 2, 3]).unsqueeze(0))
 
 total_params = sum(p.numel() for p in model.parameters())
 print(f"Total number of parameters: {total_params:,}")
-
-# Account for weight tying
-total_params_normalized = total_params - model.tok_emb.weight.numel()
-print(f"\nTotal number of unique parameters: {total_params_normalized:,}")
 
 
 def model_memory_size(model, input_dtype=torch.float32):
