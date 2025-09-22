@@ -1,8 +1,6 @@
-import json
 import os
 from pathlib import Path
-from safetensors.torch import load_file
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import hf_hub_download
 
 import torch
 import torch.nn as nn
@@ -102,43 +100,7 @@ total_params = sum(p.numel() for p in model.parameters())
 print(f"Total number of parameters: {total_params:,}")
 
 
-def model_memory_size(model, input_dtype=torch.float32):
-    total_params = 0
-    total_grads = 0
-    for param in model.parameters():
-        # Calculate total number of elements per parameter
-        param_size = param.numel()
-        total_params += param_size
-        # Check if gradients are stored for this parameter
-        if param.requires_grad:
-            total_grads += param_size
-
-    # Calculate buffer size (non-parameters that require memory)
-    total_buffers = sum(buf.numel() for buf in model.buffers())
-
-    # Size in bytes = (Number of elements) * (Size of each element in bytes)
-    # We assume parameters and gradients are stored in the same type as input dtype
-    element_size = torch.tensor(0, dtype=input_dtype).element_size()
-    total_memory_bytes = (total_params + total_grads + total_buffers) * element_size
-
-    # Convert bytes to gigabytes
-    total_memory_gb = total_memory_bytes / (1024**3)
-
-    return total_memory_gb
-
-
-print(
-    f"float32 (PyTorch default): {model_memory_size(model, input_dtype=torch.float32):.2f} GB"
-)
-print(f"bfloat16: {model_memory_size(model, input_dtype=torch.bfloat16):.2f} GB")
-
-
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
+device = torch.device("cuda")
 
 model.to(device)
 
@@ -149,26 +111,6 @@ repo_id = f"google/gemma-3-{CHOOSE_MODEL}-it"
 
 
 local_dir = Path(repo_id).parts[-1]
-
-if CHOOSE_MODEL == "270m":
-    weights_file = hf_hub_download(
-        repo_id=repo_id, filename="model.safetensors", local_dir=local_dir
-    )
-    weights_dict = load_file(weights_file)
-else:
-    repo_dir = snapshot_download(repo_id=repo_id, local_dir=local_dir)
-    index_path = os.path.join(repo_dir, "model.safetensors.index.json")
-    with open(index_path) as f:
-        index = json.load(f)
-
-    weights_dict = {}
-    for filename in set(index["weight_map"].values()):
-        shard_path = os.path.join(repo_dir, filename)
-        shard = load_file(shard_path)
-        weights_dict.update(shard)
-
-model.to(device)
-del weights_dict
 
 
 from tokenizers import Tokenizer
