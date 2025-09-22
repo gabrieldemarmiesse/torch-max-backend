@@ -20,7 +20,7 @@ def _create_masks(seq_len, device):
     return mask_global, mask_local
 
 
-def forward(input_ids):
+def model(input_ids):
     # Forward pass
     _, seq_len = input_ids.shape
     _ = input_ids + 1
@@ -29,10 +29,6 @@ def forward(input_ids):
 
 
 torch.manual_seed(123)
-model = forward
-
-
-model(torch.tensor([1, 2, 3]).unsqueeze(0))
 
 
 device = torch.device("cuda")
@@ -87,7 +83,6 @@ prompt = apply_chat_template("Give me a short introduction to large language mod
 
 
 input_token_ids = tokenizer.encode(prompt)
-text = tokenizer.decode(input_token_ids)
 
 
 model = torch.compile(model, backend=max_backend)
