@@ -87,20 +87,11 @@ input_token_ids = tokenizer.encode(prompt)
 
 model = torch.compile(model, backend=max_backend)
 
+input_token_ids_tensor = torch.tensor([5 for _ in range(19)], device=device).unsqueeze(
+    0
+)
 
-def generate_text_basic_stream(model, token_ids, max_new_tokens):
-    with torch.no_grad():
-        for _ in range(max_new_tokens):
-            mark_dynamic(token_ids, 1)
-            _ = model(token_ids)[:, -1]
-            raise RuntimeError("Debugging")
-
-
-input_token_ids_tensor = torch.tensor(input_token_ids, device=device).unsqueeze(0)
-
-
-for token in generate_text_basic_stream(
-    model=model, token_ids=input_token_ids_tensor, max_new_tokens=500
-):
-    token_id = token.squeeze(0).tolist()
-    print(tokenizer.decode(token_id), end="", flush=True)
+with torch.no_grad():
+    mark_dynamic(input_token_ids_tensor, 1)
+    _ = model(input_token_ids_tensor)[:, -1]
+    raise RuntimeError("Debugging")
