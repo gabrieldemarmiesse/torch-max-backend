@@ -782,6 +782,144 @@ def test_aten_squeeze_edge_cases(device: str, shape: tuple):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_aten_triu_basic(device: str):
+    """Test aten.triu with default diagonal=0"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(5, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("diagonal", [-2, -1, 0, 1, 2])
+def test_aten_triu_different_diagonals(device: str, diagonal: int):
+    """Test aten.triu with different diagonal values"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=diagonal)
+
+    x = torch.randn(6, 6, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("shape", [(3, 5), (5, 3), (7, 7)])
+def test_aten_triu_rectangular(device: str, shape: tuple):
+    """Test aten.triu with rectangular matrices"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.int32, torch.bool]
+)
+def test_aten_triu_different_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.triu with different data types"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    if dtype == torch.bool:
+        x = torch.randint(0, 2, (4, 4), dtype=dtype, device=device)
+    elif dtype == torch.int32:
+        x = torch.randint(0, 10, (4, 4), dtype=dtype, device=device)
+    else:
+        x = torch.randn(4, 4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_3d(device: str):
+    """Test aten.triu with 3D tensor (batch of matrices)"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(3, 4, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("diagonal", [-1, 0, 1])
+def test_aten_triu_3d_different_diagonals(device: str, diagonal: int):
+    """Test aten.triu with 3D tensor and different diagonals"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=diagonal)
+
+    x = torch.randn(2, 5, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_large_diagonal(device: str):
+    """Test aten.triu with diagonal larger than matrix size"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=10)
+
+    x = torch.randn(5, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_negative_large_diagonal(device: str):
+    """Test aten.triu with large negative diagonal"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=-10)
+
+    x = torch.randn(5, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_small_matrix(device: str):
+    """Test aten.triu with small matrices"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(2, 2, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_single_element(device: str):
+    """Test aten.triu with 1x1 matrix"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(1, 1, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("diagonal", [10, -10])
+def test_aten_triu_dynamic_dimensions_large_diagonal(device: str, diagonal: int):
+    """Test aten.triu with dynamic dimensions and large diagonal"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=diagonal)
+
+    x = torch.randn(5, 7, device=device)
+    # Mark both dimensions as dynamic
+    mark_dynamic(x, 0)
+    mark_dynamic(x, 1)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_dynamic_batch_dimension(device: str):
+    """Test aten.triu with dynamic batch dimension"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=1)
+
+    x = torch.randn(3, 4, 4, device=device)
+    # Mark only the batch dimension as dynamic
+    mark_dynamic(x, 0)
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_aten_logical_and_bool_tensors(device: str):
     """Test aten.logical_and with boolean tensors"""
 

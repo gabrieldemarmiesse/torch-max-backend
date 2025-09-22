@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import pytest
 import math
 from torch_max_backend.testing import check_functions_are_equivalent
+from torch._dynamo import mark_dynamic
 
 
 def test_basic_addition(device: str):
@@ -3746,6 +3747,16 @@ def test_torch_triu_with_diagonal(device: str):
         return torch.triu(x, diagonal=1)
 
     input_tensor = torch.randn(3, 3)
+    check_functions_are_equivalent(fn, device, [input_tensor])
+
+
+@pytest.mark.parametrize("dynamic_dim", [0, 1])
+def test_torch_triu_with_diagonal_dynamic_dim(device: str, dynamic_dim: int):
+    def fn(x):
+        return torch.triu(x, diagonal=1)
+
+    input_tensor = torch.randn(3, 5)
+    mark_dynamic(input_tensor, dynamic_dim)
     check_functions_are_equivalent(fn, device, [input_tensor])
 
 

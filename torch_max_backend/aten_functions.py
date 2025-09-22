@@ -2333,26 +2333,65 @@ def aten_tril(input: TensorValue, diagonal: int = 0) -> TensorValue:
 # triu(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.triu)
 def aten_triu(input: TensorValue, diagonal: int = 0) -> TensorValue:
-    # For dynamic shapes, we can't pre-compute a mask. Instead we use a different approach.
-    # For now, let's check if we can handle static dims, otherwise return input unchanged
-    # TODO: Implement dynamic triu using coordinate-based masking
-    shape = input.shape
+    # triu keeps the upper triangular part of the matrix
+    # diagonal=0: keep main diagonal and above
+    # diagonal>0: exclude k diagonals starting from main (shift cutoff up)
+    # diagonal<0: include |k| diagonals below main (shift cutoff down)
+    if diagonal <= 0:
+        # Include |diagonal| bands below the main diagonal and all above
+        num_lower = -diagonal
 
-    # Try to handle static dimensions
-    for i in range(len(shape)):
-        if not isinstance(shape[i], StaticDim):
-            # For dynamic shapes, just return the input unchanged for now
-            # This is not correct but will allow the graph to compile
-            # TODO: Implement proper dynamic triu
-            return input
+        # Only apply bounds check if we have static dimensions
+        shape = input.shape
+        if len(shape) >= 2:
+            dim_m = shape[-2]
+            # Check if dimension is static by trying to convert to int
+            try:
+                dim_m_val = int(dim_m)
+                # Dimension can be converted to int, it is static
+                # Clamp num_lower to avoid out of bounds error
+                # num_lower can't be larger than the number of rows - 1
+                num_lower = min(num_lower, dim_m_val - 1)
+            except (TypeError, ValueError):
+                # Dimension is dynamic, don't apply bounds check
+                pass
 
-    shape_ints = [int(dim) for dim in shape]
+        return max_ops.band_part(input, num_lower=num_lower, num_upper=None)
+    else:
+        # Exclude diagonal bands by using exclude with the inverse band
+        # We want to zero out everything below and including (diagonal-1) diagonals above main
+        # This is equivalent to keeping only bands starting from diagonal above main
+        # band_part doesn't directly support this, so we need a workaround
+        # We can use exclude=True to invert the selection
 
-    numpy_mask = np.ones(shape_ints, dtype=input.dtype.to_numpy())
-    numpy_mask = np.triu(numpy_mask, k=diagonal)
-    mask_in_graph = max_ops.constant(numpy_mask, dtype=input.dtype, device=input.device)
-    result = input * mask_in_graph
-    return result
+        # Only apply bounds check if we have static dimensions
+        shape = input.shape
+        upper_limit = diagonal - 1
+
+        # Check if the last two dimensions are static (not dynamic)
+        if len(shape) >= 2:
+            dim_m = shape[-2]
+            dim_n = shape[-1]
+            # Check if both dimensions are static
+            # Dim objects with a value set are static, check if we can convert to int
+            try:
+                dim_m_val = int(dim_m)
+                dim_n_val = int(dim_n)
+                # Both dimensions can be converted to int, they are static
+                min_dim = min(dim_m_val, dim_n_val)
+                # Clamp upper_limit to avoid out of bounds error
+                if diagonal >= min_dim:
+                    # If diagonal >= min_dim, the result is all zeros
+                    upper_limit = min_dim - 1
+                else:
+                    upper_limit = diagonal - 1
+            except (TypeError, ValueError):
+                # At least one dimension is dynamic, use original upper_limit
+                pass
+
+        return max_ops.band_part(
+            input, num_lower=None, num_upper=upper_limit, exclude=True
+        )
 
 
 # split.Tensor(Tensor(a -> *) self, SymInt split_size, int dim=0) -> Tensor(a)[]
