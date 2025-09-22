@@ -2321,7 +2321,7 @@ def test_linear_large_dimensions(device: str):
     input = torch.randn(batch_size, in_features)
     weight = torch.randn(out_features, in_features)
 
-    check_functions_are_equivalent(fn, device, [input, weight], atol=1e-2, rtol=1e-2)
+    check_functions_are_equivalent(fn, device, [input, weight])
 
 
 def test_linear_with_transpose(device: str):

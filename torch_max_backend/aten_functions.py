@@ -1461,17 +1461,7 @@ def aten_ge(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
 def aten_gelu(
     input: TensorValue, approximate: Literal["tanh", "none"] = "none"
 ) -> TensorValue:
-    if approximate == "tanh":
-        # Approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-        coeff = math.sqrt(2.0 / math.pi)
-        inner = coeff * (input + 0.044715 * input * input * input)
-        return 0.5 * input * (1.0 + max_ops.tanh(inner))
-    else:
-        # Exact: 0.5 * x * (1 + erf(x / sqrt(2)))
-        # Since MAX might not have erf, use the tanh approximation
-        coeff = math.sqrt(2.0 / math.pi)
-        inner = coeff * (input + 0.044715 * input * input * input)
-        return 0.5 * input * (1.0 + max_ops.tanh(inner))
+    return max_ops.gelu(input, approximate=approximate)
 
 
 # grid_sampler_2d(Tensor input, Tensor grid, int interpolation_mode, int padding_mode, bool align_corners) -> Tensor
