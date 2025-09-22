@@ -185,9 +185,8 @@ class GroupedQueryAttention(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, cfg, attn_type):
+    def __init__(self, cfg):
         super().__init__()
-        self.attn_type = attn_type
 
         self.att = GroupedQueryAttention(
             d_in=cfg["emb_dim"],
@@ -198,29 +197,12 @@ class TransformerBlock(nn.Module):
             query_pre_attn_scalar=cfg["query_pre_attn_scalar"],
             dtype=cfg["dtype"],
         )
-        self.input_layernorm = RMSNorm(cfg["emb_dim"], eps=1e-6)
-        self.post_attention_layernorm = RMSNorm(cfg["emb_dim"], eps=1e-6)
-        self.pre_feedforward_layernorm = RMSNorm(cfg["emb_dim"], eps=1e-6)
-        self.post_feedforward_layernorm = RMSNorm(cfg["emb_dim"], eps=1e-6)
 
-    def forward(
-        self, x, mask_global, mask_local, cos_global, sin_global, cos_local, sin_local
-    ):
+    def forward(self, x, mask_local, cos_local, sin_local):
         # Shortcut connection for attention block
         shortcut = x
-        x = self.input_layernorm(x)
 
-        if self.attn_type == "sliding_attention":
-            attn_mask = mask_local
-            cos = cos_local
-            sin = sin_local
-        else:
-            attn_mask = mask_global
-            cos = cos_global
-            sin = sin_global
-
-        x_attn = self.att(x, attn_mask, cos, sin)
-        x_attn = self.post_attention_layernorm(x_attn)
+        x_attn = self.att(x, mask_local, cos_local, sin_local)
         x = shortcut + x_attn
 
         # Shortcut connection for feed forward block
@@ -240,7 +222,7 @@ class Gemma3Model(nn.Module):
             cfg["vocab_size"], cfg["emb_dim"], dtype=cfg["dtype"]
         )
 
-        self.block = TransformerBlock(cfg, cfg["layer_types"][0])
+        self.block = TransformerBlock(cfg)
         self.cfg = cfg
 
         # Reusable utilities
@@ -308,18 +290,12 @@ class Gemma3Model(nn.Module):
 
     def forward(self, input_ids):
         # Forward pass
-        b, seq_len = input_ids.shape
+        _, seq_len = input_ids.shape
         x = self.tok_emb(input_ids) * (self.cfg["emb_dim"] ** 0.5)
-        mask_global, mask_local = self._create_masks(seq_len, x.device)
+        _, mask_local = self._create_masks(seq_len, x.device)
 
         x = self.block(
-            x,
-            mask_global=mask_global,
-            mask_local=mask_local,
-            cos_global=self.cos_global,
-            sin_global=self.sin_global,
-            cos_local=self.cos_local,
-            sin_local=self.sin_local,
+            x, mask_local=mask_local, cos_local=self.cos_local, sin_local=self.sin_local
         )
         return x
 
