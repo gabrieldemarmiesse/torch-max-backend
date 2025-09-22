@@ -68,147 +68,6 @@ def compute_rope_params(
     return cos, sin
 
 
-def apply_rope(x, cos, sin):
-    # x: (batch_size, num_heads, seq_len, head_dim)
-    batch_size, num_heads, seq_len, head_dim = x.shape
-    assert head_dim % 2 == 0, "Head dimension must be even"
-
-    # Split x into first half and second half
-    x1 = x[..., : head_dim // 2]  # First half
-    x2 = x[..., head_dim // 2 :]  # Second half
-
-    # Adjust sin and cos shapes
-    cos = cos[:seq_len, :].unsqueeze(0).unsqueeze(0)  # Shape: (1, 1, seq_len, head_dim)
-    sin = sin[:seq_len, :].unsqueeze(0).unsqueeze(0)
-
-    # Apply the rotary transformation
-    rotated = torch.cat((-x2, x1), dim=-1)
-    x_rotated = (x * cos) + (rotated * sin)
-
-    # It's ok to use lower-precision after applying cos and sin rotation
-    return x_rotated.to(dtype=x.dtype)
-
-
-class GroupedQueryAttention(nn.Module):
-    def __init__(
-        self,
-        d_in,
-        num_heads,
-        num_kv_groups,
-        head_dim=None,
-        qk_norm=False,
-        query_pre_attn_scalar=None,
-        dtype=None,
-    ):
-        super().__init__()
-        assert num_heads % num_kv_groups == 0, (
-            "num_heads must be divisible by num_kv_groups"
-        )
-
-        self.num_heads = num_heads
-        self.num_kv_groups = num_kv_groups
-        self.group_size = num_heads // num_kv_groups
-
-        if head_dim is None:
-            assert d_in % num_heads == 0, (
-                "`d_in` must be divisible by `num_heads` if `head_dim` is not set"
-            )
-            head_dim = d_in // num_heads
-
-        self.head_dim = head_dim
-        self.d_out = num_heads * head_dim
-
-        self.W_query = nn.Linear(d_in, self.d_out, bias=False, dtype=dtype)
-        self.W_key = nn.Linear(d_in, num_kv_groups * head_dim, bias=False, dtype=dtype)
-        self.W_value = nn.Linear(
-            d_in, num_kv_groups * head_dim, bias=False, dtype=dtype
-        )
-
-        self.out_proj = nn.Linear(self.d_out, d_in, bias=False, dtype=dtype)
-
-        if qk_norm:
-            self.q_norm = RMSNorm(head_dim, eps=1e-6)
-            self.k_norm = RMSNorm(head_dim, eps=1e-6)
-        else:
-            self.q_norm = self.k_norm = None
-
-        if query_pre_attn_scalar is not None:
-            self.scaling = (query_pre_attn_scalar) ** -0.5
-        else:
-            self.scaling = (head_dim) ** -0.5
-
-    def forward(self, x, mask, cos, sin):
-        b, num_tokens, _ = x.shape
-
-        # Apply projections
-        queries = self.W_query(x)  # (b, num_tokens, num_heads * head_dim)
-        keys = self.W_key(x)  # (b, num_tokens, num_kv_groups * head_dim)
-        values = self.W_value(x)  # (b, num_tokens, num_kv_groups * head_dim)
-
-        # Reshape
-        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim).transpose(
-            1, 2
-        )
-        keys = keys.view(b, num_tokens, self.num_kv_groups, self.head_dim).transpose(
-            1, 2
-        )
-        values = values.view(
-            b, num_tokens, self.num_kv_groups, self.head_dim
-        ).transpose(1, 2)
-
-        # Optional normalization
-        if self.q_norm:
-            queries = self.q_norm(queries)
-        if self.k_norm:
-            keys = self.k_norm(keys)
-
-        # Apply RoPE
-        queries = apply_rope(queries, cos, sin)
-        keys = apply_rope(keys, cos, sin)
-
-        # Expand K and V to match number of heads
-        keys = keys.repeat_interleave(self.group_size, dim=1)
-        values = values.repeat_interleave(self.group_size, dim=1)
-
-        # Scale queries
-        queries = queries * self.scaling
-
-        # Attention
-        attn_scores = queries @ keys.transpose(2, 3)
-        attn_scores = attn_scores.masked_fill(mask, -torch.inf)
-        attn_weights = torch.softmax(attn_scores, dim=-1)
-
-        context = (
-            (attn_weights @ values).transpose(1, 2).reshape(b, num_tokens, self.d_out)
-        )
-        return self.out_proj(context)
-
-
-class TransformerBlock(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-
-        self.att = GroupedQueryAttention(
-            d_in=cfg["emb_dim"],
-            num_heads=cfg["n_heads"],
-            num_kv_groups=cfg["n_kv_groups"],
-            head_dim=cfg["head_dim"],
-            qk_norm=cfg["qk_norm"],
-            query_pre_attn_scalar=cfg["query_pre_attn_scalar"],
-            dtype=cfg["dtype"],
-        )
-
-    def forward(self, x, mask_local, cos_local, sin_local):
-        # Shortcut connection for attention block
-        shortcut = x
-
-        x_attn = self.att(x, mask_local, cos_local, sin_local)
-        x = shortcut + x_attn
-
-        # Shortcut connection for feed forward block
-        return x
-
-
 class Gemma3Model(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -222,7 +81,6 @@ class Gemma3Model(nn.Module):
             cfg["vocab_size"], cfg["emb_dim"], dtype=cfg["dtype"]
         )
 
-        self.block = TransformerBlock(cfg)
         self.cfg = cfg
 
         # Reusable utilities
@@ -293,11 +151,7 @@ class Gemma3Model(nn.Module):
         _, seq_len = input_ids.shape
         x = self.tok_emb(input_ids) * (self.cfg["emb_dim"] ** 0.5)
         _, mask_local = self._create_masks(seq_len, x.device)
-
-        x = self.block(
-            x, mask_local=mask_local, cos_local=self.cos_local, sin_local=self.sin_local
-        )
-        return x
+        return mask_local
 
 
 GEMMA3_CONFIG_270M = {
