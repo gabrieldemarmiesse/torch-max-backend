@@ -8,8 +8,8 @@ def check_functions_are_equivalent(
     device: str | None,
     inputs: list[torch.Tensor],
     fn_compiled: Callable | None = None,
-    rtol=5e-3,
-    atol=5e-3,
+    rtol=None,
+    atol=None,
 ):
     fn_compiled = fn_compiled or torch.compile(backend=max_backend)(fn)
     if device is not None:
@@ -27,11 +27,7 @@ def check_functions_are_equivalent(
         output_compiled = [output_compiled]
 
     for i, (original, compiled) in enumerate(zip(output_original, output_compiled)):
-        print(original)
-        print(compiled)
         assert original.shape == compiled.shape, f"Issue with output {i}"
         assert original.device == compiled.device, f"Issue with output {i}"
         assert original.dtype == compiled.dtype, f"Issue with output {i}"
-        assert torch.allclose(original, compiled, rtol=rtol, atol=atol), (
-            f"Issue with output {i}"
-        )
+        torch.testing.assert_close(original, compiled, rtol=rtol, atol=atol)
