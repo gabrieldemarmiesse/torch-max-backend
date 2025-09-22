@@ -8,7 +8,7 @@ def check_functions_are_equivalent(
     device: str | None,
     inputs: list[torch.Tensor],
     fn_compiled: Callable | None = None,
-    rtol=5e-2,
+    rtol=5e-3,
     atol=5e-3,
 ):
     fn_compiled = fn_compiled or torch.compile(backend=max_backend)(fn)
