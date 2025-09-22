@@ -952,7 +952,7 @@ def test_conv2d_different_input_sizes(device: str, size: tuple):
     x = torch.randn(batch_size, in_channels, height, width)
     w = torch.randn(out_channels, in_channels, kernel_size, kernel_size)
 
-    # TODO: Bug in conv2d of Max?
+    # TensorFloat-32 tensor cores are used by default, lowering precision
     check_functions_are_equivalent(fn, device, [x, w], rtol=3e-5, atol=3e-5)
 
 
@@ -2177,6 +2177,7 @@ def test_linear_small_dimensions(device: str):
     input = torch.randn(batch_size, in_features)
     weight = torch.randn(out_features, in_features)
 
+    # TensorFloat-32 tensor cores are used by default, lowering precision
     check_functions_are_equivalent(fn, device, [input, weight], atol=1e-2, rtol=1e-2)
 
 
@@ -2321,6 +2322,7 @@ def test_linear_large_dimensions(device: str):
     input = torch.randn(batch_size, in_features)
     weight = torch.randn(out_features, in_features)
 
+    # TensorFloat-32 tensor cores are used by default, lowering precision
     check_functions_are_equivalent(fn, device, [input, weight], atol=1e-2, rtol=1e-2)
 
 
@@ -2998,6 +3000,7 @@ def test_max_pool2d_with_conv2d_chain(device: str):
     weight2 = torch.randn(out_channels, hidden_channels, 3, 3)
     bias2 = torch.randn(out_channels)
 
+    # TensorFloat-32 tensor cores are used by default, lowering precision
     check_functions_are_equivalent(
         fn, device, [x, weight1, bias1, weight2, bias2], atol=1e-3, rtol=1e-3
     )
