@@ -3749,6 +3749,15 @@ def test_torch_triu_with_diagonal(device: str):
     check_functions_are_equivalent(fn, device, [input_tensor])
 
 
+def test_torch_triu_generate_mask(device: str):
+    def fn():
+        ones = torch.ones((19, 19), dtype=torch.bool, device=device)
+
+        return torch.triu(ones, diagonal=1)
+
+    check_functions_are_equivalent(fn, device, [])
+
+
 def test_silu_activation(device: str):
     def fn(x):
         return F.silu(x)
