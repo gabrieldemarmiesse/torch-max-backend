@@ -98,7 +98,7 @@ def debug_graph_if_required(gm: torch.fx.GraphModule, args):
     for node_idx, node in enumerate(gm.graph.nodes):
         if node.op == "call_function" or node.op == "call_method":
 
-            def make_debug_function(node_idx, old_func):
+            def make_debug_function(node_idx, old_func, node):
                 def new_function(*func_args, **func_kwargs):
                     print(f"Debugging node {node_idx} function {old_func}")
                     result = old_func(*func_args, **func_kwargs)
@@ -144,6 +144,12 @@ def debug_graph_if_required(gm: torch.fx.GraphModule, args):
                                 )
                             except AssertionError:
                                 print(type(func_args[1]))
+                                print(
+                                    "error coming from",
+                                    get_error_message(
+                                        node, node_idx, func_args, func_kwargs
+                                    ),
+                                )
                                 raise ValueError(
                                     f"The output tensor of node {node_idx} function {old_func} with args {pp(func_args)} "
                                     f", kwargs {pp(func_kwargs)} and output {output_idx} has different values between Max and PyTorch. "
@@ -155,7 +161,7 @@ def debug_graph_if_required(gm: torch.fx.GraphModule, args):
 
                 return new_function
 
-            node.target = make_debug_function(node_idx, node.target)
+            node.target = make_debug_function(node_idx, node.target, node)
 
     gm(*args)
 
@@ -305,7 +311,7 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
 
 
 def get_error_message(
-    node: torch.fx.Node, node_idx: int, func_args: list, func_kwargs: dict
+    node: torch.fx.Node, node_idx: int, func_args: list | tuple, func_kwargs: dict
 ) -> str:
     if node.stack_trace is None:
         stack_trace = "No stack trace available, likely because this node is the result of a decomposition."
