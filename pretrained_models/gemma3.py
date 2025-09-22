@@ -358,7 +358,8 @@ class Gemma3Model(nn.Module):
                 cos_local=self.cos_local,
                 sin_local=self.sin_local,
             )
-
+            break
+        return x
         x = self.final_norm(x)
         logits = self.out_head(x.to(self.cfg["dtype"]))
         return logits
@@ -599,7 +600,7 @@ else:
         shard = load_file(shard_path)
         weights_dict.update(shard)
 
-load_weights_into_gemma(model, GEMMA3_CONFIG_270M, weights_dict)
+# load_weights_into_gemma(model, GEMMA3_CONFIG_270M, weights_dict)
 model.to(device)
 del weights_dict
 
