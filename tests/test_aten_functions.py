@@ -663,6 +663,19 @@ def test_aten_split_with_sizes_exact_split(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+def test_aten_mul_scalar(device: str, dtype: torch.dtype):
+    """Test aten.mul.Tensor with scalar multiplication"""
+
+    def fn(x):
+        return aten.mul.Tensor(x, 25.298221281347036)
+
+    # Create test tensor similar to the user's example
+    x = torch.randn(1, 19, 640, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
 def test_aten_squeeze_single_dim(device: str):
     """Test aten.squeeze with single dimension"""
 
