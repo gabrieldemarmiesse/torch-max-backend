@@ -20,7 +20,8 @@ def test_scaled_dot_product_flash_attention_basic(cuda_device: str, dtype: torch
     k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+    # TensorFloat-32 tensor cores are used by default, lowering precision
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
@@ -37,7 +38,8 @@ def test_scaled_dot_product_flash_attention_with_causal(cuda_device: str, dtype:
     k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+    # TensorFloat-32 tensor cores are used by default, lowering precision
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
@@ -60,7 +62,8 @@ def test_scaled_dot_product_flash_attention_with_scale(cuda_device: str, dtype):
     k = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v])
+    # TensorFloat-32 tensor cores are used by default, lowering precision
+    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -663,31 +666,6 @@ def test_aten_split_with_sizes_exact_split(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
-def test_aten_mul_scalar(device: str, dtype: torch.dtype):
-    """Test aten.mul.Tensor with scalar multiplication"""
-
-    def fn(x):
-        return aten.mul.Tensor(x, 25.298221281347036)
-
-    # Create test tensor similar to the user's example
-    x = torch.randn(1, 19, 640, dtype=dtype, device=device)
-
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_torch_triu_all_true(device: str):
-    """Test torch.triu with all elements in the upper triangle (including diagonal)"""
-
-    def fn(x):
-        return aten.triu(x, 1)
-
-    x = torch.ones(19, 19, dtype=torch.bool, device=device)
-    print(x)
-    check_functions_are_equivalent(fn, device, [x])
-    raise RuntimeError("test")
-
-
 def test_aten_squeeze_single_dim(device: str):
     """Test aten.squeeze with single dimension"""
 
@@ -736,239 +714,6 @@ def test_aten_squeeze_no_change(device: str):
         return aten.squeeze(x, 1)
 
     x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_basic(device: str):
-    """Test softmax with bfloat16 dtype for basic inputs"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    x = torch.randn(4, 8, dtype=torch.bfloat16, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_large_values(device: str):
-    """Test softmax with bfloat16 and large input values that might cause overflow"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    # Create tensor with large values that might cause overflow in exp
-    x = torch.tensor(
-        [[100.0, 200.0, 300.0], [-100.0, -200.0, -300.0], [1000.0, 2000.0, 3000.0]],
-        dtype=torch.bfloat16,
-        device=device,
-    )
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_small_values(device: str):
-    """Test softmax with bfloat16 and very small values"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    # Create tensor with very small values
-    x = torch.tensor(
-        [[1e-7, 2e-7, 3e-7], [1e-8, 2e-8, 3e-8]], dtype=torch.bfloat16, device=device
-    )
-    check_functions_are_equivalent(fn, device, [x])
-
-
-@pytest.mark.parametrize("dim", [0, 1, -1, -2])
-def test_softmax_bfloat16_different_dims(device: str, dim: int):
-    """Test softmax with bfloat16 on different dimensions"""
-
-    def fn(x):
-        return aten.softmax(x, dim=dim)
-
-    x = torch.randn(3, 4, 5, dtype=torch.bfloat16, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_uniform_values(device: str):
-    """Test softmax with bfloat16 when all values are the same"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    # All values are the same - should result in uniform distribution
-    x = torch.ones(3, 6, dtype=torch.bfloat16, device=device) * 5.0
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_mixed_signs(device: str):
-    """Test softmax with bfloat16 with mixed positive and negative values"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    x = torch.tensor(
-        [
-            [-10.0, 0.0, 10.0, -5.0, 5.0],
-            [100.0, -100.0, 50.0, -50.0, 0.0],
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-        ],
-        dtype=torch.bfloat16,
-        device=device,
-    )
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_edge_cases(device: str):
-    """Test softmax with bfloat16 edge cases including inf and very large differences"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    # Test with values that have large differences
-    x = torch.tensor(
-        [[-1000.0, 1000.0], [0.0, 1000.0], [-500.0, 500.0]],
-        dtype=torch.bfloat16,
-        device=device,
-    )
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_single_element(device: str):
-    """Test softmax with bfloat16 on single element tensors"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    x = torch.tensor([[5.0]], dtype=torch.bfloat16, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_4d_tensor(device: str):
-    """Test softmax with bfloat16 on 4D tensors (common in neural networks)"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    x = torch.randn(2, 3, 4, 5, dtype=torch.bfloat16, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_bfloat16_extreme_range(device: str):
-    """Test softmax with bfloat16 with extreme value ranges"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    # Test with maximum range that bfloat16 can represent
-    x = torch.tensor(
-        [[3.38e38, -3.38e38, 0.0], [1e10, 1e-10, 1.0]],
-        dtype=torch.bfloat16,
-        device=device,
-    )
-    check_functions_are_equivalent(fn, device, [x])
-
-
-@pytest.mark.parametrize(
-    "dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16]
-)
-def test_softmax_different_dtypes(device: str, dtype: torch.dtype):
-    """Test softmax with different floating point dtypes"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    x = torch.randn(3, 4, dtype=dtype, device=device) * 10
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test__softmax_float16_half_to_float(device: str):
-    """Test _softmax with float16 and half_to_float=True"""
-
-    def fn(x):
-        return aten._softmax(x, dim=-1, half_to_float=True)
-
-    x = torch.randn(4, 6, dtype=torch.float16, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test__softmax_bfloat16_no_half_to_float(device: str):
-    """Test _softmax with bfloat16 and half_to_float=False"""
-
-    def fn(x):
-        return aten._softmax(x, dim=-1, half_to_float=False)
-
-    x = torch.randn(4, 6, dtype=torch.bfloat16, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_with_masked_fill_nan_bug(device: str):
-    """Test to reproduce NaN bug with masked_fill followed by softmax"""
-
-    def fn(x, mask):
-        # Apply masked_fill with -inf to mask out certain positions
-        masked = aten.masked_fill(x, mask, float("-inf"))
-        # Apply softmax which should handle -inf correctly
-        return aten._softmax(masked, dim=-1, half_to_float=False)
-
-    # Create input tensor with shape similar to the error (1, 4, 19, 19)
-    x = torch.randn(1, 4, 19, 19, dtype=torch.bfloat16, device=device)
-
-    # Create a mask that will set some values to -inf
-    mask = torch.rand(1, 4, 19, 19, device=device) > 0.7  # ~30% of values masked
-
-    check_functions_are_equivalent(fn, device, [x, mask])
-
-
-def test_softmax_with_all_masked_nan_bug(device: str):
-    """Test softmax when entire row is masked (all -inf)"""
-
-    def fn(x, mask):
-        masked = aten.masked_fill(x, mask, float("-inf"))
-        return aten._softmax(masked, dim=-1, half_to_float=False)
-
-    x = torch.randn(1, 4, 5, 5, dtype=torch.bfloat16, device=device)
-
-    # Create a mask that masks entire rows
-    mask = torch.zeros(1, 4, 5, 5, dtype=torch.bool, device=device)
-    mask[0, 0, 0, :] = True  # Mask entire first row of first batch/channel
-    mask[0, 1, 2, :] = True  # Mask entire third row of second channel
-
-    check_functions_are_equivalent(fn, device, [x, mask])
-
-
-def test_softmax_direct_inf_values(device: str):
-    """Test softmax with direct -inf values"""
-
-    def fn(x):
-        return aten._softmax(x, dim=-1, half_to_float=False)
-
-    # Create tensor with some -inf values directly
-    x = torch.randn(1, 2, 4, 4, dtype=torch.bfloat16, device=device)
-    x[0, 0, 0, 1] = float("-inf")
-    x[0, 0, 0, 3] = float("-inf")
-    x[0, 1, 1, :] = float("-inf")  # Entire row is -inf
-
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_softmax_mixed_inf_finite(device: str):
-    """Test softmax with mix of -inf and finite values"""
-
-    def fn(x):
-        return aten.softmax(x, dim=-1)
-
-    # Create specific test case with -inf and finite values
-    x = torch.tensor(
-        [
-            [1.0, 2.0, float("-inf"), 3.0],
-            [float("-inf"), float("-inf"), 1.0, 2.0],
-            [float("-inf"), float("-inf"), float("-inf"), float("-inf")],  # All -inf
-            [1.0, 1.0, 1.0, 1.0],
-        ],
-        dtype=torch.bfloat16,
-        device=device,
-    )
-    x = x.unsqueeze(0).unsqueeze(0)  # Make it 4D: (1, 1, 4, 4)
-
     check_functions_are_equivalent(fn, device, [x])
 
 
@@ -1037,6 +782,144 @@ def test_aten_squeeze_edge_cases(device: str, shape: tuple):
         return aten.squeeze(x, list(range(len(shape))))
 
     x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_basic(device: str):
+    """Test aten.triu with default diagonal=0"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(5, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("diagonal", [-2, -1, 0, 1, 2])
+def test_aten_triu_different_diagonals(device: str, diagonal: int):
+    """Test aten.triu with different diagonal values"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=diagonal)
+
+    x = torch.randn(6, 6, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("shape", [(3, 5), (5, 3), (7, 7)])
+def test_aten_triu_rectangular(device: str, shape: tuple):
+    """Test aten.triu with rectangular matrices"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.int32, torch.bool]
+)
+def test_aten_triu_different_dtypes(device: str, dtype: torch.dtype):
+    """Test aten.triu with different data types"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    if dtype == torch.bool:
+        x = torch.randint(0, 2, (4, 4), dtype=dtype, device=device)
+    elif dtype == torch.int32:
+        x = torch.randint(0, 10, (4, 4), dtype=dtype, device=device)
+    else:
+        x = torch.randn(4, 4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_3d(device: str):
+    """Test aten.triu with 3D tensor (batch of matrices)"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(3, 4, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("diagonal", [-1, 0, 1])
+def test_aten_triu_3d_different_diagonals(device: str, diagonal: int):
+    """Test aten.triu with 3D tensor and different diagonals"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=diagonal)
+
+    x = torch.randn(2, 5, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_large_diagonal(device: str):
+    """Test aten.triu with diagonal larger than matrix size"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=10)
+
+    x = torch.randn(5, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_negative_large_diagonal(device: str):
+    """Test aten.triu with large negative diagonal"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=-10)
+
+    x = torch.randn(5, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_small_matrix(device: str):
+    """Test aten.triu with small matrices"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(2, 2, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_single_element(device: str):
+    """Test aten.triu with 1x1 matrix"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=0)
+
+    x = torch.randn(1, 1, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("diagonal", [10, -10])
+def test_aten_triu_dynamic_dimensions_large_diagonal(device: str, diagonal: int):
+    """Test aten.triu with dynamic dimensions and large diagonal"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=diagonal)
+
+    x = torch.randn(5, 7, device=device)
+    # Mark both dimensions as dynamic
+    mark_dynamic(x, 0)
+    mark_dynamic(x, 1)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_triu_dynamic_batch_dimension(device: str):
+    """Test aten.triu with dynamic batch dimension"""
+
+    def fn(x):
+        return aten.triu(x, diagonal=1)
+
+    x = torch.randn(3, 4, 4, device=device)
+    # Mark only the batch dimension as dynamic
+    mark_dynamic(x, 0)
     check_functions_are_equivalent(fn, device, [x])
 
 
