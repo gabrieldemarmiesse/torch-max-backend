@@ -14,60 +14,6 @@ os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 os.environ["TORCH_MAX_BACKEND_DEBUG_GRAPH"] = "1"
 
 
-class RMSNorm(nn.Module):
-    def __init__(self, emb_dim, eps=1e-6, bias=False):
-        super().__init__()
-        self.eps = eps
-        # Gemma3 stores zero-centered weights and uses (1 + weight) during forward
-        self.scale = nn.Parameter(torch.zeros(emb_dim))
-        self.shift = nn.Parameter(torch.zeros(emb_dim)) if bias else None
-
-    def forward(self, x):
-        # Match HF Gemma3: compute norm in float32, then scale by (1 + w)
-        input_dtype = x.dtype
-        x_f = x.float()
-        var = x_f.pow(2).mean(dim=-1, keepdim=True)
-        x_norm = x_f * torch.rsqrt(var + self.eps)
-        out = x_norm * (1.0 + self.scale.float())
-
-        if self.shift is not None:
-            out = out + self.shift.float()
-
-        return out.to(input_dtype)
-
-
-def compute_rope_params(
-    head_dim, theta_base=10_000, context_length=4096, dtype=torch.float32
-):
-    assert head_dim % 2 == 0, "Embedding dimension must be even"
-
-    # Compute the inverse frequencies
-    inv_freq = 1.0 / (
-        theta_base
-        ** (
-            torch.arange(0, head_dim, 2, dtype=dtype)[: (head_dim // 2)].float()
-            / head_dim
-        )
-    )
-
-    # Generate position indices
-    positions = torch.arange(context_length, dtype=dtype)
-
-    # Compute the angles
-    angles = (
-        positions[:, None] * inv_freq[None, :]
-    )  # Shape: (context_length, head_dim // 2)
-
-    # Expand angles to match the head_dim
-    angles = torch.cat([angles, angles], dim=1)  # Shape: (context_length, head_dim)
-
-    # Precompute sine and cosine
-    cos = torch.cos(angles)
-    sin = torch.sin(angles)
-
-    return cos, sin
-
-
 class Gemma3Model(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -82,24 +28,6 @@ class Gemma3Model(nn.Module):
         )
 
         self.cfg = cfg
-
-        # Reusable utilities
-        cos_local, sin_local = compute_rope_params(
-            head_dim=cfg["head_dim"],
-            theta_base=cfg["rope_local_base"],
-            context_length=cfg["context_length"],
-            dtype=torch.float32,
-        )
-        cos_global, sin_global = compute_rope_params(
-            head_dim=cfg["head_dim"],
-            theta_base=cfg["rope_base"],
-            context_length=cfg["context_length"],
-            dtype=torch.float32,
-        )
-        self.register_buffer("cos_local", cos_local, persistent=False)
-        self.register_buffer("sin_local", sin_local, persistent=False)
-        self.register_buffer("cos_global", cos_global, persistent=False)
-        self.register_buffer("sin_global", sin_global, persistent=False)
 
     def _create_masks(self, seq_len, device):
         ones = torch.ones((seq_len, seq_len), dtype=torch.bool, device=device)
