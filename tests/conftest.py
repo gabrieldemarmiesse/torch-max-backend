@@ -67,3 +67,11 @@ def max_device(request, max_gpu_available: bool):
 
 def pytest_sessionfinish(session, exitstatus):
     profile.print_stats()
+
+
+def pytest_make_parametrize_id(config, val, argname):
+    """Custom ID generation for parametrized tests"""
+    if isinstance(val, torch.dtype):
+        return str(val).split(".")[-1]
+    # Return None to fall back to default behavior for other types
+    return None
