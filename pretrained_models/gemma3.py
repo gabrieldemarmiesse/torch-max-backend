@@ -13,9 +13,7 @@ def _create_masks(seq_len):
     ones = torch.ones((seq_len, seq_len), dtype=torch.bool, device="cuda")
     mask_global = torch.triu(ones, diagonal=1)
 
-    far_past = torch.triu(ones, diagonal=512).T
-    mask_local = mask_global | far_past
-    return mask_local
+    return mask_global
 
 
 def model(input_ids):
