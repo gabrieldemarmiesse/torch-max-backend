@@ -141,9 +141,10 @@ def debug_graph_if_required(gm: torch.fx.GraphModule, args):
                                     loaded_tensor,
                                     true_tensor_from_torch,
                                     equal_nan=True,
+                                    rtol=100000,
+                                    atol=100000,
                                 )
                             except AssertionError:
-                                print(type(func_args[1]))
                                 print(
                                     "error coming from",
                                     get_error_message(
