@@ -27,6 +27,8 @@ def check_functions_are_equivalent(
         output_compiled = [output_compiled]
 
     for i, (original, compiled) in enumerate(zip(output_original, output_compiled)):
+        print(original)
+        print(compiled)
         assert original.shape == compiled.shape, f"Issue with output {i}"
         assert original.device == compiled.device, f"Issue with output {i}"
         assert original.dtype == compiled.dtype, f"Issue with output {i}"

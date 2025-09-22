@@ -676,6 +676,18 @@ def test_aten_mul_scalar(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_torch_triu_all_true(device: str):
+    """Test torch.triu with all elements in the upper triangle (including diagonal)"""
+
+    def fn(x):
+        return aten.triu(x, 1)
+
+    x = torch.ones(19, 19, dtype=torch.bool, device=device)
+    print(x)
+    check_functions_are_equivalent(fn, device, [x])
+    raise RuntimeError("test")
+
+
 def test_aten_squeeze_single_dim(device: str):
     """Test aten.squeeze with single dimension"""
 
