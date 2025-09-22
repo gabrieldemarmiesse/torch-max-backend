@@ -12,61 +12,61 @@ os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 os.environ["TORCH_MAX_BACKEND_DEBUG_GRAPH"] = "1"
 
 
+def _create_masks(seq_len, device):
+    ones = torch.ones((seq_len, seq_len), dtype=torch.bool, device=device)
+
+    # mask_global (future is masked: j > i)
+    #     j:  0 1 2 3 4 5 6 7
+    #  i
+    #     0:  0 1 1 1 1 1 1 1
+    #     1:  0 0 1 1 1 1 1 1
+    #     2:  0 0 0 1 1 1 1 1
+    #     3:  0 0 0 0 1 1 1 1
+    #     4:  0 0 0 0 0 1 1 1
+    #     5:  0 0 0 0 0 0 1 1
+    #     6:  0 0 0 0 0 0 0 1
+    #     7:  0 0 0 0 0 0 0 0
+    mask_global = torch.triu(ones, diagonal=1)
+
+    # far_past (too far back is masked: i - j >= sliding_window)
+    # where sliding_window = 4
+    #     j:  0 1 2 3 4 5 6 7
+    #  i
+    #     0:  0 0 0 0 0 0 0 0
+    #     1:  0 0 0 0 0 0 0 0
+    #     2:  0 0 0 0 0 0 0 0
+    #     3:  0 0 0 0 0 0 0 0
+    #     4:  1 0 0 0 0 0 0 0
+    #     5:  1 1 0 0 0 0 0 0
+    #     6:  1 1 1 0 0 0 0 0
+    #     7:  1 1 1 1 0 0 0 0
+    far_past = torch.triu(ones, diagonal=512).T
+
+    # Local (sliding_window) = future OR far-past
+    # mask_local
+    #     j:  0 1 2 3 4 5 6 7
+    # i
+    # 0:      0 1 1 1 1 1 1 1
+    # 1:      0 0 1 1 1 1 1 1
+    # 2:      0 0 0 1 1 1 1 1
+    # 3:      0 0 0 0 1 1 1 1
+    # 4:      1 0 0 0 0 1 1 1
+    # 5:      1 1 0 0 0 0 1 1
+    # 6:      1 1 1 0 0 0 0 1
+    # 7:      1 1 1 1 0 0 0 0
+    mask_local = mask_global | far_past
+    return mask_global, mask_local
+
+
 class Gemma3Model(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.cfg = cfg
-
-    def _create_masks(self, seq_len, device):
-        ones = torch.ones((seq_len, seq_len), dtype=torch.bool, device=device)
-
-        # mask_global (future is masked: j > i)
-        #     j:  0 1 2 3 4 5 6 7
-        #  i
-        #     0:  0 1 1 1 1 1 1 1
-        #     1:  0 0 1 1 1 1 1 1
-        #     2:  0 0 0 1 1 1 1 1
-        #     3:  0 0 0 0 1 1 1 1
-        #     4:  0 0 0 0 0 1 1 1
-        #     5:  0 0 0 0 0 0 1 1
-        #     6:  0 0 0 0 0 0 0 1
-        #     7:  0 0 0 0 0 0 0 0
-        mask_global = torch.triu(ones, diagonal=1)
-
-        # far_past (too far back is masked: i - j >= sliding_window)
-        # where sliding_window = 4
-        #     j:  0 1 2 3 4 5 6 7
-        #  i
-        #     0:  0 0 0 0 0 0 0 0
-        #     1:  0 0 0 0 0 0 0 0
-        #     2:  0 0 0 0 0 0 0 0
-        #     3:  0 0 0 0 0 0 0 0
-        #     4:  1 0 0 0 0 0 0 0
-        #     5:  1 1 0 0 0 0 0 0
-        #     6:  1 1 1 0 0 0 0 0
-        #     7:  1 1 1 1 0 0 0 0
-        far_past = torch.triu(ones, diagonal=self.cfg["sliding_window"]).T
-
-        # Local (sliding_window) = future OR far-past
-        # mask_local
-        #     j:  0 1 2 3 4 5 6 7
-        # i
-        # 0:      0 1 1 1 1 1 1 1
-        # 1:      0 0 1 1 1 1 1 1
-        # 2:      0 0 0 1 1 1 1 1
-        # 3:      0 0 0 0 1 1 1 1
-        # 4:      1 0 0 0 0 1 1 1
-        # 5:      1 1 0 0 0 0 1 1
-        # 6:      1 1 1 0 0 0 0 1
-        # 7:      1 1 1 1 0 0 0 0
-        mask_local = mask_global | far_past
-        return mask_global, mask_local
 
     def forward(self, input_ids):
         # Forward pass
         _, seq_len = input_ids.shape
         _ = input_ids + 1
-        _, mask_local = self._create_masks(seq_len, torch.device("cuda"))
+        _, mask_local = _create_masks(seq_len, torch.device("cuda"))
         return mask_local
 
 
