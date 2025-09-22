@@ -15,15 +15,14 @@ def _create_masks(seq_len):
 
     far_past = torch.triu(ones, diagonal=512).T
     mask_local = mask_global | far_past
-    return mask_global, mask_local
+    return mask_local
 
 
 def model(input_ids):
     # Forward pass
     _, seq_len = input_ids.shape
     _ = input_ids + 1
-    _, mask_local = _create_masks(seq_len)
-    return mask_local
+    return _create_masks(seq_len)
 
 
 model = torch.compile(model, backend=max_backend)
