@@ -445,9 +445,6 @@ tokenizer = Qwen3Tokenizer(
 prompt = "Give me a short introduction to large language models."
 
 input_token_ids = tokenizer.encode(prompt)
-text = tokenizer.decode(input_token_ids)
-text
-"<|im_start|>user\nGive me a short introduction to large language models.<|im_end|>\n<|im_start|>assistant\n"
 
 
 def generate_text_basic_stream(
@@ -474,7 +471,9 @@ def generate_text_basic_stream(
             logits = model(next_token, cache=cache)
 
 
-input_token_ids_tensor = torch.tensor(input_token_ids, device=device).unsqueeze(0)
+input_token_ids_tensor = torch.tensor([14 for _ in range(20)], device=device).unsqueeze(
+    0
+)
 
 model.eval()
 model = torch.compile(model, backend=max_backend, fullgraph=True, disable=False)
