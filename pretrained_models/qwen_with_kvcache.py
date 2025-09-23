@@ -11,30 +11,6 @@ USE_REASONING_MODEL = True
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 
 
-class RMSNorm(nn.Module):
-    def __init__(self, emb_dim, eps=1e-6, bias=False, qwen3_compatible=True):
-        super().__init__()
-        self.eps = eps
-        self.qwen3_compatible = qwen3_compatible
-        self.scale = nn.Parameter(torch.ones(emb_dim))
-        self.shift = nn.Parameter(torch.zeros(emb_dim)) if bias else None
-
-    def forward(self, x):
-        input_dtype = x.dtype
-
-        if self.qwen3_compatible:
-            x = x.to(torch.float32)
-
-        variance = x.pow(2).mean(dim=-1, keepdim=True)
-        norm_x = x * torch.rsqrt(variance + self.eps)
-        norm_x = norm_x * self.scale
-
-        if self.shift is not None:
-            norm_x = norm_x + self.shift
-
-        return norm_x.to(input_dtype)
-
-
 def compute_rope_params(
     head_dim, theta_base=10_000, context_length=4096, dtype=torch.float32
 ):
@@ -120,12 +96,6 @@ class GroupedQueryAttention(nn.Module):
 
         self.out_proj = nn.Linear(self.d_out, d_in, bias=False, dtype=dtype)
 
-        if qk_norm:
-            self.q_norm = RMSNorm(head_dim, eps=1e-6)
-            self.k_norm = RMSNorm(head_dim, eps=1e-6)
-        else:
-            self.q_norm = self.k_norm = None
-
     def forward(self, x, mask, cos, sin, start_pos=0, cache=None):
         b, num_tokens, _ = x.shape
 
@@ -144,12 +114,6 @@ class GroupedQueryAttention(nn.Module):
         values_new = values.view(
             b, num_tokens, self.num_kv_groups, self.head_dim
         ).transpose(1, 2)
-
-        # Optional normalization
-        if self.q_norm:
-            queries = self.q_norm(queries)
-        if self.k_norm:
-            keys_new = self.k_norm(keys_new)
 
         # Apply RoPE
         queries = apply_rope(queries, cos, sin, offset=start_pos)
