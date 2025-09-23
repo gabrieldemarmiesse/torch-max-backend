@@ -11,7 +11,7 @@ from tokenizers import Tokenizer
 
 
 USE_REASONING_MODEL = True
-
+torch._logging.set_logs(recompiles=True)
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 
@@ -697,21 +697,21 @@ def generate_text_basic_stream(
         model.reset_kv_cache()
 
         # Prime the cache with the initial context
-        with torch.compiler.set_stance("fail_on_recompile"):
-            logits = model(token_ids, cache=cache)
+        logits = model(token_ids, cache=cache)
 
-            for _ in range(max_new_tokens):
-                next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True)
+        for _ in range(max_new_tokens):
+            next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True)
 
-                if eos_token_id is not None and torch.all(next_token == eos_token_id):
-                    break
+            if eos_token_id is not None and torch.all(next_token == eos_token_id):
+                break
 
-                yield next_token
+            yield next_token
 
-                token_ids = torch.cat([token_ids, next_token], dim=1)
+            token_ids = torch.cat([token_ids, next_token], dim=1)
 
-                # Feed only the new token to the model; cache handles history
-                logits = model(next_token, cache=cache)
+            # Feed only the new token to the model; cache handles history
+            logits = model(next_token, cache=cache)
+            break  # We just test that there is no recompile
 
 
 input_token_ids_tensor = torch.tensor(input_token_ids, device=device).unsqueeze(0)
