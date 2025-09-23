@@ -3,9 +3,6 @@ import torch.nn as nn
 from torch_max_backend import max_backend
 import os
 from pathlib import Path
-from huggingface_hub import hf_hub_download
-import re
-from tokenizers import Tokenizer
 
 
 USE_REASONING_MODEL = True
@@ -347,109 +344,7 @@ local_dir = Path(repo_id).parts[-1]
 model.to(device)
 
 
-class Qwen3Tokenizer:
-    _SPECIALS = [
-        "<|endoftext|>",
-        "<|im_start|>",
-        "<|im_end|>",
-        "<|object_ref_start|>",
-        "<|object_ref_end|>",
-        "<|box_start|>",
-        "<|box_end|>",
-        "<|quad_start|>",
-        "<|quad_end|>",
-        "<|vision_start|>",
-        "<|vision_end|>",
-        "<|vision_pad|>",
-        "<|image_pad|>",
-        "<|video_pad|>",
-        "<think>",
-        "</think>",
-    ]
-    _SPLIT_RE = re.compile(r"(<\|[^>]+?\|>|<think>|</think>)")
-
-    def __init__(
-        self,
-        tokenizer_file_path="tokenizer.json",
-        repo_id=None,
-        apply_chat_template=True,
-        add_generation_prompt=False,
-        add_thinking=False,
-    ):
-        self.apply_chat_template = apply_chat_template
-        self.add_generation_prompt = add_generation_prompt
-        self.add_thinking = add_thinking
-
-        tok_file = Path(tokenizer_file_path)
-        self._tok = Tokenizer.from_file(str(tok_file))
-        self._special_to_id = {}
-        for t in self._SPECIALS:
-            tid = self._tok.token_to_id(t)
-            if tid is not None:
-                self._special_to_id[t] = tid
-
-        self.pad_token_id = self._special_to_id["<|endoftext|>"]
-        self.eos_token_id = self.pad_token_id
-
-        if repo_id and "Base" not in repo_id:
-            eos_token = "<|im_end|>"
-        else:
-            eos_token = "<|endoftext|>"
-        if eos_token in self._special_to_id:
-            self.eos_token_id = self._special_to_id[eos_token]
-
-    def encode(self, text, chat_wrapped=None):
-        if chat_wrapped is None:
-            chat_wrapped = self.apply_chat_template
-
-        stripped = text.strip()
-        if stripped in self._special_to_id and "\n" not in stripped:
-            return [self._special_to_id[stripped]]
-
-        if chat_wrapped:
-            text = self._wrap_chat(text)
-
-        ids = []
-        for part in filter(None, self._SPLIT_RE.split(text)):
-            if part in self._special_to_id:
-                ids.append(self._special_to_id[part])
-            else:
-                ids.extend(self._tok.encode(part).ids)
-        return ids
-
-    def decode(self, ids):
-        return self._tok.decode(ids, skip_special_tokens=False)
-
-    def _wrap_chat(self, user_msg):
-        s = f"<|im_start|>user\n{user_msg}<|im_end|>\n"
-        if self.add_generation_prompt:
-            s += "<|im_start|>assistant"
-            if self.add_thinking:
-                s += "\n"
-            else:
-                s += "\n<think>\n\n</think>\n\n"
-        return s
-
-
-tokenizer_file_path = f"Qwen3-{CHOOSE_MODEL}/tokenizer.json"
-
-
-hf_hub_download(repo_id=repo_id, filename="tokenizer.json", local_dir=local_dir)
-
-tokenizer = Qwen3Tokenizer(
-    tokenizer_file_path=tokenizer_file_path,
-    repo_id=repo_id,
-    add_generation_prompt=USE_REASONING_MODEL,
-    add_thinking=USE_REASONING_MODEL,
-)
-prompt = "Give me a short introduction to large language models."
-
-input_token_ids = tokenizer.encode(prompt)
-
-
-def generate_text_basic_stream(
-    model, token_ids, max_new_tokens, eos_token_id=None, context_size=None
-):
+def generate_text_basic_stream(model, token_ids, max_new_tokens, context_size=None):
     with torch.no_grad():
         cache = KVCache(n_layers=model.cfg["n_layers"])
         model.reset_kv_cache()
@@ -459,9 +354,6 @@ def generate_text_basic_stream(
 
         for _ in range(max_new_tokens):
             next_token = torch.argmax(logits[:, -1], dim=-1, keepdim=True)
-
-            if eos_token_id is not None and torch.all(next_token == eos_token_id):
-                break
 
             yield next_token
 
@@ -479,11 +371,7 @@ model.eval()
 model = torch.compile(model, backend=max_backend, fullgraph=True, disable=False)
 
 for token in generate_text_basic_stream(
-    model=model,
-    token_ids=input_token_ids_tensor,
-    max_new_tokens=500,
-    eos_token_id=tokenizer.eos_token_id,
+    model=model, token_ids=input_token_ids_tensor, max_new_tokens=500
 ):
     token_id = token.squeeze(0).tolist()
-    print(tokenizer.decode(token_id), end="", flush=True)
     print(torch._dynamo.utils.compile_times())
