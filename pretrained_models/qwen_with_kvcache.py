@@ -14,26 +14,6 @@ USE_REASONING_MODEL = True
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 
 
-class FeedForward(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-        self.fc1 = nn.Linear(
-            cfg["emb_dim"], cfg["hidden_dim"], dtype=cfg["dtype"], bias=False
-        )
-        self.fc2 = nn.Linear(
-            cfg["emb_dim"], cfg["hidden_dim"], dtype=cfg["dtype"], bias=False
-        )
-        self.fc3 = nn.Linear(
-            cfg["hidden_dim"], cfg["emb_dim"], dtype=cfg["dtype"], bias=False
-        )
-
-    def forward(self, x):
-        x_fc1 = self.fc1(x)
-        x_fc2 = self.fc2(x)
-        x = nn.functional.silu(x_fc1) * x_fc2
-        return self.fc3(x)
-
-
 class RMSNorm(nn.Module):
     def __init__(self, emb_dim, eps=1e-6, bias=False, qwen3_compatible=True):
         super().__init__()
@@ -214,14 +194,10 @@ class TransformerBlock(nn.Module):
             qk_norm=cfg["qk_norm"],
             dtype=cfg["dtype"],
         )
-        self.ff = FeedForward(cfg)
-        self.norm1 = RMSNorm(cfg["emb_dim"], eps=1e-6)
-        self.norm2 = RMSNorm(cfg["emb_dim"], eps=1e-6)
 
     def forward(self, x, mask, cos, sin, start_pos=0, cache=None):
         # Shortcut connection for attention block
         shortcut = x
-        x = self.norm1(x)
         x, next_cache = self.att(
             x, mask, cos, sin, start_pos=start_pos, cache=cache
         )  # Shape [batch_size, num_tokens, emb_size]
@@ -229,8 +205,6 @@ class TransformerBlock(nn.Module):
 
         # Shortcut connection for feed-forward block
         shortcut = x
-        x = self.norm2(x)
-        x = self.ff(x)
         x = x + shortcut  # Add the original input back
 
         return x, next_cache
@@ -248,7 +222,6 @@ class Qwen3Model(nn.Module):
         self.trf_blocks = nn.ModuleList(  # ModuleList since Sequential can only accept one input, and we need `x, mask, cos, sin`
             [TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
         )
-        self.final_norm = RMSNorm(cfg["emb_dim"])
         self.out_head = nn.Linear(
             cfg["emb_dim"], cfg["vocab_size"], bias=False, dtype=cfg["dtype"]
         )
@@ -301,7 +274,6 @@ class Qwen3Model(nn.Module):
                 cache.update(i, new_blk_cache)
             next_cache.append(new_blk_cache)
 
-        x = self.final_norm(x)
         logits = self.out_head(x.to(self.cfg["dtype"]))
         return logits
 
@@ -335,7 +307,7 @@ QWEN3_CONFIG = {
     "emb_dim": 1024,  # Embedding dimension
     "n_heads": 16,  # Number of attention heads
     "n_layers": 28,  # Number of layers
-    "hidden_dim": 3072,  # Size of the intermediate dimension in FeedForward
+    "hidden_dim": 3072,  # Size of the intermediate dimension
     "head_dim": 128,  # Size of the heads in GQA
     "qk_norm": True,  # Whether to normalize queries and keys in GQA
     "n_kv_groups": 8,  # Key-Value groups for grouped-query attention
