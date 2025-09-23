@@ -180,9 +180,7 @@ class Qwen3Model(nn.Module):
             cfg["vocab_size"], cfg["emb_dim"], dtype=cfg["dtype"]
         )
 
-        self.trf_blocks = nn.ModuleList(  # ModuleList since Sequential can only accept one input, and we need `x, mask, cos, sin`
-            [TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
-        )
+        self.trf_block = TransformerBlock(cfg)
         self.out_head = nn.Linear(
             cfg["emb_dim"], cfg["vocab_size"], bias=False, dtype=cfg["dtype"]
         )
@@ -226,14 +224,13 @@ class Qwen3Model(nn.Module):
         mask = mask[None, None, :, :]
 
         next_cache = []
-        for i, block in enumerate(self.trf_blocks):
-            blk_cache = cache.get(i) if cache else None
-            x, new_blk_cache = block(
-                x, mask, self.cos, self.sin, start_pos=pos_start, cache=blk_cache
-            )
-            if cache is not None:
-                cache.update(i, new_blk_cache)
-            next_cache.append(new_blk_cache)
+        blk_cache = cache.get(0) if cache else None
+        x, new_blk_cache = self.trf_block(
+            x, mask, self.cos, self.sin, start_pos=pos_start, cache=blk_cache
+        )
+        if cache is not None:
+            cache.update(0, new_blk_cache)
+        next_cache.append(new_blk_cache)
 
         logits = self.out_head(x.to(self.cfg["dtype"]))
         return logits
