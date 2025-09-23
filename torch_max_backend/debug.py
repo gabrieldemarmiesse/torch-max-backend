@@ -17,12 +17,13 @@ import max.graph.ops as max_ops
 from max.driver.tensor import load_max_tensor
 from torch_max_backend.utils import get_error_message
 
+# TODO: directory creation and cleanup
 output_directory = Path("/tmp/.torch_max_backend_debug")
 output_directory_max = output_directory / "max"
-output_directory_max.mkdir(parents=True, exist_ok=True)
 
 
 def set_print_options(session: engine.InferenceSession):
+    output_directory_max.mkdir(parents=True, exist_ok=True)
     session.set_debug_print_options(
         "BINARY_MAX_CHECKPOINT", output_directory=output_directory_max
     )
@@ -93,8 +94,8 @@ def make_debug_function(node_idx, old_func, node):
                         loaded_tensor,
                         true_tensor_from_torch,
                         equal_nan=True,
-                        rtol=100000,
-                        atol=100000,
+                        rtol=100000,  # you can change these
+                        atol=100000,  # you can change these
                     )
                 except AssertionError:
                     print(
@@ -123,4 +124,3 @@ def debug_graph_if_required(gm: torch.fx.GraphModule, args):
             node.target = make_debug_function(node_idx, node.target, node)
 
     gm(*args)
-    raise ValueError("Found no error in the debugged graph.")
