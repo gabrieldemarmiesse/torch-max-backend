@@ -2,10 +2,8 @@ import torch
 import torch.nn as nn
 from torch_max_backend import max_backend
 import os
-import json
 from pathlib import Path
-from safetensors.torch import load_file
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import hf_hub_download
 import re
 from tokenizers import Tokenizer
 
@@ -329,99 +327,21 @@ class KVCache:
             self.cache[i] = None
 
 
-CHOOSE_MODEL = "1.7B"
+CHOOSE_MODEL = "0.6B"
 
-if CHOOSE_MODEL == "0.6B":
-    QWEN3_CONFIG = {
-        "vocab_size": 151_936,  # Vocabulary size
-        "context_length": 40_960,  # Context length that was used to train the model
-        "emb_dim": 1024,  # Embedding dimension
-        "n_heads": 16,  # Number of attention heads
-        "n_layers": 28,  # Number of layers
-        "hidden_dim": 3072,  # Size of the intermediate dimension in FeedForward
-        "head_dim": 128,  # Size of the heads in GQA
-        "qk_norm": True,  # Whether to normalize queries and keys in GQA
-        "n_kv_groups": 8,  # Key-Value groups for grouped-query attention
-        "rope_base": 1_000_000.0,  # The base in RoPE's "theta"
-        "dtype": torch.bfloat16,  # Lower-precision dtype to reduce memory usage
-    }
-
-elif CHOOSE_MODEL == "1.7B":
-    QWEN3_CONFIG = {
-        "vocab_size": 151_936,
-        "context_length": 40_960,
-        "emb_dim": 2048,  # 2x larger than above
-        "n_heads": 16,
-        "n_layers": 28,
-        "hidden_dim": 6144,  # 2x larger than above
-        "head_dim": 128,
-        "qk_norm": True,
-        "n_kv_groups": 8,
-        "rope_base": 1_000_000.0,
-        "dtype": torch.bfloat16,
-    }
-
-elif CHOOSE_MODEL == "4B":
-    QWEN3_CONFIG = {
-        "vocab_size": 151_936,
-        "context_length": 40_960,
-        "emb_dim": 2560,  # 25% larger than above
-        "n_heads": 32,  # 2x larger than above
-        "n_layers": 36,  # 29% larger than above
-        "hidden_dim": 9728,  # ~3x larger than above
-        "head_dim": 128,
-        "qk_norm": True,
-        "n_kv_groups": 8,
-        "rope_base": 1_000_000.0,
-        "dtype": torch.bfloat16,
-    }
-
-elif CHOOSE_MODEL == "8B":
-    QWEN3_CONFIG = {
-        "vocab_size": 151_936,
-        "context_length": 40_960,
-        "emb_dim": 4096,  # 60% larger than above
-        "n_heads": 32,
-        "n_layers": 36,  # 26% larger than above
-        "hidden_dim": 12288,
-        "head_dim": 128,
-        "qk_norm": True,
-        "n_kv_groups": 8,
-        "rope_base": 1_000_000.0,
-        "dtype": torch.bfloat16,
-    }
-
-elif CHOOSE_MODEL == "14B":
-    QWEN3_CONFIG = {
-        "vocab_size": 151_936,
-        "context_length": 40_960,
-        "emb_dim": 5120,  # 25% larger than above
-        "n_heads": 40,  # 25% larger than above
-        "n_layers": 40,  # 11% larger than above
-        "hidden_dim": 17408,  # 42% larger than above
-        "head_dim": 128,
-        "qk_norm": True,
-        "n_kv_groups": 8,
-        "rope_base": 1_000_000.0,
-        "dtype": torch.bfloat16,
-    }
-
-elif CHOOSE_MODEL == "32B":
-    QWEN3_CONFIG = {
-        "vocab_size": 151_936,
-        "context_length": 40_960,
-        "emb_dim": 5120,
-        "n_heads": 64,  # 60% larger than above
-        "n_layers": 64,  # 60% larger than above
-        "hidden_dim": 25600,  # 47% larger than above
-        "head_dim": 128,
-        "qk_norm": True,
-        "n_kv_groups": 8,
-        "rope_base": 1_000_000.0,
-        "dtype": torch.bfloat16,
-    }
-else:
-    raise ValueError(f"{CHOOSE_MODEL} is not supported.")
+QWEN3_CONFIG = {
+    "vocab_size": 151_936,  # Vocabulary size
+    "context_length": 40_960,  # Context length that was used to train the model
+    "emb_dim": 1024,  # Embedding dimension
+    "n_heads": 16,  # Number of attention heads
+    "n_layers": 28,  # Number of layers
+    "hidden_dim": 3072,  # Size of the intermediate dimension in FeedForward
+    "head_dim": 128,  # Size of the heads in GQA
+    "qk_norm": True,  # Whether to normalize queries and keys in GQA
+    "n_kv_groups": 8,  # Key-Value groups for grouped-query attention
+    "rope_base": 1_000_000.0,  # The base in RoPE's "theta"
+    "dtype": torch.bfloat16,  # Lower-precision dtype to reduce memory usage
+}
 
 torch.manual_seed(123)
 model = Qwen3Model(QWEN3_CONFIG)
@@ -447,141 +367,12 @@ print("using device:", device)
 model.to(device)
 
 
-def load_weights_into_qwen(model, param_config, params):
-    def assign(left, right, tensor_name="unknown"):
-        if left.shape != right.shape:
-            raise ValueError(
-                f"Shape mismatch in tensor '{tensor_name}'. Left: {left.shape}, Right: {right.shape}"
-            )
-        return torch.nn.Parameter(
-            right.clone().detach()
-            if isinstance(right, torch.Tensor)
-            else torch.tensor(right)
-        )
+repo_id = f"Qwen/Qwen3-{CHOOSE_MODEL}"
 
-    model.tok_emb.weight = assign(
-        model.tok_emb.weight,
-        params["model.embed_tokens.weight"],
-        "model.embed_tokens.weight",
-    )
-
-    for l in range(param_config["n_layers"]):
-        block = model.trf_blocks[l]
-        att = block.att
-
-        # Q, K, V projections
-        att.W_query.weight = assign(
-            att.W_query.weight,
-            params[f"model.layers.{l}.self_attn.q_proj.weight"],
-            f"model.layers.{l}.self_attn.q_proj.weight",
-        )
-        att.W_key.weight = assign(
-            att.W_key.weight,
-            params[f"model.layers.{l}.self_attn.k_proj.weight"],
-            f"model.layers.{l}.self_attn.k_proj.weight",
-        )
-        att.W_value.weight = assign(
-            att.W_value.weight,
-            params[f"model.layers.{l}.self_attn.v_proj.weight"],
-            f"model.layers.{l}.self_attn.v_proj.weight",
-        )
-
-        # Output projection
-        att.out_proj.weight = assign(
-            att.out_proj.weight,
-            params[f"model.layers.{l}.self_attn.o_proj.weight"],
-            f"model.layers.{l}.self_attn.o_proj.weight",
-        )
-
-        # QK norms
-        if hasattr(att, "q_norm") and att.q_norm is not None:
-            att.q_norm.scale = assign(
-                att.q_norm.scale,
-                params[f"model.layers.{l}.self_attn.q_norm.weight"],
-                f"model.layers.{l}.self_attn.q_norm.weight",
-            )
-        if hasattr(att, "k_norm") and att.k_norm is not None:
-            att.k_norm.scale = assign(
-                att.k_norm.scale,
-                params[f"model.layers.{l}.self_attn.k_norm.weight"],
-                f"model.layers.{l}.self_attn.k_norm.weight",
-            )
-
-        # Attention layernorm
-        block.norm1.scale = assign(
-            block.norm1.scale,
-            params[f"model.layers.{l}.input_layernorm.weight"],
-            f"model.layers.{l}.input_layernorm.weight",
-        )
-
-        # Feedforward weights
-        block.ff.fc1.weight = assign(
-            block.ff.fc1.weight,
-            params[f"model.layers.{l}.mlp.gate_proj.weight"],
-            f"model.layers.{l}.mlp.gate_proj.weight",
-        )
-        block.ff.fc2.weight = assign(
-            block.ff.fc2.weight,
-            params[f"model.layers.{l}.mlp.up_proj.weight"],
-            f"model.layers.{l}.mlp.up_proj.weight",
-        )
-        block.ff.fc3.weight = assign(
-            block.ff.fc3.weight,
-            params[f"model.layers.{l}.mlp.down_proj.weight"],
-            f"model.layers.{l}.mlp.down_proj.weight",
-        )
-        block.norm2.scale = assign(
-            block.norm2.scale,
-            params[f"model.layers.{l}.post_attention_layernorm.weight"],
-            f"model.layers.{l}.post_attention_layernorm.weight",
-        )
-
-    # Final normalization and output head
-    model.final_norm.scale = assign(
-        model.final_norm.scale, params["model.norm.weight"], "model.norm.weight"
-    )
-
-    if "lm_head.weight" in params:
-        model.out_head.weight = assign(
-            model.out_head.weight, params["lm_head.weight"], "lm_head.weight"
-        )
-    else:
-        # Model uses weight tying, hence we reuse the embedding layer weights here
-        print("Model uses weight tying.")
-        model.out_head.weight = assign(
-            model.out_head.weight,
-            params["model.embed_tokens.weight"],
-            "model.embed_tokens.weight",
-        )
-
-
-if USE_REASONING_MODEL:
-    repo_id = f"Qwen/Qwen3-{CHOOSE_MODEL}"
-else:
-    repo_id = f"Qwen/Qwen3-{CHOOSE_MODEL}-Base"
 
 local_dir = Path(repo_id).parts[-1]
 
-if CHOOSE_MODEL == "0.6B":
-    weights_file = hf_hub_download(
-        repo_id=repo_id, filename="model.safetensors", local_dir=local_dir
-    )
-    weights_dict = load_file(weights_file)
-else:
-    repo_dir = snapshot_download(repo_id=repo_id, local_dir=local_dir)
-    index_path = os.path.join(repo_dir, "model.safetensors.index.json")
-    with open(index_path) as f:
-        index = json.load(f)
-
-    weights_dict = {}
-    for filename in set(index["weight_map"].values()):
-        shard_path = os.path.join(repo_dir, filename)
-        shard = load_file(shard_path)
-        weights_dict.update(shard)
-
-load_weights_into_qwen(model, QWEN3_CONFIG, weights_dict)
 model.to(device)
-del weights_dict
 
 
 class Qwen3Tokenizer:
@@ -668,10 +459,8 @@ class Qwen3Tokenizer:
         return s
 
 
-if USE_REASONING_MODEL:
-    tokenizer_file_path = f"Qwen3-{CHOOSE_MODEL}/tokenizer.json"
-else:
-    tokenizer_file_path = f"Qwen3-{CHOOSE_MODEL}-Base/tokenizer.json"
+tokenizer_file_path = f"Qwen3-{CHOOSE_MODEL}/tokenizer.json"
+
 
 hf_hub_download(repo_id=repo_id, filename="tokenizer.json", local_dir=local_dir)
 
