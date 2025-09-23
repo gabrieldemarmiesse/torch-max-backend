@@ -1,65 +1,14 @@
 import torch
-import torch.nn as nn
 from torch_max_backend import max_backend
 
 
-class SimpleAttention(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.d_out = 4 * 16
-
-    def forward(self, x):
-        b, num_tokens, d = x.shape
-
-        # Simple attention without projections
-        x_reshaped = x.view(b, num_tokens, 4, 16).transpose(1, 2)
-
-        # Self-attention scores
-        attn_scores = x_reshaped @ x_reshaped.transpose(2, 3)
-
-        # Add mask back
-        mask = torch.triu(
-            torch.ones(num_tokens, num_tokens, device=x.device, dtype=torch.bool),
-            diagonal=1,
-        )
-        mask = mask[None, None, :, :]
-        attn_scores = attn_scores.masked_fill(mask, -torch.inf)
-        attn_weights = torch.softmax(attn_scores / 16**0.5, dim=-1)
-
-        # Apply attention and reshape back
-        context = (
-            (attn_weights @ x_reshaped)
-            .transpose(1, 2)
-            .reshape(b, num_tokens, self.d_out)
-        )
-        return context
+def simple_bug(x):
+    # x is (3, 3)
+    mask = torch.triu(torch.ones(3, 3, device=x.device, dtype=torch.bool), diagonal=1)
+    return x.masked_fill(mask, -1.0)
 
 
-class SimpleModel(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.tok_emb = nn.Embedding(100, 64)
-        self.att = SimpleAttention()
-        self.out_head = nn.Linear(64, 100, bias=False)
-
-    def forward(self, in_idx):
-        x = self.tok_emb(in_idx)
-        x = self.att(x)
-        return self.out_head(x)
-
-
-torch.manual_seed(123)
-model = SimpleModel()
-
-model.to("cuda")
-
-
-input_token_ids_tensor = torch.tensor([[1, 2, 3]], device="cuda")
-
-model.eval()
-model = torch.compile(model, backend=max_backend, fullgraph=True, disable=False)
-
-# Just a single forward pass
-with torch.no_grad():
-    logits = model(input_token_ids_tensor)
-    print("Forward pass completed")
+# Compile and run
+compiled_fn = torch.compile(simple_bug, backend=max_backend)
+x = torch.randn(3, 3, device="cuda")
+output = compiled_fn(x)
