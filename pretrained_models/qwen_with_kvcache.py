@@ -4,19 +4,16 @@ from torch_max_backend import max_backend
 
 
 class SimpleAttention(nn.Module):
-    def __init__(self, d_in, num_heads, head_dim=None, dtype=None):
+    def __init__(self, d_in, num_heads):
         super().__init__()
         self.num_heads = num_heads
-        self.head_dim = head_dim if head_dim else d_in // num_heads
-        self.d_out = num_heads * self.head_dim
+        self.d_out = num_heads * 16
 
     def forward(self, x):
         b, num_tokens, d = x.shape
 
         # Simple attention without projections
-        x_reshaped = x.view(b, num_tokens, self.num_heads, self.head_dim).transpose(
-            1, 2
-        )
+        x_reshaped = x.view(b, num_tokens, self.num_heads, 16).transpose(1, 2)
 
         # Self-attention scores
         attn_scores = x_reshaped @ x_reshaped.transpose(2, 3)
@@ -28,7 +25,7 @@ class SimpleAttention(nn.Module):
         )
         mask = mask[None, None, :, :]
         attn_scores = attn_scores.masked_fill(mask, -torch.inf)
-        attn_weights = torch.softmax(attn_scores / self.head_dim**0.5, dim=-1)
+        attn_weights = torch.softmax(attn_scores / 16**0.5, dim=-1)
 
         # Apply attention and reshape back
         context = (
@@ -42,18 +39,9 @@ class SimpleAttention(nn.Module):
 class SimpleModel(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.tok_emb = nn.Embedding(
-            cfg["vocab_size"], cfg["emb_dim"], dtype=cfg["dtype"]
-        )
-        self.att = SimpleAttention(
-            d_in=cfg["emb_dim"],
-            num_heads=cfg["n_heads"],
-            head_dim=cfg["head_dim"],
-            dtype=cfg["dtype"],
-        )
-        self.out_head = nn.Linear(
-            cfg["emb_dim"], cfg["vocab_size"], bias=False, dtype=cfg["dtype"]
-        )
+        self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
+        self.att = SimpleAttention(d_in=cfg["emb_dim"], num_heads=cfg["n_heads"])
+        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
 
     def forward(self, in_idx):
         x = self.tok_emb(in_idx)
@@ -61,13 +49,7 @@ class SimpleModel(nn.Module):
         return self.out_head(x)
 
 
-QWEN3_CONFIG = {
-    "vocab_size": 100,
-    "emb_dim": 64,
-    "n_heads": 4,
-    "head_dim": 16,
-    "dtype": torch.float32,
-}
+QWEN3_CONFIG = {"vocab_size": 100, "emb_dim": 64, "n_heads": 4}
 
 torch.manual_seed(123)
 model = SimpleModel(QWEN3_CONFIG)
