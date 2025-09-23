@@ -1,6 +1,5 @@
 import torch
 from max.dtype import DType
-from collections.abc import Callable
 from max.graph import Graph
 from max.torch.torch import max_device_ref
 import max.graph.value
@@ -14,6 +13,12 @@ import time
 import traceback
 from typing import Any
 from .utils import get_accelerators
+from pathlib import Path
+from max.graph import KernelLibrary
+from max import mlir
+from dataclasses import dataclass
+from torch_max_backend import debug
+from torch_max_backend.utils import get_fully_qualified_name, get_error_message
 
 
 class MaxCompilerError(Exception):
@@ -22,7 +27,31 @@ class MaxCompilerError(Exception):
 
 import datetime as dt
 
-session = None
+
+@dataclass
+class GlobalMaxObjects:
+    session: engine.InferenceSession
+    kernel_library: KernelLibrary
+    context: mlir.Context
+
+
+_global_max_objects: GlobalMaxObjects | None = None
+
+
+def global_max_objects() -> GlobalMaxObjects:
+    global _global_max_objects
+    if _global_max_objects is None:
+        context = mlir.Context()
+        with context:
+            kernel_library = KernelLibrary(context)
+            kernel_library.load_paths(context, [Path(__file__).parent / "mojo_kernels"])
+        session = engine.InferenceSession(devices=list(get_accelerators()))
+        debug.set_print_options(session)
+
+        _global_max_objects = GlobalMaxObjects(
+            session=session, kernel_library=kernel_library, context=context
+        )
+    return _global_max_objects
 
 
 def gather_stats_on_graph(gm: torch.fx.GraphModule):
@@ -38,20 +67,6 @@ def gather_stats_on_graph(gm: torch.fx.GraphModule):
     print("Function call counts:")
     for name, count in sorted_counts:
         print(f"{name}: {count}")
-
-
-def get_fully_qualified_name(func: Callable | str) -> str:
-    if isinstance(func, str):
-        return f"torch.Tensor.{func}"
-    result = ""
-    if hasattr(func, "__module__"):
-        result += func.__module__ + "."
-
-    if hasattr(func, "__qualname__"):
-        result += func.__qualname__
-
-    result += " of type " + str(type(func)) + " "
-    return result
 
 
 def keep_only_tensors(
@@ -131,22 +146,6 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
     return attr_itr
 
 
-def get_error_message(
-    node: torch.fx.Node, node_idx: int, func_args: list, func_kwargs: dict
-) -> str:
-    if node.stack_trace is None:
-        stack_trace = "No stack trace available, likely because this node is the result of a decomposition."
-    else:
-        stack_trace = node.stack_trace
-    return (
-        f"Failing at node {node_idx} when executing function {get_fully_qualified_name(node.target)}. "
-        f"inputs of node were: args={func_args}, kwargs={func_kwargs}. "
-        f"You can open an issue at https://github.com/gabrieldemarmiesse/torch-max-backend/issues . "
-        f"It comes from there in your code: \n"
-        f"{stack_trace}\n"
-    )
-
-
 class _GraphFactory:
     def __init__(self):
         self.names_to_input_idx: dict[str, int] = {}
@@ -160,8 +159,12 @@ class _GraphFactory:
     def initialize_graph(self):
         if self.graph is not None:
             raise RuntimeError("Graph has already been initialized.")
+
         self.graph = Graph(
-            "torch_max_backend", input_types=self.graph_inputs
+            "torch_max_backend",
+            input_types=self.graph_inputs,
+            kernel_library=global_max_objects().kernel_library,
+            context=global_max_objects().context,
         ).__enter__()
         # Let's fill the tensor book
         for tensor_name, idx in self.names_to_input_idx.items():
@@ -231,6 +234,8 @@ class _GraphFactory:
                 f"{e}\n"
                 f"{traceback.format_exc()}"
             )
+        debug.add_prints(node_idx, str(node.target), func_output)
+
         self.tensor_book[node.name] = func_output
 
     def handle_get_attr(self, node: torch.fx.Node):
@@ -286,6 +291,7 @@ class _GraphFactory:
 
 class BaseMaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
+        self.gm = gm
         if profiling_enabled():
             compiler_start = time.time_ns()
         if verbose_enabled():
@@ -296,10 +302,7 @@ class BaseMaxCompiler:
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
         if profiling_enabled():
             graph_defined_time = time.time_ns()
-        global session
-        if session is None:
-            session = engine.InferenceSession(devices=list(get_accelerators()))
-        self.model = session.load(graph)
+        self.model = global_max_objects().session.load(graph)
         if profiling_enabled():
             compiling_done_time = time.time_ns()
             defining = dt.timedelta(
@@ -317,6 +320,8 @@ class BaseMaxCompiler:
             start_inference_time = time.time_ns()
         outputs = self.model.execute(*keep_only_tensors(args, detach=True))
         tensor_outputs = [torch.from_dlpack(x) for x in outputs]
+
+        debug.debug_graph_if_required(self.gm, args)
 
         # Reconstruct the original output structure with None values
         result = []

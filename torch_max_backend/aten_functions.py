@@ -22,6 +22,27 @@ from torch._ops import OpOverloadPacket, OpOverload
 from typing import Literal
 from torch_max_backend.flags import verbose_enabled
 from max.graph import TensorType
+import itertools
+
+
+def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
+    if len(shape_a) == 0:
+        raise ValueError("Broadcast is not possible because one of the shapes is empty")
+    if len(shape_b) == 0:
+        raise ValueError("Broadcast is not possible because one of the shapes is empty")
+    result = []
+    for dim_a, dim_b in itertools.zip_longest(reversed(shape_a), reversed(shape_b)):
+        if dim_a == dim_b:
+            result.append(dim_a)
+        elif dim_a in (Dim(1), None):
+            result.append(dim_b)
+        elif dim_b in (Dim(1), None):
+            result.append(dim_a)
+        else:
+            raise ValueError(
+                f"Broadcast is not possible between shapes {shape_a} and {shape_b}"
+            )
+    return list(reversed(result))
 
 
 def torch_device_to_max_device(x: torch.device) -> DeviceRef:
@@ -107,6 +128,8 @@ def map_to(func):
             # We assume we cover all overloads in the packet
             for overload_name in func:
                 popped = DECOMPOSITION_TABLE.pop(getattr(func, overload_name), None)
+                if popped is not None:
+                    pass
                 if verbose_enabled() and popped is not None:
                     global number_of_decompositions_removed
                     number_of_decompositions_removed += 1
@@ -904,13 +927,118 @@ def aten_avg_pool2d(
 
 # avg_pool2d_backward(Tensor grad_output, Tensor self, int[2] kernel_size, int[2] stride, int[2] padding, bool ceil_mode, bool count_include_pad, int? divisor_override) -> Tensor
 # avg_pool3d(Tensor self, int[3] kernel_size, int[3] stride=[], int[3] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None) -> Tensor
+
+
 # bitwise_and.Scalar(Tensor self, Scalar other) -> Tensor
+@map_to(aten.bitwise_and.Scalar)
+def aten_bitwise_and_scalar(input: TensorValue, other: Scalar) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_and_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_and.Tensor(Tensor self, Tensor other) -> Tensor
+@map_to(aten.bitwise_and.Tensor)
+def aten_bitwise_and(input: TensorValue, other: TensorValue) -> TensorValue:
+    # For the moment we only support tensors of the same dimension
+
+    final_shape = find_broadcast_shape(input.shape, other.shape)
+    input = max_ops.broadcast_to(input, final_shape)
+    other = max_ops.broadcast_to(other, final_shape)
+
+    return max_ops.custom(
+        name="bitwise_and",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_not(Tensor self) -> Tensor
+@map_to(aten.bitwise_not)
+def aten_bitwise_not(input: TensorValue) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_not",
+        device=input.device,
+        values=[input],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_or.Scalar(Tensor self, Scalar other) -> Tensor
+@map_to(aten.bitwise_or.Scalar)
+def aten_bitwise_or_scalar(input: TensorValue, other: Scalar) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_or_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_or.Tensor(Tensor self, Tensor other) -> Tensor
+@map_to(aten.bitwise_or.Tensor)
+def aten_bitwise_or(input: TensorValue, other: TensorValue) -> TensorValue:
+    # For the moment we only support tensors of the same dimension
+
+    final_shape = find_broadcast_shape(input.shape, other.shape)
+    input = max_ops.broadcast_to(input, final_shape)
+    other = max_ops.broadcast_to(other, final_shape)
+
+    return max_ops.custom(
+        name="bitwise_or",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_xor.Scalar(Tensor self, Scalar other) -> Tensor
+@map_to(aten.bitwise_xor.Scalar)
+def aten_bitwise_xor_scalar(input: TensorValue, other: Scalar) -> TensorValue:
+    return max_ops.custom(
+        name="bitwise_xor_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 # bitwise_xor.Tensor(Tensor self, Tensor other) -> Tensor
+@map_to(aten.bitwise_xor.Tensor)
+def aten_bitwise_xor(input: TensorValue, other: TensorValue) -> TensorValue:
+    # For the moment we only support tensors of the same dimension
+
+    final_shape = find_broadcast_shape(input.shape, other.shape)
+    input = max_ops.broadcast_to(input, final_shape)
+    other = max_ops.broadcast_to(other, final_shape)
+
+    return max_ops.custom(
+        name="bitwise_xor",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
 
 
 # bmm(Tensor self, Tensor mat2) -> Tensor
@@ -1333,17 +1461,7 @@ def aten_ge(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
 def aten_gelu(
     input: TensorValue, approximate: Literal["tanh", "none"] = "none"
 ) -> TensorValue:
-    if approximate == "tanh":
-        # Approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-        coeff = math.sqrt(2.0 / math.pi)
-        inner = coeff * (input + 0.044715 * input * input * input)
-        return 0.5 * input * (1.0 + max_ops.tanh(inner))
-    else:
-        # Exact: 0.5 * x * (1 + erf(x / sqrt(2)))
-        # Since MAX might not have erf, use the tanh approximation
-        coeff = math.sqrt(2.0 / math.pi)
-        inner = coeff * (input + 0.044715 * input * input * input)
-        return 0.5 * input * (1.0 + max_ops.tanh(inner))
+    return max_ops.gelu(input, approximate=approximate)
 
 
 # grid_sampler_2d(Tensor input, Tensor grid, int interpolation_mode, int padding_mode, bool align_corners) -> Tensor
@@ -1433,10 +1551,7 @@ def broadcast_shape(shapes):
     # Helper: recognize "dimension == 1"
     def is_one(d):
         # Covers ints == 1 and Dim-like objects that compare equal to 1
-        try:
-            return d == 1
-        except Exception:
-            return False
+        return d == 1
 
     # Walk from left to right over aligned dims (already padded)
     out = []
@@ -2081,7 +2196,11 @@ def aten_squeeze(input: TensorValue, dim: int | list[int]) -> TensorValue:
         dim = [dim]
     result = input
     for d in sorted(dim, reverse=True):
-        result = max_ops.squeeze(input, axis=d)
+        # Handle negative dimensions
+        actual_dim = d if d >= 0 else len(result.shape) + d
+        # Only squeeze if the dimension has size 1
+        if actual_dim < len(result.shape) and result.shape[actual_dim] == 1:
+            result = max_ops.squeeze(result, axis=actual_dim)
     return result
 
 
@@ -2204,32 +2323,65 @@ def aten_tril(input: TensorValue, diagonal: int = 0) -> TensorValue:
 # triu(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.triu)
 def aten_triu(input: TensorValue, diagonal: int = 0) -> TensorValue:
-    # For dynamic shapes, we can't pre-compute a mask. Instead we use a different approach.
-    # For now, let's check if we can handle static dims, otherwise return input unchanged
-    # TODO: Implement dynamic triu using coordinate-based masking
-    shape = input.shape
+    # triu keeps the upper triangular part of the matrix
+    # diagonal=0: keep main diagonal and above
+    # diagonal>0: exclude k diagonals starting from main (shift cutoff up)
+    # diagonal<0: include |k| diagonals below main (shift cutoff down)
+    if diagonal <= 0:
+        # Include |diagonal| bands below the main diagonal and all above
+        num_lower = -diagonal
 
-    try:
-        # Try to handle static dimensions
-        for i in range(len(shape)):
-            if not isinstance(shape[i], StaticDim):
-                # For dynamic shapes, just return the input unchanged for now
-                # This is not correct but will allow the graph to compile
-                # TODO: Implement proper dynamic triu
-                return input
+        # Only apply bounds check if we have static dimensions
+        shape = input.shape
+        if len(shape) >= 2:
+            dim_m = shape[-2]
+            # Check if dimension is static by trying to convert to int
+            try:
+                dim_m_val = int(dim_m)
+                # Dimension can be converted to int, it is static
+                # Clamp num_lower to avoid out of bounds error
+                # num_lower can't be larger than the number of rows - 1
+                num_lower = min(num_lower, dim_m_val - 1)
+            except (TypeError, ValueError):
+                # Dimension is dynamic, don't apply bounds check
+                pass
 
-        shape_ints = [int(dim) for dim in shape]
+        return max_ops.band_part(input, num_lower=num_lower, num_upper=None)
+    else:
+        # Exclude diagonal bands by using exclude with the inverse band
+        # We want to zero out everything below and including (diagonal-1) diagonals above main
+        # This is equivalent to keeping only bands starting from diagonal above main
+        # band_part doesn't directly support this, so we need a workaround
+        # We can use exclude=True to invert the selection
 
-        numpy_mask = np.ones(shape_ints, dtype=input.dtype.to_numpy())
-        numpy_mask = np.triu(numpy_mask, k=diagonal)
-        mask_in_graph = max_ops.constant(
-            numpy_mask, dtype=input.dtype, device=input.device
+        # Only apply bounds check if we have static dimensions
+        shape = input.shape
+        upper_limit = diagonal - 1
+
+        # Check if the last two dimensions are static (not dynamic)
+        if len(shape) >= 2:
+            dim_m = shape[-2]
+            dim_n = shape[-1]
+            # Check if both dimensions are static
+            # Dim objects with a value set are static, check if we can convert to int
+            try:
+                dim_m_val = int(dim_m)
+                dim_n_val = int(dim_n)
+                # Both dimensions can be converted to int, they are static
+                min_dim = min(dim_m_val, dim_n_val)
+                # Clamp upper_limit to avoid out of bounds error
+                if diagonal >= min_dim:
+                    # If diagonal >= min_dim, the result is all zeros
+                    upper_limit = min_dim - 1
+                else:
+                    upper_limit = diagonal - 1
+            except (TypeError, ValueError):
+                # At least one dimension is dynamic, use original upper_limit
+                pass
+
+        return max_ops.band_part(
+            input, num_lower=None, num_upper=upper_limit, exclude=True
         )
-        result = input * mask_in_graph
-        return result
-    except Exception:
-        # Fallback: return input unchanged
-        return input
 
 
 # split.Tensor(Tensor(a -> *) self, SymInt split_size, int dim=0) -> Tensor(a)[]
@@ -2273,43 +2425,11 @@ def aten_unbind(input: TensorValue, dim: int = 0) -> list[TensorValue]:
     return result
 
 
+# For some reason, aot_autograd always decomposes repeat_interleave. No need to have an
+# implementation here if it's never used.
 # repeat_interleave.Tensor(Tensor repeats, *, SymInt? output_size=None) -> Tensor
 # repeat_interleave.self_Tensor(Tensor self, Tensor repeats, int? dim=None, *, SymInt? output_size=None) -> Tensor
 # repeat_interleave.self_int(Tensor self, SymInt repeats, int? dim=None, *, SymInt? output_size=None) -> Tensor
-@map_to(aten.repeat_interleave)
-def aten_repeat_interleave(
-    input: TensorValue, repeats: int, dim: int = 0
-) -> TensorValue:
-    """
-    Equivalent to torch.repeat_interleave - repeats elements of a tensor along a dimension.
-    Each element is repeated 'repeats' times before moving to the next element.
-    """
-    # Handle negative dim
-    if dim < 0:
-        dim = len(input.shape) + dim
-
-    # Get the current shape
-    shape = input.shape
-
-    # Create a new shape where the specified dimension is expanded
-    new_shape = list(shape)
-    new_shape[dim] = int(new_shape[dim]) * repeats
-
-    # Use expand to repeat elements along the dimension
-    # First, add a new dimension after the target dim, then expand and reshape
-    expanded_shape = list(shape)
-    expanded_shape.insert(dim + 1, repeats)
-
-    # Add the new dimension
-    unsqueezed = max_ops.unsqueeze(input, axis=dim + 1)
-
-    # Expand along the new dimension
-    expanded = max_ops.broadcast_to(unsqueezed, expanded_shape)
-
-    # Reshape to merge the repeated dimension
-    result = max_ops.reshape(expanded, new_shape)
-
-    return result
 
 
 # t(Tensor(a) self) -> Tensor(a)

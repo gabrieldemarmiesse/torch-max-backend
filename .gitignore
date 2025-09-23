@@ -21,3 +21,4 @@ Qwen3-0.6B/
 gemma-3-270m-it/
 Qwen3-1.7B/
 tokenizer-base.json
+.coverage

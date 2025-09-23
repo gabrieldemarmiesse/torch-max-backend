@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     
     strategy:
+      fail-fast: false
       matrix:
         test-index: [1, 2, 3, 4, 5, 6, 7, 8]
     
@@ -48,4 +49,4 @@ jobs:
         env:
           MODULAR_HOME: /tmp/modular/
         run: |
-          uv run pytest --forked -n auto -v --splits 8 --group ${{ matrix.test-index }}
+          uv run pytest -v --splits 8 --group ${{ matrix.test-index }}
