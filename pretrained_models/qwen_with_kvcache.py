@@ -4,16 +4,15 @@ from torch_max_backend import max_backend
 
 
 class SimpleAttention(nn.Module):
-    def __init__(self, d_in, num_heads):
+    def __init__(self):
         super().__init__()
-        self.num_heads = num_heads
-        self.d_out = num_heads * 16
+        self.d_out = 4 * 16
 
     def forward(self, x):
         b, num_tokens, d = x.shape
 
         # Simple attention without projections
-        x_reshaped = x.view(b, num_tokens, self.num_heads, 16).transpose(1, 2)
+        x_reshaped = x.view(b, num_tokens, 4, 16).transpose(1, 2)
 
         # Self-attention scores
         attn_scores = x_reshaped @ x_reshaped.transpose(2, 3)
@@ -37,11 +36,11 @@ class SimpleAttention(nn.Module):
 
 
 class SimpleModel(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self):
         super().__init__()
-        self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
-        self.att = SimpleAttention(d_in=cfg["emb_dim"], num_heads=cfg["n_heads"])
-        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
+        self.tok_emb = nn.Embedding(100, 64)
+        self.att = SimpleAttention()
+        self.out_head = nn.Linear(64, 100, bias=False)
 
     def forward(self, in_idx):
         x = self.tok_emb(in_idx)
@@ -49,10 +48,8 @@ class SimpleModel(nn.Module):
         return self.out_head(x)
 
 
-QWEN3_CONFIG = {"vocab_size": 100, "emb_dim": 64, "n_heads": 4}
-
 torch.manual_seed(123)
-model = SimpleModel(QWEN3_CONFIG)
+model = SimpleModel()
 
 model.to("cuda")
 
