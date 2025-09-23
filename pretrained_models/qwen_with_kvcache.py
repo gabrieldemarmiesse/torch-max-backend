@@ -7,35 +7,21 @@ class SimpleAttention(nn.Module):
     def __init__(self, d_in, num_heads, head_dim=None, dtype=None):
         super().__init__()
         self.num_heads = num_heads
-        if head_dim is None:
-            head_dim = d_in // num_heads
-        self.head_dim = head_dim
-        self.d_out = num_heads * head_dim
-
-        self.W_query = nn.Linear(d_in, self.d_out, bias=False, dtype=dtype)
-        self.W_key = nn.Linear(d_in, self.d_out, bias=False, dtype=dtype)
-        self.W_value = nn.Linear(d_in, self.d_out, bias=False, dtype=dtype)
-        self.out_proj = nn.Linear(self.d_out, d_in, bias=False, dtype=dtype)
+        self.head_dim = head_dim if head_dim else d_in // num_heads
+        self.d_out = num_heads * self.head_dim
 
     def forward(self, x):
-        b, num_tokens, _ = x.shape
+        b, num_tokens, d = x.shape
 
-        # Apply projections
-        queries = self.W_query(x)
-        keys = self.W_key(x)
-        values = self.W_value(x)
-
-        # Reshape
-        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim).transpose(
-            1, 2
-        )
-        keys = keys.view(b, num_tokens, self.num_heads, self.head_dim).transpose(1, 2)
-        values = values.view(b, num_tokens, self.num_heads, self.head_dim).transpose(
+        # Simple attention without projections
+        x_reshaped = x.view(b, num_tokens, self.num_heads, self.head_dim).transpose(
             1, 2
         )
 
-        # Attention
-        attn_scores = queries @ keys.transpose(2, 3)
+        # Self-attention scores
+        attn_scores = x_reshaped @ x_reshaped.transpose(2, 3)
+
+        # Add mask back
         mask = torch.triu(
             torch.ones(num_tokens, num_tokens, device=x.device, dtype=torch.bool),
             diagonal=1,
@@ -44,10 +30,13 @@ class SimpleAttention(nn.Module):
         attn_scores = attn_scores.masked_fill(mask, -torch.inf)
         attn_weights = torch.softmax(attn_scores / self.head_dim**0.5, dim=-1)
 
+        # Apply attention and reshape back
         context = (
-            (attn_weights @ values).transpose(1, 2).reshape(b, num_tokens, self.d_out)
+            (attn_weights @ x_reshaped)
+            .transpose(1, 2)
+            .reshape(b, num_tokens, self.d_out)
         )
-        return self.out_proj(context)
+        return context
 
 
 class SimpleModel(nn.Module):
@@ -83,11 +72,10 @@ QWEN3_CONFIG = {
 torch.manual_seed(123)
 model = SimpleModel(QWEN3_CONFIG)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+model.to("cuda")
 
 
-input_token_ids_tensor = torch.tensor([[1, 2, 3]], device=device)
+input_token_ids_tensor = torch.tensor([[1, 2, 3]], device="cuda")
 
 model.eval()
 model = torch.compile(model, backend=max_backend, fullgraph=True, disable=False)
