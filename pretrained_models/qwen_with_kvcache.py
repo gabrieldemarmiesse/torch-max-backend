@@ -441,6 +441,9 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
+
+print("using device:", device)
+
 model.to(device)
 
 
