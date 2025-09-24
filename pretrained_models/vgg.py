@@ -3,14 +3,14 @@ from torchvision import models, transforms
 from PIL import Image
 import requests
 from io import BytesIO
-from torch_max_backend import max_backend
+from torch_max_backend import max_backend, register_max_devices
 import os
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
+register_max_devices()
 
-
-device = "cuda"
+device = "max_device:0"
 
 model = models.vgg11(pretrained=True)
 
