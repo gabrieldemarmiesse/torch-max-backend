@@ -12,6 +12,8 @@ import pytest
 from torch._dynamo.exc import BackendCompilerFailed
 import torch_max_backend
 import torch_max_backend.compiler
+from max.torch import CustomOpLibrary
+from pathlib import Path
 
 
 def test_basic_training(device: str):
@@ -651,3 +653,57 @@ def test_decomposition_overload_packet(monkeypatch):
     # it's normally decomposed. We check that it's not the case since we
     # implemented it ourselves.
     assert aten.transpose.int in [node.target for node in input_gm.graph.nodes]
+
+
+# Taken directly from the docs
+mojo_kernels = Path(__file__).parent / "dummy_mojo_kernels"
+ops = CustomOpLibrary(mojo_kernels)
+
+
+@torch.library.custom_op("mylib::greyscale", mutates_args=())
+def greyscale(pic: torch.Tensor) -> torch.Tensor:
+    output = pic.new_empty(pic.shape[:-1])
+    ops.grayscale(output, pic)
+    return output
+
+
+@greyscale.register_fake
+def _(pic: torch.Tensor) -> torch.Tensor:
+    return pic.new_empty(pic.shape[:-1])
+
+
+def greyscale_eager(pic: torch.Tensor):
+    pic = pic.to(dtype=torch.float32)
+    r = pic[:, :, 0]
+    g = pic[:, :, 1]
+    b = pic[:, :, 2]
+    return (0.21 * r + 0.71 * g + 0.07 * b).to(dtype=torch.uint8)
+
+
+def test_mojo_custom_op():
+    img = torch.randn(224, 224, 3, device="cpu").to(dtype=torch.uint8)
+    check_functions_are_equivalent(greyscale_eager, None, [img], fn_compiled=greyscale)
+
+    def more_complexe_graph(x: torch.Tensor):
+        x = x + 8
+        y = greyscale(x)
+        y = y - 16
+        return y
+
+    def more_complexe_graph_eager(x: torch.Tensor):
+        x = x + 8
+        y = greyscale_eager(x)
+        y = y - 16
+        return y
+
+    complexe_graph_compiled = torch.compile(backend=max_backend, fullgraph=True)(
+        more_complexe_graph
+    )
+
+    explanation = torch._dynamo.explain(more_complexe_graph)(img)
+    assert explanation.graph_break_count == 0
+    assert explanation.graph_count == 1
+
+    check_functions_are_equivalent(
+        more_complexe_graph_eager, None, [img], fn_compiled=complexe_graph_compiled
+    )
