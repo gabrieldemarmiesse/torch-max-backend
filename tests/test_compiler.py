@@ -659,7 +659,7 @@ def test_decomposition_overload_packet(monkeypatch):
 
 
 def decorator_for_fake(
-    mojo_custom_op_str: str, register_fake_fn: Callable, path_to_kernels: Path
+    path_to_kernels: Path, mojo_custom_op_str: str, register_fake_fn: Callable
 ):
     ops = CustomOpLibrary(path_to_kernels)
     mojo_custom_op = ops.__getattr__(mojo_custom_op_str)
@@ -726,7 +726,7 @@ def fake_grayscale(pic: torch.Tensor) -> torch.Tensor:
 
 
 my_torch_grayscale = decorator_for_fake(
-    "grayscale", fake_grayscale, Path(__file__).parent / "dummy_mojo_kernels"
+    Path(__file__).parent / "dummy_mojo_kernels", "grayscale", fake_grayscale
 )
 
 
