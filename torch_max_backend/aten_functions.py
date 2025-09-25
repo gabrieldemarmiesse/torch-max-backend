@@ -1171,6 +1171,11 @@ def aten_convolution(
 
 # convolution_backward(Tensor grad_output, Tensor input, Tensor weight, SymInt[]? bias_sizes, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
 # copy(Tensor self, Tensor src, bool non_blocking=False) -> Tensor
+@map_to(aten.copy)
+def aten_copy(
+    input: TensorValue, src: TensorValue, non_blocking: bool = False
+) -> TensorValue:
+    return src
 
 
 # cos(Tensor self) -> Tensor
@@ -1294,8 +1299,54 @@ def torch_embedding_equivalent(
 
 
 # embedding_dense_backward(Tensor grad_output, Tensor indices, SymInt num_weights, SymInt padding_idx, bool scale_grad_by_freq) -> Tensor
+
+
 # empty.memory_format(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
+@map_to(aten.empty.memory_format)
+def aten_empty_memory_format(
+    size: list[SymIntType],
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    memory_format: torch.memory_format | None = None,
+) -> TensorValue:
+    return aten_full(
+        size, 0, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )
+
+
 # empty_strided(SymInt[] size, SymInt[] stride, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
+@map_to(aten.empty_strided)
+def aten_empty_strided(
+    size: list[SymIntType],
+    stride: list[SymIntType],
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+) -> TensorValue:
+    return aten_full(
+        size, 0, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )
+
+
+# empty_permuted(SymInt[] size, int[] physical_layout, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
+@map_to(aten.empty_permuted)
+def aten_empty_permuted(
+    size: list[SymIntType],
+    physical_layout: list[int],
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+) -> TensorValue:
+    return aten_full(
+        size, 0, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )
 
 
 # eq.Scalar(Tensor self, Scalar other) -> Tensor

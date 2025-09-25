@@ -5026,3 +5026,29 @@ def test_interpolate_preserve_aspect_ratio(device: str):
     x = torch.randn(2, 3, 4, 8, device=device)
 
     check_functions_are_equivalent(fn, device, [x])
+
+
+def test_empty_tensor(device: str):
+    """Test operations on empty tensors"""
+
+    def fn(x):
+        empty_tensor = torch.empty_like(x)
+        empty_tensor.copy_(x)
+        return empty_tensor + 1
+
+    x = torch.ones((2, 3, 4), device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_inplace_zero_tensor(device: str):
+    """Test operations on empty tensors"""
+
+    def fn(x):
+        empty_tensor = torch.zeros_like(x)
+        empty_tensor.copy_(x)
+        return empty_tensor + 1
+
+    x = torch.ones((2, 3, 4), device=device)
+
+    check_functions_are_equivalent(fn, device, [x])
