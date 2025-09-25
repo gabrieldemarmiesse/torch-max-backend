@@ -14,6 +14,8 @@ import torch_max_backend
 import torch_max_backend.compiler
 from max.torch import CustomOpLibrary
 from pathlib import Path
+from max.graph import TensorType
+from max.dtype import DType
 
 
 def test_basic_training(device: str):
@@ -659,20 +661,82 @@ def test_decomposition_overload_packet(monkeypatch):
 mojo_kernels = Path(__file__).parent / "dummy_mojo_kernels"
 ops = CustomOpLibrary(mojo_kernels)
 
-
-@torch.library.custom_op("mylib::greyscale", mutates_args=())
-def greyscale(pic: torch.Tensor) -> torch.Tensor:
-    output = pic.new_empty(pic.shape[:-1])
-    ops.grayscale(output, pic)
-    return output
+from max.graph import TensorValue
 
 
-@greyscale.register_fake
-def _(pic: torch.Tensor) -> torch.Tensor:
+def decorator_for_fake(mojo_custom_op, register_fake_fn):
+    def fn(*args, **kwargs):
+        output_tensors = register_fake_fn(*args, **kwargs)
+        if isinstance(output_tensors, torch.Tensor):
+            output_tensors = (output_tensors,)
+            single_output = True
+        else:
+            single_output = False
+
+        mojo_custom_op(*output_tensors, *args, **kwargs)
+        if single_output:
+            return output_tensors[0]
+        return output_tensors
+
+    import inspect
+
+    fn.__signature__ = inspect.signature(register_fake_fn)
+
+    def compiler_fn(*args, **kwargs):
+        # We need to convert all args to torch fake tensors
+        # and then call register_fake_fn to get the shapes of the outputs
+        from torch._subclasses.fake_tensor import FakeTensorMode
+
+        with FakeTensorMode():
+            output_device = None
+
+            def convert_to_fake(something):
+                if isinstance(something, tuple):
+                    return tuple(convert_to_fake(x) for x in something)
+                elif isinstance(something, list):
+                    return [convert_to_fake(x) for x in something]
+                elif isinstance(something, dict):
+                    return {k: convert_to_fake(v) for k, v in something.items()}
+                elif isinstance(something, TensorValue):
+                    nonlocal output_device
+                    output_device = something.device
+                    return torch.zeros(
+                        something.shape, dtype=something.dtype.to_torch(), device="cpu"
+                    )
+                elif isinstance(something, str | int | float | type(None) | bool):
+                    return something
+                raise RuntimeError(f"Don't know how to convert {something} to fake")
+
+            fake_args, fake_kwargs = convert_to_fake((args, kwargs))
+            output_tensors = register_fake_fn(*fake_args, **fake_kwargs)
+            if isinstance(output_tensors, torch.Tensor):
+                output_tensors = (output_tensors,)
+            out_types = [
+                TensorType(
+                    dtype=DType.from_torch(x.dtype), shape=x.shape, device=output_device
+                )
+                for x in output_tensors
+            ]
+            print(out_types)
+
+            mojo_custom_op(*output_tensors, *args, **kwargs)
+            if len(output_tensors) == 1:
+                return output_tensors[0]
+            return output_tensors
+
+    torch_custom_op = torch.library.custom_op("hello::world", mutates_args=())(fn)
+    torch_custom_op.register_fake(register_fake_fn)
+    return torch_custom_op
+
+
+def fake_grayscale(pic: torch.Tensor) -> torch.Tensor:
     return pic.new_empty(pic.shape[:-1])
 
 
-def greyscale_eager(pic: torch.Tensor):
+my_torch_grayscale = decorator_for_fake(ops.grayscale, fake_grayscale)
+
+
+def grayscale_eager(pic: torch.Tensor):
     pic = pic.to(dtype=torch.float32)
     r = pic[:, :, 0]
     g = pic[:, :, 1]
@@ -682,19 +746,27 @@ def greyscale_eager(pic: torch.Tensor):
 
 def test_mojo_custom_op():
     img = torch.randn(224, 224, 3, device="cpu").to(dtype=torch.uint8)
-    check_functions_are_equivalent(greyscale_eager, None, [img], fn_compiled=greyscale)
+
+    x = my_torch_grayscale(img)
+    y = grayscale_eager(img)
+    torch.testing.assert_close(x, y)
+    check_functions_are_equivalent(
+        grayscale_eager, None, [img], fn_compiled=my_torch_grayscale
+    )
 
     def more_complexe_graph(x: torch.Tensor):
         x = x + 8
-        y = greyscale(x)
+        y = my_torch_grayscale(x)
         y = y - 16
         return y
 
     def more_complexe_graph_eager(x: torch.Tensor):
         x = x + 8
-        y = greyscale_eager(x)
+        y = grayscale_eager(x)
         y = y - 16
         return y
+
+    x = more_complexe_graph(img)
 
     complexe_graph_compiled = torch.compile(backend=max_backend, fullgraph=True)(
         more_complexe_graph
