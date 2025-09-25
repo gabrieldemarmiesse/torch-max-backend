@@ -220,7 +220,7 @@ class _GraphFactory:
             normalized_name = str(key).removesuffix(".default")
             func_to_execute = MAPPING_TORCH_ATEN_TO_MAX[normalized_name]
             self.tensor_book[node.name] = func_to_execute(
-                *func_kwargs["_all_bases"], func_kwargs["input_pic"]
+                *func_kwargs["_all_bases"], func_kwargs["img_in"]
             )
             return
         else:

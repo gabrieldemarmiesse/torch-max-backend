@@ -19,8 +19,8 @@ def make_torch_op_from_mojo(
         # We assume outputs are first
         # TODO: make more flexible
         # inspect the signature of mojo_custom_op ?
-        out_args = args[:1]
-        in_args = args[1:]
+        out_args = args[: mojo_custom_op.num_outputs]
+        in_args = args[mojo_custom_op.num_outputs :]
 
         out_types = [
             TensorType(dtype=x.dtype, shape=x.shape, device=x.device) for x in out_args
@@ -41,10 +41,10 @@ def make_torch_op_from_mojo(
         # torch_max_backend.compiler._global_max_objects = None ?
         raise ValueError("Must be called before any compilation")
 
-    def wrapper_with_signature(
-        output_pic: torch.Tensor, input_pic: torch.Tensor
-    ) -> None:
-        return mojo_custom_op(output_pic, input_pic)
+    def mojo_custom_op_with_signature(*args, **kwargs):
+        return mojo_custom_op(*args, **kwargs)
+
+    mojo_custom_op_with_signature.__signature__ = mojo_custom_op.torch_signature
 
     torch_max_backend.compiler.paths_to_mojo_kernels.append(path_to_kernels)
     torch_max_backend.MAPPING_TORCH_ATEN_TO_MAX[
@@ -52,8 +52,8 @@ def make_torch_op_from_mojo(
     ] = compiler_fn
 
     torch_custom_op = torch.library.custom_op(
-        f"{path_to_kernels.name}::{mojo_custom_op_str}", mutates_args=("output_pic",)
-    )(wrapper_with_signature)
+        f"{path_to_kernels.name}::{mojo_custom_op_str}", mutates_args=("img_out",)
+    )(mojo_custom_op_with_signature)
 
     def fn(*args, **kwargs):
         output_tensors = register_fake_fn(*args, **kwargs)
