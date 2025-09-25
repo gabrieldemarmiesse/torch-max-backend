@@ -16,6 +16,7 @@ from max.torch import CustomOpLibrary
 from pathlib import Path
 from max.graph import TensorType
 from max.dtype import DType
+import max.graph.ops as max_ops
 
 
 def test_basic_training(device: str):
@@ -657,14 +658,16 @@ def test_decomposition_overload_packet(monkeypatch):
     assert aten.transpose.int in [node.target for node in input_gm.graph.nodes]
 
 
-# Taken directly from the docs
-mojo_kernels = Path(__file__).parent / "dummy_mojo_kernels"
-ops = CustomOpLibrary(mojo_kernels)
-
 from max.graph import TensorValue
+from collections.abc import Callable
 
 
-def decorator_for_fake(mojo_custom_op, register_fake_fn):
+def decorator_for_fake(
+    mojo_custom_op_str: str, register_fake_fn: Callable, path_to_kernels: Path
+):
+    ops = CustomOpLibrary(path_to_kernels)
+    mojo_custom_op = ops.__getattr__(mojo_custom_op_str)
+
     def fn(*args, **kwargs):
         output_tensors = register_fake_fn(*args, **kwargs)
         if isinstance(output_tensors, torch.Tensor):
@@ -701,7 +704,9 @@ def decorator_for_fake(mojo_custom_op, register_fake_fn):
                     nonlocal output_device
                     output_device = something.device
                     return torch.zeros(
-                        something.shape, dtype=something.dtype.to_torch(), device="cpu"
+                        *tuple(something.shape),
+                        dtype=something.dtype.to_torch(),
+                        device="cpu",
                     )
                 elif isinstance(something, str | int | float | type(None) | bool):
                     return something
@@ -717,23 +722,41 @@ def decorator_for_fake(mojo_custom_op, register_fake_fn):
                 )
                 for x in output_tensors
             ]
-            print(out_types)
+            return max_ops.custom(
+                mojo_custom_op.name,
+                device=output_device,
+                values=list(args),
+                parameters=kwargs,
+                out_types=out_types,
+            )
 
-            mojo_custom_op(*output_tensors, *args, **kwargs)
-            if len(output_tensors) == 1:
-                return output_tensors[0]
-            return output_tensors
+    if torch_max_backend.compiler._global_max_objects is not None:
+        # TODO: make more flexible
+        # torch_max_backend.compiler._global_max_objects = None ?
+        raise ValueError("Must be called before any compilation")
 
-    torch_custom_op = torch.library.custom_op("hello::world", mutates_args=())(fn)
+    torch_max_backend.compiler.paths_to_mojo_kernels.append(path_to_kernels)
+    torch_max_backend.MAPPING_TORCH_ATEN_TO_MAX[
+        f"{path_to_kernels.name}.{mojo_custom_op_str}"
+    ] = compiler_fn
+
+    torch_custom_op = torch.library.custom_op(
+        f"{path_to_kernels.name}::{mojo_custom_op_str}", mutates_args=()
+    )(fn)
     torch_custom_op.register_fake(register_fake_fn)
+
     return torch_custom_op
 
 
-def fake_grayscale(pic: torch.Tensor) -> torch.Tensor:
+def fake_grayscale(
+    pic: torch.Tensor | TensorValue,
+) -> tuple[torch.Tensor | TensorValue]:
     return pic.new_empty(pic.shape[:-1])
 
 
-my_torch_grayscale = decorator_for_fake(ops.grayscale, fake_grayscale)
+my_torch_grayscale = decorator_for_fake(
+    "grayscale", fake_grayscale, Path(__file__).parent / "dummy_mojo_kernels"
+)
 
 
 def grayscale_eager(pic: torch.Tensor):

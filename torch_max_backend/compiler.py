@@ -37,6 +37,8 @@ class GlobalMaxObjects:
 
 _global_max_objects: GlobalMaxObjects | None = None
 
+paths_to_mojo_kernels = [Path(__file__).parent / "mojo_kernels"]
+
 
 def global_max_objects() -> GlobalMaxObjects:
     global _global_max_objects
@@ -44,7 +46,7 @@ def global_max_objects() -> GlobalMaxObjects:
         context = mlir.Context()
         with context:
             kernel_library = KernelLibrary(context)
-            kernel_library.load_paths(context, [Path(__file__).parent / "mojo_kernels"])
+            kernel_library.load_paths(context, paths_to_mojo_kernels)
         session = engine.InferenceSession(devices=list(get_accelerators()))
         debug.set_print_options(session)
 
@@ -217,15 +219,21 @@ class _GraphFactory:
             and key.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX
         ):
             key = key.overloadpacket
-
-        if key not in MAPPING_TORCH_ATEN_TO_MAX:
+        normalized_name = f"{node.target.namespace}.{node.name}"
+        if (
+            key not in MAPPING_TORCH_ATEN_TO_MAX
+            and normalized_name not in MAPPING_TORCH_ATEN_TO_MAX
+        ):
             raise MaxCompilerError(
                 "The aten function is not supported by the Max backend yet. "
                 + get_error_message(node, node_idx, func_args, func_kwargs)
                 + "You can try to write it yourself and insert it in the MAPPING_TORCH_ATEN_TO_MAX dictionary."
             )
         try:
-            mapping_func = MAPPING_TORCH_ATEN_TO_MAX[key]
+            if key in MAPPING_TORCH_ATEN_TO_MAX:
+                mapping_func = MAPPING_TORCH_ATEN_TO_MAX[key]
+            else:
+                mapping_func = MAPPING_TORCH_ATEN_TO_MAX[normalized_name]
             func_output = mapping_func(*func_args, **func_kwargs)
         except Exception as e:
             raise MaxCompilerError(
