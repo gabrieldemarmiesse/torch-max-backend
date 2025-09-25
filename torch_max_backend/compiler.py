@@ -129,6 +129,8 @@ class TensorsBook:
             return ...
         elif isinstance(something, torch.nn.Module):
             return something
+        elif isinstance(something, torch._ops.OpOverload):
+            return something
         raise ValueError(f"Unsupported type when reading the graph: {type(something)}")
 
 
@@ -211,7 +213,18 @@ class _GraphFactory:
         func_kwargs = {
             k: self.tensor_book.convert_to_max(v) for k, v in node.kwargs.items()
         }
-        key = node.target
+        if isinstance(
+            node.target, torch._higher_order_ops.auto_functionalize.AutoFunctionalizedV2
+        ):
+            key = func_args[0]
+            normalized_name = str(key).removesuffix(".default")
+            func_to_execute = MAPPING_TORCH_ATEN_TO_MAX[normalized_name]
+            self.tensor_book[node.name] = func_to_execute(
+                *func_kwargs["_all_bases"], func_kwargs["input_pic"]
+            )
+            return
+        else:
+            key = node.target
 
         # TODO: refactor this
         if (
@@ -219,21 +232,14 @@ class _GraphFactory:
             and key.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX
         ):
             key = key.overloadpacket
-        normalized_name = f"{node.target.namespace}.{node.name}"
-        if (
-            key not in MAPPING_TORCH_ATEN_TO_MAX
-            and normalized_name not in MAPPING_TORCH_ATEN_TO_MAX
-        ):
+        if key not in MAPPING_TORCH_ATEN_TO_MAX:
             raise MaxCompilerError(
-                "The aten function is not supported by the Max backend yet. "
+                "The aten function is not supported by the Max backend yet."
                 + get_error_message(node, node_idx, func_args, func_kwargs)
                 + "You can try to write it yourself and insert it in the MAPPING_TORCH_ATEN_TO_MAX dictionary."
             )
         try:
-            if key in MAPPING_TORCH_ATEN_TO_MAX:
-                mapping_func = MAPPING_TORCH_ATEN_TO_MAX[key]
-            else:
-                mapping_func = MAPPING_TORCH_ATEN_TO_MAX[normalized_name]
+            mapping_func = MAPPING_TORCH_ATEN_TO_MAX[key]
             func_output = mapping_func(*func_args, **func_kwargs)
         except Exception as e:
             raise MaxCompilerError(

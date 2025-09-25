@@ -15,8 +15,8 @@ import torch_max_backend.compiler
 from max.torch import CustomOpLibrary
 from pathlib import Path
 from max.graph import TensorType
-from max.dtype import DType
 import max.graph.ops as max_ops
+from collections.abc import Callable
 
 
 def test_basic_training(device: str):
@@ -658,15 +658,52 @@ def test_decomposition_overload_packet(monkeypatch):
     assert aten.transpose.int in [node.target for node in input_gm.graph.nodes]
 
 
-from max.graph import TensorValue
-from collections.abc import Callable
-
-
 def decorator_for_fake(
     mojo_custom_op_str: str, register_fake_fn: Callable, path_to_kernels: Path
 ):
     ops = CustomOpLibrary(path_to_kernels)
     mojo_custom_op = ops.__getattr__(mojo_custom_op_str)
+
+    def compiler_fn(*args, **kwargs):
+        # We split args into outputs and inputs
+        # We assume outputs are first
+        # TODO: make more flexible
+        # inspect the signature of mojo_custom_op ?
+        out_args = args[:1]
+        in_args = args[1:]
+
+        out_types = [
+            TensorType(dtype=x.dtype, shape=x.shape, device=x.device) for x in out_args
+        ]
+        return (
+            "Not handled yet",
+            *max_ops.custom(
+                mojo_custom_op.name,
+                device=args[0].device,
+                values=list(in_args),
+                parameters=kwargs,
+                out_types=out_types,
+            ),
+        )
+
+    if torch_max_backend.compiler._global_max_objects is not None:
+        # TODO: make more flexible
+        # torch_max_backend.compiler._global_max_objects = None ?
+        raise ValueError("Must be called before any compilation")
+
+    def wrapper_with_signature(
+        output_pic: torch.Tensor, input_pic: torch.Tensor
+    ) -> None:
+        return mojo_custom_op(output_pic, input_pic)
+
+    torch_max_backend.compiler.paths_to_mojo_kernels.append(path_to_kernels)
+    torch_max_backend.MAPPING_TORCH_ATEN_TO_MAX[
+        f"{path_to_kernels.name}.{mojo_custom_op_str}"
+    ] = compiler_fn
+
+    torch_custom_op = torch.library.custom_op(
+        f"{path_to_kernels.name}::{mojo_custom_op_str}", mutates_args=("output_pic",)
+    )(wrapper_with_signature)
 
     def fn(*args, **kwargs):
         output_tensors = register_fake_fn(*args, **kwargs)
@@ -676,82 +713,16 @@ def decorator_for_fake(
         else:
             single_output = False
 
-        mojo_custom_op(*output_tensors, *args, **kwargs)
+        torch_custom_op(*output_tensors, *args, **kwargs)
         if single_output:
             return output_tensors[0]
         return output_tensors
 
-    import inspect
-
-    fn.__signature__ = inspect.signature(register_fake_fn)
-
-    def compiler_fn(*args, **kwargs):
-        # We need to convert all args to torch fake tensors
-        # and then call register_fake_fn to get the shapes of the outputs
-        from torch._subclasses.fake_tensor import FakeTensorMode
-
-        with FakeTensorMode():
-            output_device = None
-
-            def convert_to_fake(something):
-                if isinstance(something, tuple):
-                    return tuple(convert_to_fake(x) for x in something)
-                elif isinstance(something, list):
-                    return [convert_to_fake(x) for x in something]
-                elif isinstance(something, dict):
-                    return {k: convert_to_fake(v) for k, v in something.items()}
-                elif isinstance(something, TensorValue):
-                    nonlocal output_device
-                    output_device = something.device
-                    return torch.zeros(
-                        *tuple(something.shape),
-                        dtype=something.dtype.to_torch(),
-                        device="cpu",
-                    )
-                elif isinstance(something, str | int | float | type(None) | bool):
-                    return something
-                raise RuntimeError(f"Don't know how to convert {something} to fake")
-
-            fake_args, fake_kwargs = convert_to_fake((args, kwargs))
-            output_tensors = register_fake_fn(*fake_args, **fake_kwargs)
-            if isinstance(output_tensors, torch.Tensor):
-                output_tensors = (output_tensors,)
-            out_types = [
-                TensorType(
-                    dtype=DType.from_torch(x.dtype), shape=x.shape, device=output_device
-                )
-                for x in output_tensors
-            ]
-            return max_ops.custom(
-                mojo_custom_op.name,
-                device=output_device,
-                values=list(args),
-                parameters=kwargs,
-                out_types=out_types,
-            )
-
-    if torch_max_backend.compiler._global_max_objects is not None:
-        # TODO: make more flexible
-        # torch_max_backend.compiler._global_max_objects = None ?
-        raise ValueError("Must be called before any compilation")
-
-    torch_max_backend.compiler.paths_to_mojo_kernels.append(path_to_kernels)
-    torch_max_backend.MAPPING_TORCH_ATEN_TO_MAX[
-        f"{path_to_kernels.name}.{mojo_custom_op_str}"
-    ] = compiler_fn
-
-    torch_custom_op = torch.library.custom_op(
-        f"{path_to_kernels.name}::{mojo_custom_op_str}", mutates_args=()
-    )(fn)
-    torch_custom_op.register_fake(register_fake_fn)
-
-    return torch_custom_op
+    return fn
 
 
-def fake_grayscale(
-    pic: torch.Tensor | TensorValue,
-) -> tuple[torch.Tensor | TensorValue]:
-    return pic.new_empty(pic.shape[:-1])
+def fake_grayscale(pic: torch.Tensor) -> torch.Tensor:
+    return pic.new_empty(pic.shape[:-1], dtype=torch.float32)
 
 
 my_torch_grayscale = decorator_for_fake(
@@ -764,7 +735,7 @@ def grayscale_eager(pic: torch.Tensor):
     r = pic[:, :, 0]
     g = pic[:, :, 1]
     b = pic[:, :, 2]
-    return (0.21 * r + 0.71 * g + 0.07 * b).to(dtype=torch.uint8)
+    return torch.clamp((0.21 * r + 0.71 * g + 0.07 * b), max=255)
 
 
 def test_mojo_custom_op():
@@ -790,10 +761,14 @@ def test_mojo_custom_op():
         return y
 
     x = more_complexe_graph(img)
+    y = more_complexe_graph_eager(img)
 
     complexe_graph_compiled = torch.compile(backend=max_backend, fullgraph=True)(
         more_complexe_graph
     )
+    z = complexe_graph_compiled(img)
+    torch.testing.assert_close(x, y)
+    torch.testing.assert_close(x, z)
 
     explanation = torch._dynamo.explain(more_complexe_graph)(img)
     assert explanation.graph_break_count == 0
