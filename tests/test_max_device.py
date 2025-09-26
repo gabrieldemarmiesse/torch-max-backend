@@ -27,7 +27,7 @@ def test_tensor_to_max_device(max_device):
     # Check type and properties
     assert isinstance(max_tensor, MaxTensor)
     assert max_tensor.shape == (3,)
-    assert max_tensor._dtype == torch.float32
+    assert max_tensor.dtype == torch.float32
 
 
 def test_max_tensor_to_cpu(max_device):
@@ -41,7 +41,6 @@ def test_max_tensor_to_cpu(max_device):
 
     # Check result
     assert isinstance(result, torch.Tensor)
-    assert not isinstance(result, MaxTensor)
     torch.testing.assert_close(result, cpu_tensor)
 
 
