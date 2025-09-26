@@ -1410,6 +1410,7 @@ dev = [
     { name = "requests" },
     { name = "rich" },
     { name = "ruff" },
+    { name = "setuptools" },
     { name = "tiktoken" },
     { name = "torch" },
 ]
@@ -1442,6 +1443,7 @@ dev = [
     { name = "requests", specifier = ">=2.32.4" },
     { name = "rich", specifier = ">=14.1.0" },
     { name = "ruff", specifier = ">=0.12.7" },
+    { name = "setuptools", specifier = ">=80.9.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },
     { name = "torch", git = "https://github.com/qihqi/pytorch?branch=privateuseone" },
 ]

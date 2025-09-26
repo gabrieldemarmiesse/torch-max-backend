@@ -168,14 +168,17 @@ class MaxTensor(torch.Tensor):
 
     @property
     def device(self):
-        return find_equivalent_torch_device(self._max_data.device)
+        if hasattr(self, "_max_data"):
+            return find_equivalent_torch_device(self._max_data.device)
+        else:
+            return "error getting device"
 
     @property
     def dtype(self):
         return self._max_data.dtype.to_torch()
 
     def __repr__(self):
-        return repr(self._max_data)
+        return "MaxTensor(" + repr(self._max_data) + ")"
 
     def __sub__(self, other):
         return torch.sub(self, other)
@@ -537,7 +540,7 @@ aten_library.impl("empty_strided", empty_strided, "PrivateUse1")
 
 @torch.library.impl("aten::_copy_from", "privateuseone")
 def max_device__copy_from(a, b):
-    print("copy from", type(a), a.device.type, "to", type(b), b.device.type)
+    print("copy from", type(a), a.device, "to", type(b), b.device)
     if b.device.type == "cpu":
         # Copying from max to cpu
         return torch.from_numpy(a._max_data.to_numpy())

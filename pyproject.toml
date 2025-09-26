@@ -83,5 +83,6 @@ dev = [
     "rich>=14.1.0",
     "matplotlib>=3.10.6",
     "torch",
+    "setuptools>=80.9.0",
 ]
 
