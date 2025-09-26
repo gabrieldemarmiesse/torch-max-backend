@@ -7,6 +7,7 @@ import io
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
+from torch._dynamo import mark_dynamic
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 
@@ -35,6 +36,8 @@ img_url = "https://docs.modular.com/images/artwork/pytorch-custom-operators.jpg"
 
 some_image = Image.open(io.BytesIO(requests.get(img_url).content)).convert("RGB")
 img = torch.from_numpy(np.array(some_image)).to("cuda")
+mark_dynamic(img, 0)
+mark_dynamic(img, 1)
 
 x_eager = simple_graph(img)
 x_compiled = simple_graph_compiled(img)
