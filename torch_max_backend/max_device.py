@@ -11,6 +11,7 @@ import numpy as np
 from torch_max_backend import torch_max_device_module
 from torch.utils._python_dispatch import TorchDispatchMode
 import os
+from torch.utils.backend_registration import setup_privateuseone_for_python_backend
 
 
 class UseStockImplementation(Exception):
@@ -494,18 +495,15 @@ def generate_methods_for_privateuse_backend():
     )
 
 
+_registered = False
+
+
 def register_max_devices():
     """Enable the max_device globally"""
-    global _max_device_mode
-    global _max_device_function_mode
-    if _max_device_mode is not None:
+    global _registered
+    if _registered is not None:
         # Already registered
         return
 
-    rename_privateuse_backend()
-    register_device_module()
-    generate_methods_for_privateuse_backend()
-    _max_device_mode = DispatchMax()
-    _max_device_function_mode = MaxDeviceMode()
-    _max_device_mode.__enter__()
-    _max_device_function_mode.__enter__()
+    setup_privateuseone_for_python_backend("max_device", torch_max_device_module)
+    _registered = True
