@@ -673,8 +673,8 @@ def grayscale_eager(pic: torch.Tensor):
     return torch.clamp((0.21 * r + 0.71 * g + 0.07 * b), max=255)
 
 
-def test_mojo_custom_op():
-    img = torch.randn(224, 224, 3, device="cpu").to(dtype=torch.uint8)
+def test_mojo_custom_op(device: str):
+    img = torch.randn(224, 224, 3, device=device).to(dtype=torch.uint8)
 
     x = my_torch_grayscale(img)
     y = grayscale_eager(img)
@@ -738,9 +738,9 @@ def grayscale_multi_eager(
     return (torch.clamp((0.21 * r + 0.71 * g + 0.07 * b), max=255), r)
 
 
-def test_mojo_custom_op_multi():
-    img = torch.randn(224, 224, 3, device="cpu").to(dtype=torch.uint8)
-    noise = torch.randint(0, 2, (224, 224), device="cpu").to(dtype=torch.uint8)
+def test_mojo_custom_op_multi(device: str):
+    img = torch.randn(224, 224, 3, device=device).to(dtype=torch.uint8)
+    noise = torch.randint(0, 2, (224, 224), device=device).to(dtype=torch.uint8)
 
     x1, x2 = my_torch_grayscale_multi(img, noise)
     y1, y2 = grayscale_multi_eager(img, noise)

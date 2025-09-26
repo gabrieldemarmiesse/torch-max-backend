@@ -54,7 +54,7 @@ explicit = true
 
 [tool.uv]
 prerelease = "allow"
-
+python-preference = "only-managed"
 
 [tool.ruff.format]
 skip-magic-trailing-comma = true
