@@ -58,8 +58,20 @@ def make_torch_op_from_mojo(
         if isinstance(output_tensors, torch.Tensor):
             output_tensors = (output_tensors,)
             single_output = True
-        else:
+        elif isinstance(output_tensors, tuple) or isinstance(output_tensors, list):
             single_output = False
+            for t in output_tensors:
+                if not isinstance(t, torch.Tensor):
+                    raise ValueError(
+                        f"allocate_outputs_fn must return a torch."
+                        f"Tensor or a tuple/list of torch.Tensor. Found a list/tuple with "
+                        f"an element of type {type(t)}"
+                    )
+        else:
+            raise ValueError(
+                f"allocate_outputs_fn must return a torch.Tensor or a tuple/list of "
+                f"torch.Tensor. Found {type(output_tensors)}"
+            )
 
         torch_custom_op(*output_tensors, *args, **kwargs)
         if single_output:

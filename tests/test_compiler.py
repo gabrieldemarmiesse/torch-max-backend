@@ -717,7 +717,7 @@ def test_mojo_custom_op():
 def allocate_outputs_grayscale_multi(
     pic: torch.Tensor, noise: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    return (pic.new_empty(noise.shape, dtype=torch.float32) for _ in range(2))
+    return tuple(pic.new_empty(noise.shape, dtype=torch.float32) for _ in range(2))
 
 
 my_torch_grayscale_multi = make_torch_op_from_mojo(
@@ -747,7 +747,7 @@ def test_mojo_custom_op_multi():
     torch.testing.assert_close(x1, y1)
     torch.testing.assert_close(x2, y2)
     check_functions_are_equivalent(
-        grayscale_multi_eager, None, [img], fn_compiled=my_torch_grayscale_multi
+        grayscale_multi_eager, None, [img, noise], fn_compiled=my_torch_grayscale_multi
     )
 
     def more_complexe_graph(
@@ -785,5 +785,8 @@ def test_mojo_custom_op_multi():
     assert explanation.graph_count == 1
 
     check_functions_are_equivalent(
-        more_complexe_graph_eager, None, [img], fn_compiled=complexe_graph_compiled
+        more_complexe_graph_eager,
+        None,
+        [img, noise],
+        fn_compiled=complexe_graph_compiled,
     )
