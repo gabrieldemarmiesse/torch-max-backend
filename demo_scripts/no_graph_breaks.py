@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from torch._dynamo import mark_dynamic
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
-
+print("hey wtf")
 register_max_devices()
 
 
@@ -25,10 +25,10 @@ def allocate_outputs_grayscale(pic: torch.Tensor) -> torch.Tensor:
 
 
 def simple_graph(img: torch.Tensor) -> torch.Tensor:
-    img = img - 1
+    img1 = img - 1
     # img = my_torch_grayscale(img)
-    img = img + 10
-    return img
+    img2 = img1 + 10
+    return img2
 
 
 simple_graph_compiled = torch.compile(simple_graph, backend=max_backend)
