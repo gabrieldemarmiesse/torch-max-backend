@@ -154,27 +154,6 @@ def max_device_aten_sub(input, other, alpha=1):
 aten_library.impl("sub.Tensor", max_device_aten_sub, "PrivateUse1")
 
 
-def max_device_aten_arange_start_out(start, end=None, step=1, *, out=None):
-    print(out)
-    print(out.device)
-    print(out._max_data)
-    x = execute_with_max_graph(aten.arange, (start, end, step), {})
-    out._max_data = x._max_data
-    print("after arange", out, out.shape)
-    return out
-
-
-aten_library.impl("arange.start_out", max_device_aten_arange_start_out, "PrivateUse1")
-
-
-
-
-
-def max_device_aten_sqrt(x):
-    return execute_with_max_graph(aten.sqrt, (x,), {})
-
-
-aten_library.impl("aten.sqrt", max_device_aten_sqrt, "PrivateUse1")
 
 
 
@@ -382,6 +361,36 @@ def max_device_empty_memory_format(
 @torch.library.impl("aten::sqrt", "privateuseone")
 def max_device_aten_sqrt(x):
     return execute_with_max_graph(aten.sqrt, (x,), {})
+
+
+@torch.library.impl("aten::arange", "privateuseone")
+def max_device_aten_arange_start_out( 
+    start,
+    end = None,
+    step = 1,
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    ):
+    return execute_with_max_graph(
+        aten.arange,
+        (),
+        dict(
+            start=start,
+            end=end,
+            step=step,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            pin_memory=pin_memory,
+        ),
+    )
+
+@torch.library.impl("aten::pow", "privateuseone")
+def max_device_aten_pow(input, exponent):
+    return execute_with_max_graph(aten.pow, (input, exponent), {})
 
 
 
