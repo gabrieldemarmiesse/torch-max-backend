@@ -320,6 +320,8 @@ class BaseMaxCompiler:
             gm.graph.print_tabular()
 
         graph, self.output_blueprint = _GraphFactory().create_graph(gm)
+        if verbose_enabled():
+            print(graph)
         if profiling_enabled():
             graph_defined_time = time.time_ns()
         self.model = global_max_objects().session.load(graph)
