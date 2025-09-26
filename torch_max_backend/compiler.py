@@ -216,6 +216,8 @@ class _GraphFactory:
         if isinstance(
             node.target, torch._higher_order_ops.auto_functionalize.AutoFunctionalizedV2
         ):
+            # This is a torch-max-backend custom op. Let's add it to the graph.
+            # (no graph break here)
             key = func_args[0]
             normalized_name = str(key).removesuffix(".default")
             func_to_execute = MAPPING_TORCH_ATEN_TO_MAX[normalized_name]
@@ -223,8 +225,7 @@ class _GraphFactory:
                 *func_kwargs["_all_bases"], func_kwargs["img_in"]
             )
             return
-        else:
-            key = node.target
+        key = node.target
 
         # TODO: refactor this
         if (
@@ -232,9 +233,10 @@ class _GraphFactory:
             and key.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX
         ):
             key = key.overloadpacket
+
         if key not in MAPPING_TORCH_ATEN_TO_MAX:
             raise MaxCompilerError(
-                "The aten function is not supported by the Max backend yet."
+                "The aten function is not supported by the Max backend yet. "
                 + get_error_message(node, node_idx, func_args, func_kwargs)
                 + "You can try to write it yourself and insert it in the MAPPING_TORCH_ATEN_TO_MAX dictionary."
             )

@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 
 def make_torch_op_from_mojo(
-    path_to_kernels: Path, mojo_custom_op_str: str, register_fake_fn: Callable
+    path_to_kernels: Path, mojo_custom_op_str: str, allocate_outputs_fn: Callable
 ):
     ops = CustomOpLibrary(path_to_kernels)
     mojo_custom_op = ops.__getattr__(mojo_custom_op_str)
@@ -17,8 +17,6 @@ def make_torch_op_from_mojo(
     def compiler_fn(*args, **kwargs):
         # We split args into outputs and inputs
         # We assume outputs are first
-        # TODO: make more flexible
-        # inspect the signature of mojo_custom_op ?
         out_args = args[: mojo_custom_op.num_outputs]
         in_args = args[mojo_custom_op.num_outputs :]
 
@@ -26,7 +24,7 @@ def make_torch_op_from_mojo(
             TensorType(dtype=x.dtype, shape=x.shape, device=x.device) for x in out_args
         ]
         return (
-            "Not handled yet",
+            NotImplementedError("Accessing the first output is not handled yet"),
             *max_ops.custom(
                 mojo_custom_op.name,
                 device=args[0].device,
@@ -56,7 +54,7 @@ def make_torch_op_from_mojo(
     )(mojo_custom_op_with_signature)
 
     def fn(*args, **kwargs):
-        output_tensors = register_fake_fn(*args, **kwargs)
+        output_tensors = allocate_outputs_fn(*args, **kwargs)
         if isinstance(output_tensors, torch.Tensor):
             output_tensors = (output_tensors,)
             single_output = True
