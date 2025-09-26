@@ -48,9 +48,14 @@ def make_torch_op_from_mojo(
     torch_max_backend.MAPPING_TORCH_ATEN_TO_MAX[
         f"{path_to_kernels.name}.{mojo_custom_op_str}"
     ] = compiler_fn
+    mutates_args = []
+    for param_name in mojo_custom_op.torch_signature.parameters:
+        mutates_args.append(param_name)
+        if len(mutates_args) == mojo_custom_op.num_outputs:
+            break
 
     torch_custom_op = torch.library.custom_op(
-        f"{path_to_kernels.name}::{mojo_custom_op_str}", mutates_args=("img_out",)
+        f"{path_to_kernels.name}::{mojo_custom_op_str}", mutates_args=mutates_args
     )(mojo_custom_op_with_signature)
 
     def fn(*args, **kwargs):

@@ -221,8 +221,12 @@ class _GraphFactory:
             key = func_args[0]
             normalized_name = str(key).removesuffix(".default")
             func_to_execute = MAPPING_TORCH_ATEN_TO_MAX[normalized_name]
+            # without hidden keys
+            input_tensors = [v for k, v in func_kwargs.items() if not k.startswith("_")]
+            # We pray the gods that the order is correct here
+            # because we only work with positional arguments
             self.tensor_book[node.name] = func_to_execute(
-                *func_kwargs["_all_bases"], func_kwargs["img_in"]
+                *func_kwargs["_all_bases"], *input_tensors
             )
             return
         key = node.target
