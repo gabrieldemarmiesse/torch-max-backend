@@ -167,6 +167,17 @@ def max_device_aten_arange_start_out(start, end=None, step=1, *, out=None):
 aten_library.impl("arange.start_out", max_device_aten_arange_start_out, "PrivateUse1")
 
 
+
+
+
+def max_device_aten_sqrt(x):
+    return execute_with_max_graph(aten.sqrt, (x,), {})
+
+
+aten_library.impl("aten.sqrt", max_device_aten_sqrt, "PrivateUse1")
+
+
+
 def make_hashable(obj):
     if isinstance(obj, dict):
         return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
@@ -365,6 +376,13 @@ def max_device_empty_memory_format(
             memory_format=memory_format,
         ),
     )
+
+
+
+@torch.library.impl("aten::sqrt", "privateuseone")
+def max_device_aten_sqrt(x):
+    return execute_with_max_graph(aten.sqrt, (x,), {})
+
 
 
 _registered = False
