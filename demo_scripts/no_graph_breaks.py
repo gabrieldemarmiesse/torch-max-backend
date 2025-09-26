@@ -34,7 +34,7 @@ simple_graph_compiled = torch.compile(simple_graph, backend=max_backend)
 img_url = "https://docs.modular.com/images/artwork/pytorch-custom-operators.jpg"
 
 some_image = Image.open(io.BytesIO(requests.get(img_url).content)).convert("RGB")
-img = torch.from_numpy(np.array(some_image))
+img = torch.from_numpy(np.array(some_image)).to("cuda")
 
 x_eager = simple_graph(img)
 x_compiled = simple_graph_compiled(img)
@@ -43,5 +43,5 @@ print("Results match for simple_graph")
 explanation = torch._dynamo.explain(simple_graph_compiled, img)
 print("Number of graph breaks:", explanation.graph_break_count)
 
-plt.imshow(x_compiled.numpy().astype(np.uint8), cmap="gray")
+plt.imshow(x_compiled.cpu().numpy().astype(np.uint8), cmap="gray")
 plt.show()
