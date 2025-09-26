@@ -171,17 +171,24 @@ class MaxTensor(torch.Tensor):
         if hasattr(self, "_max_data"):
             return find_equivalent_torch_device(self._max_data.device)
         else:
-            return "error getting device"
+            return super().device
 
     @property
     def dtype(self):
-        return self._max_data.dtype.to_torch()
+        if hasattr(self, "_max_data"):
+            return self._max_data.dtype.to_torch()
+        else:
+            return super().dtype
 
     def __repr__(self):
-        return "MaxTensor(" + repr(self._max_data) + ")"
+        if hasattr(self, "_max_data"):
+            return "MaxTensor(" + repr(self._max_data.to_numpy()) + ")"
+        return super().__repr__()
 
     def __sub__(self, other):
-        return torch.sub(self, other)
+        if hasattr(self, "_max_data"):
+            return torch.sub(self, other)
+        return super().__sub__(self, other)
 
 
 class DispatchMax(TorchDispatchMode):
@@ -539,16 +546,22 @@ aten_library.impl("empty_strided", empty_strided, "PrivateUse1")
 
 
 @torch.library.impl("aten::_copy_from", "privateuseone")
-def max_device__copy_from(a, b):
-    print("copy from", type(a), a.device, "to", type(b), b.device)
-    if b.device.type == "cpu":
+def max_device__copy_from(self, dest):
+    print("copy from", type(self), self.device, "to", type(dest), dest.device)
+    if self.device.type == "max_device" and dest.device.type == "cpu":
         # Copying from max to cpu
-        return torch.from_numpy(a._max_data.to_numpy())
+        x = torch.from_numpy(self._max_data.to_numpy())
+        dest.copy_(x)
+        return dest
 
-    if a.device.type == "max_device":
-        a = make_max_tensor_from_max(max.driver.Tensor.from_dlpack(a.detach()))
-
-    return a
+    elif self.device.type == "cpu" and dest.device.type == "max_device":
+        self = make_max_tensor_from_max(max.driver.Tensor.from_dlpack(self.detach()))
+        dest._max_data = self._max_data.to(dest._max_data.device)
+        return dest
+    else:
+        raise RuntimeError(
+            f"invalid configuration {self.device.type}, {dest.device.type}"
+        )
 
 
 @torch.library.impl("aten::empty.memory_format", "privateuseone")

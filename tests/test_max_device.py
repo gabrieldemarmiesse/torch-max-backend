@@ -41,7 +41,6 @@ def test_max_tensor_to_cpu(max_device):
 
     # Check result
     assert isinstance(result, torch.Tensor)
-    assert not isinstance(result, MaxTensor)
     torch.testing.assert_close(result, cpu_tensor)
 
 
