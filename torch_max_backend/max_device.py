@@ -296,6 +296,7 @@ def make_max_tensor_from_max(tensor: max.driver.Tensor) -> MaxTensor:
 def empty_strided(
     size, stride, *, dtype=None, layout=None, device=None, pin_memory=None
 ):
+    print("in empty_strided")
     a = execute_with_max_graph(
         aten.empty_strided,
         (),
@@ -318,6 +319,9 @@ aten_library.impl("empty_strided", empty_strided, "PrivateUse1")
 
 @torch.library.impl("aten::_copy_from", "privateuseone")
 def max_device__copy_from(self, dest):
+    print("in _copy_from")
+    print("self", self)
+    print("dest", dest)
     print("copy from", type(self), self.device, "to", type(dest), dest.device)
     if self.device.type == "max_device" and dest.device.type == "cpu":
         # Copying from max to cpu
@@ -343,6 +347,7 @@ def max_device__copy_from(self, dest):
 def max_device_empty_memory_format(
     size, *, dtype=None, layout=None, device=None, pin_memory=None, memory_format=None
 ):
+    print("called memory format")
     return execute_with_max_graph(
         aten.empty.memory_format,
         (),

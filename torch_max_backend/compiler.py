@@ -363,7 +363,6 @@ class BaseMaxCompiler:
             tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
         debug.debug_graph_if_required(self.gm, args)
-        print("tensor outputs:", tensor_outputs)
 
         # Reconstruct the original output structure with None values
         result = []
@@ -378,6 +377,7 @@ class BaseMaxCompiler:
                 microseconds=(end_inference_time - start_inference_time) / 1000
             )
             print(f"Running the Max graph in {inference_duration}")
+        print("result:", result)
         return result
 
 
