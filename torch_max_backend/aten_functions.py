@@ -2236,6 +2236,8 @@ def aten_split_with_sizes(
 # sqrt(Tensor self) -> Tensor
 @map_to(aten.sqrt)
 def aten_sqrt(x: TensorValue) -> TensorValue:
+    if x.dtype in (DType.int8, DType.int16, DType.int32, DType.int64):
+        x = max_ops.cast(x, DType.float32)
     return max_ops.sqrt(x)
 
 
