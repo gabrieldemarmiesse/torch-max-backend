@@ -156,6 +156,29 @@ You can get various information with the following environement variables:
 * `TORCH_MAX_BACKEND_BEARTYPE=0` to disable type checking. By default, everything in the package is type-checked at runtime. But it may lead to errors when actually the code is valid (and the type hint is wrong). You can try disabling the type-checking then to see if the bug goes away. Feel free to open a bug report in any case! Type errors should never happen and are a sign of an internal bug.
 
 ## Contributing
+
+### How to install it locally
+
+1. Fork the repository
+
+2. Clone your fork:
+
+```bash
+git clone git@github.com:youraccount/max-torch-backend.git
+```
+
+3. Create a virtual environment with uv:
+```bash
+cd max-torch-backend/
+uv venv
+```
+
+4. Activate the virtual environment and install it locally:
+```
+source .venv/bin/activate
+uv pip install -e .[dev]
+```
+
 ### Testing
 
 ```bash
