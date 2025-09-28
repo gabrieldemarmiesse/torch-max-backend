@@ -106,32 +106,7 @@ class MaxTensor(torch.Tensor):
         max_data: max.driver.Tensor | None = None,
         requires_grad=False,
     ):
-        self._size = size
-        self._dtype = dtype
         self._max_data = max_data
-
-    @property
-    def device(self):
-        if hasattr(self, "_max_data"):
-            return find_equivalent_torch_device(self._max_data.device)
-        else:
-            return super().device
-
-    @property
-    def dtype(self):
-        if hasattr(self, "_max_data"):
-            return self._dtype
-            return self._max_data.dtype.to_torch()
-        else:
-            return super().dtype
-
-    @property
-    def shape(self):
-        if hasattr(self, "_max_data"):
-            return self._size
-            return self._max_data.shape
-        else:
-            return super().shape
 
     def __repr__(self):
         if hasattr(self, "_max_data"):
@@ -156,9 +131,6 @@ def max_device_aten_sub(input, other, alpha=1):
 
 
 aten_library.impl("sub.Tensor", max_device_aten_sub, "PrivateUse1")
-
-
-
 
 
 def make_hashable(obj):
@@ -366,23 +338,22 @@ def max_device_empty_memory_format(
     )
 
 
-
 @torch.library.impl("aten::sqrt", "privateuseone")
 def max_device_aten_sqrt(x):
     return execute_with_max_graph(aten.sqrt, (x,), {})
 
 
 @torch.library.impl("aten::arange", "privateuseone")
-def max_device_aten_arange_start_out( 
+def max_device_aten_arange_start_out(
     start,
-    end = None,
-    step = 1,
+    end=None,
+    step=1,
     *,
     dtype: torch.dtype | None = None,
     layout: torch.layout | None = None,
     device: torch.device | None = None,
     pin_memory: bool | None = None,
-    ):
+):
     return execute_with_max_graph(
         aten.arange,
         (),
@@ -397,10 +368,10 @@ def max_device_aten_arange_start_out(
         ),
     )
 
-@torch.library.impl("aten::pow", "privateuseone")
+
+@torch.library.impl("aten::pow.Tensor_Scalar", "privateuseone")
 def max_device_aten_pow(input, exponent):
     return execute_with_max_graph(aten.pow, (input, exponent), {})
-
 
 
 _registered = False

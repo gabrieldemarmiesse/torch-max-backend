@@ -293,8 +293,9 @@ def load_tokenizer():
 
 def main():
     device = "cuda" if len(list(get_accelerators())) >= 2 else "cpu"
-    print(f"Using device: {device}")
     device = "max_device"
+
+    print(f"Using device: {device}")
 
     model = GPT2.from_pretrained("gpt2")
     model.eval()
