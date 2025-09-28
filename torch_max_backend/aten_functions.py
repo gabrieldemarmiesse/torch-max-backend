@@ -1066,6 +1066,18 @@ def aten_cat(tensors: list[TensorValue], dim: int = 0) -> TensorValue:
 
 
 # ceil(Tensor self) -> Tensor
+@map_to(aten.ceil)
+def aten_ceil(input: TensorValue) -> TensorValue:
+    """
+    Ceiling of the input tensor, element-wise.
+
+    For floating-point inputs: Implemented as ceil(x) = -floor(-x) since MAX has floor operation available.
+    For integer inputs: Returns it (no mathematical change needed, following PyTorch behavior).
+    """
+    if input.type.dtype.is_integral():
+        return input
+    else:
+        return -max_ops.floor(-input)
 
 
 # clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor
