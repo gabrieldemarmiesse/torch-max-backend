@@ -179,6 +179,21 @@ source .venv/bin/activate
 uv pip install -e .[dev]
 ```
 
+### Keeping your fork up to date
+
+To keep your fork synchronized with the upstream repository:
+
+```bash
+# Add the upstream remote
+git remote add upstream https://github.com/gabrieldemarmiesse/torch-max-backend.git
+
+# Fetch the latest changes from upstream
+git fetch upstream
+
+# Rebase your current branch onto upstream/main
+git rebase upstream/main
+```
+
 ### Testing
 
 ```bash
