@@ -106,6 +106,8 @@ class MaxTensor(torch.Tensor):
         max_data: max.driver.Tensor | None = None,
         requires_grad=False,
     ):
+        self._size = size
+        self._dtype = dtype
         self._max_data = max_data
 
     @property
@@ -117,6 +119,7 @@ class MaxTensor(torch.Tensor):
 
     @property
     def dtype(self):
+        return self._dtype
         if hasattr(self, "_max_data"):
             return self._max_data.dtype.to_torch()
         else:
@@ -124,6 +127,7 @@ class MaxTensor(torch.Tensor):
 
     @property
     def shape(self):
+        return self._size
         if hasattr(self, "_max_data"):
             return self._max_data.shape
         else:

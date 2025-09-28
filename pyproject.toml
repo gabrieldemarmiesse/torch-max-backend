@@ -84,5 +84,6 @@ dev = [
     "matplotlib>=3.10.6",
     "torch",
     "setuptools>=80.9.0",
+    "transformers>=4.56.2",
 ]
 

@@ -2,12 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from torch_max_backend import max_backend, get_accelerators
+from torch_max_backend import max_backend, get_accelerators, register_max_devices
 from torch._dynamo import mark_dynamic
 import os
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
+
+register_max_devices()
 
 
 class CausalSelfAttention(nn.Module):
@@ -221,12 +223,11 @@ class GPT2(nn.Module):
         return optimizer
 
     def forward(self, idx, targets=None):
-        device = idx.device
         b, t = idx.shape
         assert t <= self.config.block_size, (
             f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         )
-        pos = torch.arange(0, t, dtype=torch.long, device=device)
+        pos = torch.arange(0, t, dtype=torch.long, device="max_device")
 
         tok_emb = self.transformer.wte(idx)
         pos_emb = self.transformer.wpe(pos)
@@ -293,6 +294,7 @@ def load_tokenizer():
 def main():
     device = "cuda" if len(list(get_accelerators())) >= 2 else "cpu"
     print(f"Using device: {device}")
+    device = "max_device"
 
     model = GPT2.from_pretrained("gpt2")
     model.eval()
@@ -305,18 +307,6 @@ def main():
     print("=" * 50)
 
     prompts = ["The future of artificial intelligence"]
-
-    for prompt in prompts:
-        print(f"\nPrompt: '{prompt}'")
-        tokens = enc.encode(prompt)
-        tokens = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
-
-        with torch.no_grad():
-            generated = model.generate(
-                tokens, max_new_tokens=50, temperature=0.8, top_k=50
-            )
-            generated_text = enc.decode(generated[0].tolist())
-            print(f"Generated: {generated_text}")
 
     print("\n" + "=" * 50)
     print("Testing GPT-2 generation with compiled single forward step")
@@ -351,7 +341,7 @@ def main():
     for prompt in prompts:
         print(f"\nPrompt: '{prompt}'")
         tokens = enc.encode(prompt)
-        tokens = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
+        tokens = torch.tensor(tokens, dtype=torch.long).unsqueeze(0).to(device=device)
 
         generated = generate_with_compiled_step(
             tokens, max_new_tokens=50, temperature=0.8, top_k=50
