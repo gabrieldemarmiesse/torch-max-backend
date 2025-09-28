@@ -1,16 +1,21 @@
+import os
+from collections.abc import Callable
+
+import max.driver
+import numpy as np
 import torch
-from torch.overrides import TorchFunctionMode
+from max import engine
 from max.dtype import DType
 from max.graph import Graph, TensorType
-from max import engine
-import max.driver
 from torch.ops import aten
-from collections.abc import Callable
-from torch_max_backend import get_accelerators, MAPPING_TORCH_ATEN_TO_MAX
-import numpy as np
-from torch_max_backend import torch_max_device_module
+from torch.overrides import TorchFunctionMode
 from torch.utils._python_dispatch import TorchDispatchMode
-import os
+
+from torch_max_backend import (
+    MAPPING_TORCH_ATEN_TO_MAX,
+    get_accelerators,
+    torch_max_device_module,
+)
 
 
 class UseStockImplementation(Exception):

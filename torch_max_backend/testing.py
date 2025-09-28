@@ -1,5 +1,7 @@
-import torch
 from collections.abc import Callable
+
+import torch
+
 from torch_max_backend import max_backend
 
 

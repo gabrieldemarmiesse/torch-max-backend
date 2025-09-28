@@ -1,10 +1,12 @@
+import math
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-from torch_max_backend import max_backend, get_accelerators
 from torch._dynamo import mark_dynamic
-import os
+
+from torch_max_backend import get_accelerators, max_backend
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"

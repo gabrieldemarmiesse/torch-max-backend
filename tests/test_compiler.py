@@ -1,18 +1,23 @@
+import io
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+import pytest
 import torch
 import torch.nn.functional as F
-from torch_max_backend import max_backend, make_torch_op_from_mojo
 from torch._dynamo import mark_dynamic
-import io
-from unittest.mock import patch
-import numpy as np
-from torch_max_backend.testing import check_functions_are_equivalent
-from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
-from torch.ops import aten
-import pytest
 from torch._dynamo.exc import BackendCompilerFailed
+from torch.ops import aten
+
 import torch_max_backend
 import torch_max_backend.compiler
-from pathlib import Path
+from torch_max_backend import (
+    MAPPING_TORCH_ATEN_TO_MAX,
+    make_torch_op_from_mojo,
+    max_backend,
+)
+from torch_max_backend.testing import check_functions_are_equivalent
 
 
 def test_basic_training(device: str):

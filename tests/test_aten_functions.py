@@ -1,9 +1,10 @@
-import torch
 import pytest
-from torch_max_backend.testing import check_functions_are_equivalent
-from torch.ops import aten
-from torch._dynamo.exc import BackendCompilerFailed
+import torch
 from torch._dynamo import mark_dynamic
+from torch._dynamo.exc import BackendCompilerFailed
+from torch.ops import aten
+
+from torch_max_backend.testing import check_functions_are_equivalent
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])

@@ -1,8 +1,8 @@
-from max.driver import Accelerator, accelerator_count, CPU
 import warnings
-from max.driver import Device
-import torch
 from collections.abc import Callable
+
+import torch
+from max.driver import CPU, Accelerator, Device, accelerator_count
 
 
 def get_accelerators() -> list[Device]:

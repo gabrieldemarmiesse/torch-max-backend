@@ -5,4 +5,6 @@ repos:
   hooks:
     - id: ruff-check
       args: [ --fix ]
+    - id: ruff-check
+      args: [ --select=I, --fix ]
     - id: ruff-format

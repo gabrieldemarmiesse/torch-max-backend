@@ -1,10 +1,12 @@
-import torch
-from torchvision import models, transforms
-from PIL import Image
-import requests
-from io import BytesIO
-from torch_max_backend import max_backend
 import os
+from io import BytesIO
+
+import requests
+import torch
+from PIL import Image
+from torchvision import models, transforms
+
+from torch_max_backend import max_backend
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
