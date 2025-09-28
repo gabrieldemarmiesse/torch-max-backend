@@ -157,59 +157,28 @@ You can get various information with the following environement variables:
 
 ## Contributing
 
-### How to install it locally
+We welcome contributions! Please see our detailed [Contributing Guide](docs/CONTRIBUTING.md) for complete development setup, coding standards, and submission guidelines.
 
-1. Fork the repository
+### Quick Start for Contributors
 
-2. Clone your fork:
+1. Fork and clone the repository
+2. Set up development environment:
 
 ```bash
-git clone git@github.com:youraccount/max-torch-backend.git
-```
-
-3. Create a virtual environment with uv:
-```bash
-cd max-torch-backend/
+cd torch-max-backend/
 uv venv
-```
-
-4. Activate the virtual environment and install it locally:
-```
 source .venv/bin/activate
 uv pip install -e .[dev]
 ```
 
-### Keeping your fork up to date
-
-To keep your fork synchronized with the upstream repository:
+3. Run tests and checks:
 
 ```bash
-# Add the upstream remote
-git remote add upstream https://github.com/gabrieldemarmiesse/torch-max-backend.git
+# Run all tests
+uv run pytest -n 15
 
-# Fetch the latest changes from upstream
-git fetch upstream
-
-# Rebase your current branch onto upstream/main
-git rebase upstream/main
-```
-
-### Testing
-
-```bash
-# Run all tests (the first time is slow, chaching kicks in after)
-uv run pytest -v -n 2 --forked
-
-# Lint and format
+# Run code quality checks
 uvx pre-commit run --all-files
-# Or install the pre-commit hook
-uvx pre-commit install
 ```
 
-You can try to run all the pretrained models to make sure we're compatible with
-
-```bash
-./pretrained_models/run_all.sh
-# or for example
-uv run pretrained_model/gpt2.sh
-```
+For detailed instructions on adding new operations, debugging, and development workflow, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
