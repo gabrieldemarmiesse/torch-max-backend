@@ -465,6 +465,116 @@ def test_aten_bitwise_xor_broadcasting(device: str):
     check_functions_are_equivalent(fn, device, [x, y])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16])
+def test_aten_ceil_basic(device: str, dtype: torch.dtype):
+    """Test aten.ceil basic functionality with floating point numbers"""
+    # Skip float16 on CPU as MAX doesn't support f16 on CPU
+    if device == "cpu" and dtype == torch.float16:
+        pytest.skip("float16 not supported on CPU in MAX")
+
+    def fn(x):
+        return aten.ceil(x)
+
+    # Test with positive and negative floating point values
+    x = torch.tensor(
+        [-2.7, -1.5, -1.0, -0.3, 0.0, 0.3, 1.0, 1.5, 2.7], dtype=dtype, device=device
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+def test_aten_ceil_integer_types(device: str, dtype: torch.dtype):
+    """Test aten.ceil with integer types (should return copy)"""
+
+    def fn(x):
+        return aten.ceil(x)
+
+    # Integer types should return a copy with no change
+    x = torch.tensor([-5, -1, 0, 1, 5], dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_ceil_2d_tensor(device: str):
+    """Test aten.ceil with 2D tensor"""
+
+    def fn(x):
+        return aten.ceil(x)
+
+    x = torch.tensor(
+        [[-2.7, -1.3], [0.5, 1.8], [2.1, 3.9]], dtype=torch.float32, device=device
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_ceil_3d_tensor(device: str):
+    """Test aten.ceil with 3D tensor"""
+
+    def fn(x):
+        return aten.ceil(x)
+
+    x = torch.randn(2, 3, 4, dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_ceil_edge_cases(device: str):
+    """Test aten.ceil with edge cases"""
+
+    def fn(x):
+        return aten.ceil(x)
+
+    # Test with already integer values, zero, and boundary cases
+    x = torch.tensor(
+        [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0], dtype=torch.float32, device=device
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_ceil_large_values(device: str):
+    """Test aten.ceil with large floating point values"""
+
+    def fn(x):
+        return aten.ceil(x)
+
+    # Test with large positive and negative values
+    x = torch.tensor(
+        [-1000.1, -100.9, 100.1, 1000.9], dtype=torch.float32, device=device
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_ceil_small_fractional_values(device: str):
+    """Test aten.ceil with small fractional values"""
+
+    def fn(x):
+        return aten.ceil(x)
+
+    # Test with small positive and negative fractional values
+    x = torch.tensor(
+        [-0.001, -0.5, -0.999, 0.001, 0.5, 0.999], dtype=torch.float32, device=device
+    )
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_ceil_single_element(device: str):
+    """Test aten.ceil with single element tensor"""
+
+    def fn(x):
+        return aten.ceil(x)
+
+    x = torch.tensor([2.3], dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_ceil_scalar_tensor(device: str):
+    """Test aten.ceil with scalar tensor"""
+
+    def fn(x):
+        return aten.ceil(x)
+
+    x = torch.tensor(2.7, dtype=torch.float32, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
 @pytest.mark.parametrize("repeats", [1, 2, 3, 5])
 @pytest.mark.parametrize("dim", [0, 1, -1])
 def test_aten_repeat_interleave_basic(device: str, repeats: int, dim: int):
