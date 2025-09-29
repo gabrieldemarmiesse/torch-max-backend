@@ -35,8 +35,8 @@ Run the test suite to ensure everything is working:
 # Run all tests with parallel execution
 uv run pytest -n 15
 
-# Run with verbose output to see more details
-TORCH_MAX_BACKEND_VERBOSE=1 uv run pytest tests/test_compiler.py
+# Run a test file
+uv run pytest tests/test_compiler.py
 ```
 
 ## Development Workflow
