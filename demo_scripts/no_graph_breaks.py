@@ -34,10 +34,11 @@ def simple_graph(img: torch.Tensor) -> torch.Tensor:
 
 simple_graph_compiled = torch.compile(simple_graph, backend=max_backend)
 
+# Get the image
 img_url = "https://docs.modular.com/images/artwork/pytorch-custom-operators.jpg"
-
 some_image = Image.open(io.BytesIO(requests.get(img_url).content)).convert("RGB")
 img = torch.from_numpy(np.array(some_image)).to("cuda")
+
 mark_dynamic(img, 0)
 mark_dynamic(img, 1)
 
