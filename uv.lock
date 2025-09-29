@@ -1503,8 +1503,8 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.10.0a0+gita5bd816"
-source = { git = "https://github.com/qihqi/pytorch?rev=a5bd816b24e49ea2b4c367376bc4c96028bc718b#a5bd816b24e49ea2b4c367376bc4c96028bc718b" }
+version = "2.10.0a0+git101bfc6"
+source = { url = "https://github.com/gabrieldemarmiesse/pytorch/releases/download/custom_device/torch-2.10.0a0+git101bfc6-cp312-cp312-linux_x86_64.whl" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
@@ -1514,6 +1514,24 @@ dependencies = [
     { name = "sympy" },
     { name = "typing-extensions" },
 ]
+wheels = [
+    { url = "https://github.com/gabrieldemarmiesse/pytorch/releases/download/custom_device/torch-2.10.0a0+git101bfc6-cp312-cp312-linux_x86_64.whl", hash = "sha256:6840bf08bf64765c2eef82e8b51496539a1b96183ab1f92a872d0d621345cb14" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "filelock" },
+    { name = "fsspec", specifier = ">=0.8.5" },
+    { name = "jinja2" },
+    { name = "networkx", specifier = ">=2.5.1" },
+    { name = "opt-einsum", marker = "extra == 'opt-einsum'", specifier = ">=3.3" },
+    { name = "optree", marker = "extra == 'optree'", specifier = ">=0.13.0" },
+    { name = "pyyaml", marker = "extra == 'pyyaml'" },
+    { name = "setuptools", marker = "python_full_version >= '3.12'" },
+    { name = "sympy", specifier = ">=1.13.3" },
+    { name = "typing-extensions", specifier = ">=4.10.0" },
+]
+provides-extras = ["optree", "opt-einsum", "pyyaml"]
 
 [[package]]
 name = "torch-max-backend"
@@ -1557,7 +1575,7 @@ requires-dist = [
     { name = "beartype", specifier = ">=0.17.0" },
     { name = "max", index = "https://dl.modular.com/public/nightly/python/simple/" },
     { name = "tabulate" },
-    { name = "torch", git = "https://github.com/qihqi/pytorch?rev=a5bd816b24e49ea2b4c367376bc4c96028bc718b" },
+    { name = "torch", url = "https://github.com/gabrieldemarmiesse/pytorch/releases/download/custom_device/torch-2.10.0a0+git101bfc6-cp312-cp312-linux_x86_64.whl" },
 ]
 
 [package.metadata.requires-dev]
@@ -1582,7 +1600,7 @@ dev = [
     { name = "ruff", specifier = ">=0.12.7" },
     { name = "setuptools", specifier = ">=80.9.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },
-    { name = "torch", git = "https://github.com/qihqi/pytorch?rev=a5bd816b24e49ea2b4c367376bc4c96028bc718b" },
+    { name = "torch", url = "https://github.com/gabrieldemarmiesse/pytorch/releases/download/custom_device/torch-2.10.0a0+git101bfc6-cp312-cp312-linux_x86_64.whl" },
     { name = "transformers", specifier = ">=4.56.2" },
 ]
 
