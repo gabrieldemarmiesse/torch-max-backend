@@ -18,10 +18,10 @@ def allocate_outputs_grayscale(pic: torch.Tensor) -> torch.Tensor:
 
 
 def simple_graph(img: torch.Tensor) -> torch.Tensor:
-    img1 = img - 1
-    # img = my_torch_grayscale(img)
-    img2 = img1 + 10
-    return img2
+    img = img - 1
+    img = img + img * 10
+    img = img + 10
+    return img
 
 
 simple_graph_compiled = torch.compile(simple_graph, backend=max_backend)

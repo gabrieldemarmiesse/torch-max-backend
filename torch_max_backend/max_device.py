@@ -119,18 +119,19 @@ class MaxTensor(torch.Tensor):
         return super().__sub__(self, other)
 
 
+@torch.library.impl("aten::add.Tensor", "privateuseone")
 def max_device_aten_add(input, other, alpha=1):
     return execute_with_max_graph(aten.add, (input, other, alpha), {})
 
 
-aten_library.impl("add.Tensor", max_device_aten_add, "PrivateUse1")
-
-
+@torch.library.impl("aten::sub.Tensor", "privateuseone")
 def max_device_aten_sub(input, other, alpha=1):
     return execute_with_max_graph(aten.sub, (input, other, alpha), {})
 
 
-aten_library.impl("sub.Tensor", max_device_aten_sub, "PrivateUse1")
+@torch.library.impl("aten::mul.Tensor", "privateuseone")
+def max_device_aten_mul(input, other):
+    return execute_with_max_graph(aten.mul, (input, other), {})
 
 
 def make_hashable(obj):
