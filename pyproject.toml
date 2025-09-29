@@ -46,7 +46,7 @@ max-core = [
 mojo-compiler = [
     { index = "modular-nightly" },
 ]
-torch = { git = "https://github.com/qihqi/pytorch", branch = "privateuseone" }
+torch = { git = "https://github.com/qihqi/pytorch", rev = "a5bd816b24e49ea2b4c367376bc4c96028bc718b" }
 
 [[tool.uv.index]]
 name = "modular-nightly"

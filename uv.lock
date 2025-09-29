@@ -1503,8 +1503,8 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.10.0a0+gita7e0b2e"
-source = { git = "https://github.com/qihqi/pytorch?branch=privateuseone#a7e0b2e73e3dbc80c54bb1397efe05cfed4a4b50" }
+version = "2.10.0a0+gita5bd816"
+source = { git = "https://github.com/qihqi/pytorch?rev=a5bd816b24e49ea2b4c367376bc4c96028bc718b#a5bd816b24e49ea2b4c367376bc4c96028bc718b" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
@@ -1557,7 +1557,7 @@ requires-dist = [
     { name = "beartype", specifier = ">=0.17.0" },
     { name = "max", index = "https://dl.modular.com/public/nightly/python/simple/" },
     { name = "tabulate" },
-    { name = "torch", git = "https://github.com/qihqi/pytorch?branch=privateuseone" },
+    { name = "torch", git = "https://github.com/qihqi/pytorch?rev=a5bd816b24e49ea2b4c367376bc4c96028bc718b" },
 ]
 
 [package.metadata.requires-dev]
@@ -1582,7 +1582,7 @@ dev = [
     { name = "ruff", specifier = ">=0.12.7" },
     { name = "setuptools", specifier = ">=80.9.0" },
     { name = "tiktoken", specifier = ">=0.11.0" },
-    { name = "torch", git = "https://github.com/qihqi/pytorch?branch=privateuseone" },
+    { name = "torch", git = "https://github.com/qihqi/pytorch?rev=a5bd816b24e49ea2b4c367376bc4c96028bc718b" },
     { name = "transformers", specifier = ">=4.56.2" },
 ]
 
