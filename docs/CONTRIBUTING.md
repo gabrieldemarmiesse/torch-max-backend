@@ -41,26 +41,6 @@ uv run pytest tests/test_compiler.py
 
 ## Development Workflow
 
-### Project Structure
-
-```
-torch-max-backend/
-├── torch_max_backend/          # Main package
-│   ├── __init__.py             # Package exports
-│   ├── compiler.py             # Core compiler implementation
-│   ├── aten_functions.py       # PyTorch ATen operation implementations
-│   ├── max_device.py           # Device management
-│   ├── flags.py                # Environment variable handling
-│   └── utils.py                # Utility functions
-├── tests/                      # Test suite
-│   ├── test_compiler.py        # Basic compilation tests
-│   ├── test_aten_functions.py  # ATen function tests
-│   └── conftest.py             # Pytest fixtures
-├── demo_scripts/               # Example implementations
-├── docs/                       # Documentation
-└── pyproject.toml              # Project configuration
-```
-
 ### Code Quality Standards
 
 We maintain high code quality using several tools:
