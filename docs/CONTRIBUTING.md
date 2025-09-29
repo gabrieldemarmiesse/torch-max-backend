@@ -161,19 +161,6 @@ TORCH_MAX_BACKEND_PROFILE=1 uv run python your_script.py
 - `tensor_shapes`: Common tensor shapes for testing
 - `devices`: Available devices from MAX accelerator detection
 
-### Running Specific Tests
-
-```bash
-# Test specific operation
-uv run pytest tests/test_aten_functions.py::test_aten_amin_multiple_dims -v
-
-# Test on specific device
-uv run pytest tests/test_aten_functions.py -k "cuda" -v
-
-# Test with forked processes (isolation)
-uv run pytest tests/test_aten_functions.py --forked
-```
-
 ## Keeping Your Fork Updated
 
 To stay synchronized with the upstream repository:
