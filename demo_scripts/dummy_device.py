@@ -1,9 +1,7 @@
 import numpy as np
-
 import torch
 import torch._C
 from torch.utils.backend_registration import _setup_privateuseone_for_python_backend
-
 
 _setup_privateuseone_for_python_backend("npy")
 
