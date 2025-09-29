@@ -19,22 +19,7 @@ git clone git@github.com:youraccount/torch-max-backend.git
 cd torch-max-backend/
 ```
 
-### 2. Set Up Development Environment
-
-Create and activate a virtual environment:
-
-```bash
-# Create virtual environment with uv
-uv venv
-
-# Activate virtual environment
-source .venv/bin/activate
-
-# Install development dependencies
-uv pip install -e .[dev]
-```
-
-### 3. Install Pre-commit Hooks
+### 2. Install Pre-commit Hooks
 
 We use pre-commit hooks to ensure code quality:
 
@@ -42,7 +27,7 @@ We use pre-commit hooks to ensure code quality:
 uvx pre-commit install
 ```
 
-### 4. Verify Setup
+### 3. Verify Setup
 
 Run the test suite to ensure everything is working:
 
