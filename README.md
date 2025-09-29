@@ -157,28 +157,5 @@ You can get various information with the following environement variables:
 
 ## Contributing
 
-We welcome contributions! Please see our detailed [Contributing Guide](docs/CONTRIBUTING.md) for complete development setup, coding standards, and submission guidelines.
+We welcome contributions! Please see our detailed [Contributing Guide](docs/CONTRIBUTING.md).
 
-### Quick Start for Contributors
-
-1. Fork and clone the repository
-2. Set up development environment:
-
-```bash
-cd torch-max-backend/
-uv venv
-source .venv/bin/activate
-uv pip install -e .[dev]
-```
-
-3. Run tests and checks:
-
-```bash
-# Run all tests
-uv run pytest -n 15
-
-# Run code quality checks
-uvx pre-commit run --all-files
-```
-
-For detailed instructions on adding new operations, debugging, and development workflow, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
