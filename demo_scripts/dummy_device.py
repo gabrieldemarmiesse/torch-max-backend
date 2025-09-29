@@ -2,10 +2,10 @@ import numpy as np
 
 import torch
 import torch._C
-from torch.utils.backend_registration import setup_privateuseone_for_python_backend
+from torch.utils.backend_registration import _setup_privateuseone_for_python_backend
 
 
-setup_privateuseone_for_python_backend("npy")
+_setup_privateuseone_for_python_backend("npy")
 
 aten = torch.ops.aten
 

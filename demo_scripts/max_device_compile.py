@@ -17,13 +17,6 @@ def allocate_outputs_grayscale(pic: torch.Tensor) -> torch.Tensor:
     return pic.new_empty(pic.shape[:-1], dtype=torch.float32)
 
 
-# my_torch_grayscale = make_torch_op_from_mojo(
-#    Path(__file__).parent / "dummy_mojo_kernels",
-#    "grayscale",
-#    allocate_outputs_grayscale,
-# )
-
-
 def simple_graph(img: torch.Tensor) -> torch.Tensor:
     img1 = img - 1
     # img = my_torch_grayscale(img)

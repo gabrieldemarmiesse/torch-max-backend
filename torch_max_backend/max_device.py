@@ -7,7 +7,7 @@ from collections.abc import Callable
 from torch_max_backend import get_accelerators, MAPPING_TORCH_ATEN_TO_MAX
 import numpy as np
 from torch_max_backend import torch_max_device_module
-from torch.utils.backend_registration import setup_privateuseone_for_python_backend
+from torch.utils.backend_registration import _setup_privateuseone_for_python_backend
 
 aten_library = torch.library.Library("aten", "FRAGMENT")
 
@@ -384,5 +384,5 @@ def register_max_devices():
         # Already registered
         return
     print("registering max_device")
-    setup_privateuseone_for_python_backend("max_device")
+    _setup_privateuseone_for_python_backend("max_device")
     _registered = True
