@@ -49,19 +49,6 @@ We maintain high code quality using several tools:
 - **Beartype**: Runtime type checking
 - **Pre-commit**: Automated code quality checks
 
-### Code Formatting and Linting
-
-```bash
-# Run linter
-uv run ruff check .
-
-# Format code
-uv run ruff format .
-
-# Run all pre-commit checks
-uvx pre-commit run --all-files
-```
-
 ## Adding Support for New Operations
 
 We use **test-driven development** to add support for new PyTorch operations. Follow these steps:
