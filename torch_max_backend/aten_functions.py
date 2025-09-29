@@ -1077,6 +1077,7 @@ def aten_ceil(input: TensorValue) -> TensorValue:
     if input.type.dtype.is_integral():
         return input
     else:
+        # TODO: Make a Mojo custom op that does this in one single step
         return -max_ops.floor(-input)
 
 
