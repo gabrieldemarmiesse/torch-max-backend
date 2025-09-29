@@ -1,13 +1,15 @@
-from pathlib import Path
-import torch
-from torch_max_backend import max_backend, make_torch_op_from_mojo
-import os
-import requests
 import io
-import numpy as np
-from PIL import Image
+import os
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import numpy as np
+import requests
+import torch
+from PIL import Image
 from torch._dynamo import mark_dynamic
+
+from torch_max_backend import make_torch_op_from_mojo, max_backend
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 

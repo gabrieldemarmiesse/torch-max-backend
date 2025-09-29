@@ -1,10 +1,12 @@
-import torch
-from torchvision.models import densenet121
-from torchvision import transforms
-from PIL import Image
-import requests
-from torch_max_backend import max_backend, get_accelerators
 import os
+
+import requests
+import torch
+from PIL import Image
+from torchvision import transforms
+from torchvision.models import densenet121
+
+from torch_max_backend import get_accelerators, max_backend
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 

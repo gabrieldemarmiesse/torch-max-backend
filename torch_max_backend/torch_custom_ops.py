@@ -1,11 +1,13 @@
+from collections.abc import Callable
+from pathlib import Path
+
+import max.graph.ops as max_ops
 import torch
+from max.graph import TensorType
+from max.torch import CustomOpLibrary
+
 import torch_max_backend
 import torch_max_backend.compiler
-from max.torch import CustomOpLibrary
-from pathlib import Path
-from max.graph import TensorType
-import max.graph.ops as max_ops
-from collections.abc import Callable
 
 
 def make_torch_op_from_mojo(

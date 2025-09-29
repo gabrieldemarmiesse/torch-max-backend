@@ -1,13 +1,18 @@
-import torch
-from max.graph import Graph, TensorType
-from max import engine
-import max.driver
-from torch.ops import aten
 from collections.abc import Callable
-from torch_max_backend import get_accelerators, MAPPING_TORCH_ATEN_TO_MAX
+
+import max.driver
 import numpy as np
-from torch_max_backend import torch_max_device_module
+import torch
+from max import engine
+from max.graph import Graph, TensorType
+from torch.ops import aten
 from torch.utils.backend_registration import _setup_privateuseone_for_python_backend
+
+from torch_max_backend import (
+    MAPPING_TORCH_ATEN_TO_MAX,
+    get_accelerators,
+    torch_max_device_module,
+)
 
 aten_library = torch.library.Library("aten", "FRAGMENT")
 

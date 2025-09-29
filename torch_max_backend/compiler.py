@@ -1,27 +1,28 @@
-import torch
-from max.dtype import DType
-from max.graph import Graph
+import time
+import traceback
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import max.driver
 import max.graph.value
-from max import engine
-from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
-from torch._dynamo.backends.common import aot_autograd
+import torch
 from functorch.compile import make_boxed_func
+from max import engine, mlir
+from max.dtype import DType
+from max.graph import Graph, KernelLibrary
+from torch._dynamo.backends.common import aot_autograd
+
+from torch_max_backend import debug
 from torch_max_backend.aten_functions import (
     DECOMPOSITION_TABLE,
     torch_device_to_max_device,
 )
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
-import time
-import traceback
-from typing import Any
+from torch_max_backend.utils import get_error_message, get_fully_qualified_name
+
+from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
 from .utils import get_accelerators
-from pathlib import Path
-from max.graph import KernelLibrary
-from max import mlir
-from dataclasses import dataclass
-from torch_max_backend import debug
-from torch_max_backend.utils import get_fully_qualified_name, get_error_message
-import max.driver
 
 
 class MaxCompilerError(Exception):

@@ -1,13 +1,14 @@
 import json
 import os
 from pathlib import Path
-from safetensors.torch import load_file
-from huggingface_hub import hf_hub_download, snapshot_download
 
 import torch
 import torch.nn as nn
-from torch_max_backend import max_backend
+from huggingface_hub import hf_hub_download, snapshot_download
+from safetensors.torch import load_file
 from torch._dynamo import mark_dynamic
+
+from torch_max_backend import max_backend
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"

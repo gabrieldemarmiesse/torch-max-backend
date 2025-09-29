@@ -1,11 +1,14 @@
 """Unit tests for basic max_device functionality"""
 
-import torch
 import pytest
-from torch_max_backend import register_max_devices, max_backend
-from torch_max_backend.max_device import MaxTensor
-from torch_max_backend.max_device import get_ordered_accelerators
-from torch_max_backend.max_device import find_equivalent_max_device
+import torch
+
+from torch_max_backend import max_backend, register_max_devices
+from torch_max_backend.max_device import (
+    MaxTensor,
+    find_equivalent_max_device,
+    get_ordered_accelerators,
+)
 
 pytestmark = pytest.mark.xdist_group(name="group1")
 

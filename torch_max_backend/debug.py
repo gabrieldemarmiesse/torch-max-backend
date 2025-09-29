@@ -7,14 +7,16 @@ and compare each intermediate result.
 This is not public yet but still useful for debugging.
 """
 
+from pathlib import Path
+from typing import Any
+
+import max.graph.ops as max_ops
 import torch
 from max import engine
-from torch_max_backend.flags import debug_graph
-from typing import Any
-from pathlib import Path
-from max.graph import TensorValue
-import max.graph.ops as max_ops
 from max.driver.tensor import load_max_tensor
+from max.graph import TensorValue
+
+from torch_max_backend.flags import debug_graph
 from torch_max_backend.utils import get_error_message
 
 # TODO: directory creation and cleanup

@@ -1,9 +1,11 @@
+import math
+
+import pytest
 import torch
 import torch.nn.functional as F
-import pytest
-import math
-from torch_max_backend.testing import check_functions_are_equivalent
 from torch._dynamo import mark_dynamic
+
+from torch_max_backend.testing import check_functions_are_equivalent
 
 
 def test_basic_addition(device: str):

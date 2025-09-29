@@ -156,22 +156,6 @@ You can get various information with the following environement variables:
 * `TORCH_MAX_BACKEND_BEARTYPE=0` to disable type checking. By default, everything in the package is type-checked at runtime. But it may lead to errors when actually the code is valid (and the type hint is wrong). You can try disabling the type-checking then to see if the bug goes away. Feel free to open a bug report in any case! Type errors should never happen and are a sign of an internal bug.
 
 ## Contributing
-### Testing
 
-```bash
-# Run all tests (the first time is slow, chaching kicks in after)
-uv run pytest -v -n 2 --forked
+We welcome contributions! Please see our detailed [Contributing Guide](docs/CONTRIBUTING.md).
 
-# Lint and format
-uvx pre-commit run --all-files
-# Or install the pre-commit hook
-uvx pre-commit install
-```
-
-You can try to run all the pretrained models to make sure we're compatible with
-
-```bash
-./pretrained_models/run_all.sh
-# or for example
-uv run pretrained_model/gpt2.sh
-```

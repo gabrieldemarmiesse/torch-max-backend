@@ -5,24 +5,25 @@ The only ressources I could find on the subject are:
 - https://docs.pytorch.org/docs/stable/torch.compiler_ir.html
 """
 
-import operator
-from max.torch.torch import max_device_ref
-import os
-import max.graph.ops as max_ops
-from max.dtype import DType
-from torch.ops import aten
-import torch
-from max.graph.type import DeviceRef
-import max.graph.type as max_type
-from max.graph import StaticDim, Dim, TensorValue
-import numpy as np
-import math
-from torch._decomp import core_aten_decompositions
-from torch._ops import OpOverloadPacket, OpOverload
-from typing import Literal
-from torch_max_backend.flags import verbose_enabled
-from max.graph import TensorType
 import itertools
+import math
+import operator
+import os
+from typing import Literal
+
+import max.graph.ops as max_ops
+import max.graph.type as max_type
+import numpy as np
+import torch
+from max.dtype import DType
+from max.graph import Dim, StaticDim, TensorType, TensorValue
+from max.graph.type import DeviceRef
+from max.torch.torch import max_device_ref
+from torch._decomp import core_aten_decompositions
+from torch._ops import OpOverload, OpOverloadPacket
+from torch.ops import aten
+
+from torch_max_backend.flags import verbose_enabled
 
 
 def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
@@ -1065,6 +1066,19 @@ def aten_cat(tensors: list[TensorValue], dim: int = 0) -> TensorValue:
 
 
 # ceil(Tensor self) -> Tensor
+@map_to(aten.ceil)
+def aten_ceil(input: TensorValue) -> TensorValue:
+    """
+    Ceiling of the input tensor, element-wise.
+
+    For floating-point inputs: Implemented as ceil(x) = -floor(-x) since MAX has floor operation available.
+    For integer inputs: Returns it (no mathematical change needed, following PyTorch behavior).
+    """
+    if input.type.dtype.is_integral():
+        return input
+    else:
+        # TODO: Make a Mojo custom op that does this in one single step
+        return -max_ops.floor(-input)
 
 
 # clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor
