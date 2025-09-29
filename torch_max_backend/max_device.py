@@ -134,6 +134,17 @@ def max_device_aten_mul(input, other):
     return execute_with_max_graph(aten.mul, (input, other), {})
 
 
+@torch.library.impl("aten::sum.dim_IntList", "privateuseone")
+def max_device_aten_sum(
+    input,
+    dim: list[int] | int | None = None,
+    keepdim: bool = False,
+    *,
+    dtype: torch.dtype | None = None,
+):
+    return execute_with_max_graph(aten.sum, (input, dim, keepdim), dict(dtype=dtype))
+
+
 def make_hashable(obj):
     if isinstance(obj, dict):
         return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
