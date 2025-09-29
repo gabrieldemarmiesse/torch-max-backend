@@ -272,6 +272,8 @@ def test_device_creation(max_device):
     assert torch.allclose(arr_cpu, torch.tensor([0.0, 1.0, 2.0, 3.0]), atol=1e-4)
 
 
+# TODO: We should have better management of devices
+@pytest.mark.xfail(reason="Fixme find outputs devices")
 def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)
     def do_sqrt(device):

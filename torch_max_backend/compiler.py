@@ -353,6 +353,8 @@ class BaseMaxCompiler:
         # are those max tensors?
 
         outputs = self.model.execute(*input_with_only_tensors)
+        # TODO: we should be able to do much better here
+        # notably if there are multiple inputs and outputs and on different devices
         if max_device_used:
             from torch_max_backend.max_device import make_max_tensor_from_max
 
