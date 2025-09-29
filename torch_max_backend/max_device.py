@@ -389,6 +389,6 @@ def register_max_devices():
     if _registered:
         # Already registered
         return
-    print("registering max_device")
+
     _setup_privateuseone_for_python_backend("max_device")
     _registered = True

@@ -380,7 +380,6 @@ class BaseMaxCompiler:
                 microseconds=(end_inference_time - start_inference_time) / 1000
             )
             print(f"Running the Max graph in {inference_duration}")
-        print("result:", result)
         return result
 
 
