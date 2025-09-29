@@ -4,9 +4,7 @@ Thank you for your interest in contributing to the Torch MAX Backend project! Th
 
 ## Prerequisites
 
-- **Python**: >=3.11 required
 - **uv**: Package manager for dependency management
-- **MAX SDK**: Modular's MAX framework
 - **Git**: For version control
 
 ## Getting Started
