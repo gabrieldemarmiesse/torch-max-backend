@@ -240,7 +240,7 @@ def aten__native_batch_norm_legit_no_training(
     running_var: TensorValue,
     momentum: float,
     eps: float,
-) -> tuple[TensorValue, TensorValue, TensorValue]:
+) -> tuple[TensorValue, NotImplementedError, NotImplementedError]:
     """
     Implements batch normalization for inference (no training).
 
@@ -284,12 +284,19 @@ def aten__native_batch_norm_legit_no_training(
         bias_reshaped = max_ops.reshape(bias, broadcast_shape)
         normalized = normalized + bias_reshaped
 
-    # Create empty tensors for save_mean and save_var (inference mode)
-    # These should be 0-dimensional tensors
-    zero_scalar = max_ops.constant(np.array([]), dtype=input.dtype, device=input.device)
-    empty_tensor = max_ops.reshape(zero_scalar, [0])
-
-    return (normalized, empty_tensor, empty_tensor)
+    # It's not sure we'll ever support returning those, notably because of
+    # https://github.com/pytorch/pytorch/issues/85960
+    return (
+        normalized,
+        NotImplementedError(
+            "We don't support returning the saved mean "
+            "in aten._native_batch_norm_legit_no_training yet"
+        ),
+        NotImplementedError(
+            "We don't support returning the saved variance "
+            "in aten._native_batch_norm_legit_no_training yet"
+        ),
+    )
 
 
 # _pdist_forward(Tensor self, float p=2) -> Tensor

@@ -74,9 +74,13 @@ def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dty
         pytest.xfail("_native_batch_norm_legit_no_training not working on gpus yet")
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
-        return aten._native_batch_norm_legit_no_training.default(
+        outputs = aten._native_batch_norm_legit_no_training.default(
             input_tensor, weight, bias, running_mean, running_var, 0.1, 1e-5
         )
+        # We don't support returning the saved mean and variance yet.
+        # It's not sure we'll ever support returning those, notably because of
+        # https://github.com/pytorch/pytorch/issues/85960
+        return outputs[0]
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
