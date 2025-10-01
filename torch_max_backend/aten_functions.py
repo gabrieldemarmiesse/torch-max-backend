@@ -564,6 +564,18 @@ def aten_add(input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1)
     return input + other
 
 
+# addcmul(Tensor self, Tensor tensor1, Tensor tensor2, *, Scalar value=1) -> Tensor
+@map_to(aten.addcmul)
+def aten_addcmul(
+    input: TensorValue, tensor1: TensorValue, tensor2: TensorValue, *, value: Scalar = 1
+) -> TensorValue:
+    # addcmul computes: input + value * tensor1 * tensor2
+    mul_result = aten_mul(tensor1, tensor2)
+    if value != 1:
+        mul_result = aten_mul(mul_result, value)
+    return aten_add(input, mul_result)
+
+
 # addmm(Tensor self, Tensor mat1, Tensor mat2, *, Scalar beta=1, Scalar alpha=1) -> Tensor
 @map_to(aten.addmm)
 def aten_addmm(
@@ -2743,6 +2755,53 @@ def aten__foreach_div_list(
 @map_to(aten._foreach_sqrt)
 def aten__foreach_sqrt(self: list[TensorValue]) -> list[TensorValue]:
     return [aten_sqrt(x) for x in self]
+
+
+# _foreach_addcmul.Scalar(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar value=1) -> Tensor[]
+@map_to(aten._foreach_addcmul.Scalar)
+def aten__foreach_addcmul_scalar(
+    self: list[TensorValue],
+    tensor1: list[TensorValue],
+    tensor2: list[TensorValue],
+    value: Scalar = 1,
+) -> list[TensorValue]:
+    if len(self) != len(tensor1) or len(self) != len(tensor2):
+        raise ValueError(
+            f"Expected len(self) == len(tensor1) == len(tensor2), but got {len(self)}, {len(tensor1)}, {len(tensor2)}"
+        )
+    return [
+        aten_addcmul(s, t1, t2, value=value)
+        for s, t1, t2 in zip(self, tensor1, tensor2)
+    ]
+
+
+# _foreach_addcmul.ScalarList(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_addcmul.ScalarList)
+def aten__foreach_addcmul_scalarlist(
+    self: list[TensorValue],
+    tensor1: list[TensorValue],
+    tensor2: list[TensorValue],
+    scalars: list[Scalar],
+) -> list[TensorValue]:
+    if (
+        len(self) != len(tensor1)
+        or len(self) != len(tensor2)
+        or len(self) != len(scalars)
+    ):
+        raise ValueError(
+            f"Expected len(self) == len(tensor1) == len(tensor2) == len(scalars), but got {len(self)}, {len(tensor1)}, {len(tensor2)}, {len(scalars)}"
+        )
+    return [
+        aten_addcmul(s, t1, t2, value=val)
+        for s, t1, t2, val in zip(self, tensor1, tensor2, scalars)
+    ]
+
+
+# NOTE: _foreach_addcmul.Tensor is NOT supported
+# The .Tensor variant requires a 1-D CPU tensor with concrete values to extract scalars,
+# which is incompatible with torch.compile's meta tensor tracing.
+# Use .Scalar or .ScalarList variants instead.
+# See: https://github.com/pytorch/pytorch/issues/139795
 
 
 # masked_fill.Scalar(Tensor self, Tensor mask, Scalar value) -> Tensor

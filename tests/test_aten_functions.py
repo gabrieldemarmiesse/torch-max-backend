@@ -857,6 +857,63 @@ def test_foreach_sqrt(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x, y, z])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_addcmul_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_addcmul.Scalar - adds element-wise product scaled by scalar"""
+
+    def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
+        self_tensors = [x1, y1, z1]
+        tensor1_list = [x2, y2, z2]
+        tensor2_list = [x3, y3, z3]
+        return aten._foreach_addcmul.Scalar(
+            self_tensors, tensor1_list, tensor2_list, 2.0
+        )
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+    x3 = torch.randn(3, 4, dtype=dtype, device=device)
+    y3 = torch.randn(2, 5, dtype=dtype, device=device)
+    z3 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_addcmul_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_addcmul.ScalarList - adds element-wise products scaled by corresponding scalars"""
+
+    def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
+        self_tensors = [x1, y1, z1]
+        tensor1_list = [x2, y2, z2]
+        tensor2_list = [x3, y3, z3]
+        scalars = [1.0, 2.0, 0.5]
+        return aten._foreach_addcmul.ScalarList(
+            self_tensors, tensor1_list, tensor2_list, scalars
+        )
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+    x3 = torch.randn(3, 4, dtype=dtype, device=device)
+    y3 = torch.randn(2, 5, dtype=dtype, device=device)
+    z3 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+
+
+# NOTE: _foreach_addcmul.Tensor is NOT tested
+# The .Tensor variant requires a 1-D CPU tensor with concrete values to extract scalars,
+# which is incompatible with torch.compile's meta tensor tracing.
+# See: https://github.com/pytorch/pytorch/issues/139795
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_ceil_basic(device: str, dtype: torch.dtype):
     """Test aten.ceil basic functionality with floating point numbers"""
