@@ -2699,6 +2699,46 @@ def aten__foreach_pow_scalarandtensor(
     return [aten_pow(self, exp) for exp in exponent]
 
 
+# _foreach_div.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
+@map_to(aten._foreach_div.Scalar)
+def aten__foreach_div_scalar(
+    self: list[TensorValue], other: Scalar
+) -> list[TensorValue]:
+    return [aten_div(x, other) for x in self]
+
+
+# _foreach_div.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_div.ScalarList)
+def aten__foreach_div_scalar_list(
+    self: list[TensorValue], other: list[Scalar]
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
+        )
+    return [aten_div(tensor, scalar) for tensor, scalar in zip(self, other)]
+
+
+# _foreach_div.Tensor(Tensor[] self, Tensor other) -> Tensor[]
+@map_to(aten._foreach_div.Tensor)
+def aten__foreach_div_tensor(
+    self: list[TensorValue], other: TensorValue
+) -> list[TensorValue]:
+    return [aten_div(x, other) for x in self]
+
+
+# _foreach_div.List(Tensor[] self, Tensor[] other) -> Tensor[]
+@map_to(aten._foreach_div.List)
+def aten__foreach_div_list(
+    self: list[TensorValue], other: list[TensorValue]
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
+        )
+    return [aten_div(x, y) for x, y in zip(self, other)]
+
+
 # masked_fill.Scalar(Tensor self, Tensor mask, Scalar value) -> Tensor
 # masked_fill.Tensor(Tensor self, Tensor mask, Tensor value) -> Tensor
 @map_to(aten.masked_fill)

@@ -771,6 +771,72 @@ def test_foreach_pow_scalarandtensor(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x, y, z])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_div_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_div.Scalar - divides each tensor in list by scalar"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_div.Scalar(tensors, 2.5)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_div_list(device: str, dtype: torch.dtype):
+    """Test _foreach_div.List - divides corresponding tensors"""
+
+    def fn(x1, y1, z1, x2, y2, z2):
+        self_tensors = [x1, y1, z1]
+        other_tensors = [x2, y2, z2]
+        return aten._foreach_div.List(self_tensors, other_tensors)
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device) + 0.1
+    y2 = torch.randn(2, 5, dtype=dtype, device=device) + 0.1
+    z2 = torch.randn(4, dtype=dtype, device=device) + 0.1
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_div_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_div.ScalarList - divides each tensor by corresponding scalar"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        scalars = [2.0, 3.0, 1.5]
+        return aten._foreach_div.ScalarList(tensors, scalars)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_div_tensor(device: str, dtype: torch.dtype):
+    """Test _foreach_div.Tensor - broadcasts single 0-d tensor to all tensors in list"""
+
+    def fn(x, y, z, other):
+        tensors = [x, y, z]
+        return aten._foreach_div.Tensor(tensors, other)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+    other = torch.tensor(2.5, dtype=dtype, device=device)  # 0-d tensor
+
+    check_functions_are_equivalent(fn, device, [x, y, z, other])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_ceil_basic(device: str, dtype: torch.dtype):
     """Test aten.ceil basic functionality with floating point numbers"""
