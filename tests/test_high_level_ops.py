@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch._dynamo import mark_dynamic
 
+from torch_max_backend import max_backend
 from torch_max_backend.testing import check_functions_are_equivalent
 
 
@@ -4669,6 +4670,26 @@ def test_movedim_2d_tensor(device: str):
 
     x = torch.randn(3, 4)
     check_functions_are_equivalent(fn, device, [x])
+
+
+def test_optimizer():
+    model = torch.nn.Sequential(
+        torch.nn.Linear(8, 8, False, device="cuda"),
+        torch.nn.Linear(8, 8, False, device="cuda"),
+    )
+    input = torch.rand(8, device="cuda")
+    output = model(input)
+    output.sum().backward()
+
+    opt = torch.optim.Adam(model.parameters(), lr=0.01)
+
+    @torch.compile(backend=max_backend)
+    def fn():
+        opt.step()
+
+    fn()
+
+    assert False
 
 
 # TODO: support list as input too
