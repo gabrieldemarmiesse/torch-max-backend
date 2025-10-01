@@ -62,10 +62,10 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "mblack==25.7.0.dev2025092305",
-    "max==25.7.0.dev2025092305",
-    "max-core==25.7.0.dev2025092305",
-    "mojo-compiler==0.25.7.0.dev2025092305",
+    "mblack==25.7.0.dev2025100101",
+    "max==25.7.0.dev2025100101",
+    "max-core==25.7.0.dev2025100101",
+    "mojo-compiler==0.25.7.0.dev2025100101",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",
