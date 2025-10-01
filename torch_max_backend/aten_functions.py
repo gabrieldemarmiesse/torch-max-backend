@@ -1433,7 +1433,7 @@ def aten_fill_scalar(input: TensorValue, value: Scalar) -> TensorValue:
     target_shape = input.shape
 
     # Create a scalar constant with the fill value
-    scalar = max_ops.constant(np.array(value), dtype=target_dtype, device=target_device)
+    scalar = max_ops.constant(value, dtype=target_dtype, device=target_device)
 
     # Broadcast the scalar to the target shape
     return max_ops.broadcast_to(scalar, target_shape)
