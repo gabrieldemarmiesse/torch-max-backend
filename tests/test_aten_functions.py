@@ -706,6 +706,71 @@ def test_foreach_mul_tensor(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x, y, z, other])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_pow_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_pow.Scalar - raises each tensor in list to scalar power"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_pow.Scalar(tensors, 2.0)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device).abs() + 0.1
+    y = torch.randn(2, 5, dtype=dtype, device=device).abs() + 0.1
+    z = torch.randn(4, dtype=dtype, device=device).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_pow_list(device: str, dtype: torch.dtype):
+    """Test _foreach_pow.List - raises corresponding tensors to powers"""
+
+    def fn(x1, y1, z1, x2, y2, z2):
+        self_tensors = [x1, y1, z1]
+        exponent_tensors = [x2, y2, z2]
+        return aten._foreach_pow.List(self_tensors, exponent_tensors)
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device).abs() + 0.1
+    y1 = torch.randn(2, 5, dtype=dtype, device=device).abs() + 0.1
+    z1 = torch.randn(4, dtype=dtype, device=device).abs() + 0.1
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_pow_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_pow.ScalarList - raises each tensor to corresponding scalar power"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        exponents = [2.0, 3.0, 0.5]
+        return aten._foreach_pow.ScalarList(tensors, exponents)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device).abs() + 0.1
+    y = torch.randn(2, 5, dtype=dtype, device=device).abs() + 0.1
+    z = torch.randn(4, dtype=dtype, device=device).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_pow_scalarandtensor(device: str, dtype: torch.dtype):
+    """Test _foreach_pow.ScalarAndTensor - raises scalar to tensor powers"""
+
+    def fn(x, y, z):
+        exponent_tensors = [x, y, z]
+        return aten._foreach_pow.ScalarAndTensor(2.0, exponent_tensors)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_ceil_basic(device: str, dtype: torch.dtype):
     """Test aten.ceil basic functionality with floating point numbers"""

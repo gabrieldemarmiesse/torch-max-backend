@@ -2659,6 +2659,46 @@ def aten__foreach_mul_list(
     return [aten_mul(x, y) for x, y in zip(self, other)]
 
 
+# _foreach_pow.Scalar(Tensor[] self, Scalar exponent) -> Tensor[]
+@map_to(aten._foreach_pow.Scalar)
+def aten__foreach_pow_scalar(
+    self: list[TensorValue], exponent: Scalar
+) -> list[TensorValue]:
+    return [aten_pow(x, exponent) for x in self]
+
+
+# _foreach_pow.ScalarList(Tensor[] self, Scalar[] exponent) -> Tensor[]
+@map_to(aten._foreach_pow.ScalarList)
+def aten__foreach_pow_scalar_list(
+    self: list[TensorValue], exponent: list[Scalar]
+) -> list[TensorValue]:
+    if len(self) != len(exponent):
+        raise ValueError(
+            f"Expected len(self) == len(exponent), but got {len(self)} and {len(exponent)}"
+        )
+    return [aten_pow(tensor, exp) for tensor, exp in zip(self, exponent)]
+
+
+# _foreach_pow.List(Tensor[] self, Tensor[] exponent) -> Tensor[]
+@map_to(aten._foreach_pow.List)
+def aten__foreach_pow_list(
+    self: list[TensorValue], exponent: list[TensorValue]
+) -> list[TensorValue]:
+    if len(self) != len(exponent):
+        raise ValueError(
+            f"Expected len(self) == len(exponent), but got {len(self)} and {len(exponent)}"
+        )
+    return [aten_pow(x, exp) for x, exp in zip(self, exponent)]
+
+
+# _foreach_pow.ScalarAndTensor(Scalar self, Tensor[] exponent) -> Tensor[]
+@map_to(aten._foreach_pow.ScalarAndTensor)
+def aten__foreach_pow_scalarandtensor(
+    self: Scalar, exponent: list[TensorValue]
+) -> list[TensorValue]:
+    return [aten_pow(self, exp) for exp in exponent]
+
+
 # masked_fill.Scalar(Tensor self, Tensor mask, Scalar value) -> Tensor
 # masked_fill.Tensor(Tensor self, Tensor mask, Tensor value) -> Tensor
 @map_to(aten.masked_fill)
