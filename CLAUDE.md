@@ -174,8 +174,8 @@ We use test-driven dev
 6) Just below it, write the aten op implementation with the max functions you just found.
 7) Re-run the unit tests and make sure they're passing. Do not hesistate to use pytest.mark.parametrize 
    to test many input data types.
-8) When you're done, make sure the whole test suite is passing with `uv run pytest -n 15` 
-   and the linter with `uvx pre-commit run --all-files`.
+8) When you're done, make sure to run the linter with `uvx pre-commit run --all-files`. Do not run the whole test suite as it takes too long.
+
 
 ## To find the correct type hints for a function
 It may be hard to find the correct type hints for a function. What you should do in this case is:
