@@ -2539,26 +2539,47 @@ def torch_transpose_equivalent(tensor, dim0, dim1):
     return max_ops.permute(tensor, perm)
 
 
-# TODO: find signature
-@map_to(aten._foreach_add)
-def aten__foreach_add(tensors, others, alpha=1.0):
-    """
-    Equivalent to torch._foreach_add.List - element-wise addition of two lists of tensors.
-    Computes: tensors[i] + alpha * others[i] for each i
-    """
-    if len(tensors) != len(others):
+# _foreach_add.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
+@map_to(aten._foreach_add.Scalar)
+def aten__foreach_add_scalar(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+    alpha: Scalar = 1,
+) -> list[TensorValue]:
+    return [aten_add(x, other, alpha=alpha) for x in self]
+
+
+# _foreach_add.List(Tensor[] self, Tensor[] other, *, Scalar alpha=1) -> Tensor[]
+@map_to(aten._foreach_add.List)
+def aten__foreach_add_list(
+    self: list[TensorValue], other: list[TensorValue], alpha: Scalar = 1
+) -> list[TensorValue]:
+    if len(self) != len(other):
         raise ValueError(
-            f"Expected len(tensors) == len(others), but got {len(tensors)} and {len(others)}"
+            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
         )
+    return [aten_add(x, y, alpha=alpha) for x, y in zip(self, other)]
 
-    result = []
-    for tensor, other in zip(tensors, others):
-        if alpha == 1.0:
-            result.append(tensor + other)
-        else:
-            result.append(tensor + alpha * other)
 
-    return result
+# _foreach_add.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_add.ScalarList)
+def aten__foreach_add_scalar_list(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
+        )
+    return [aten_add(tensor, scalar) for tensor, scalar in zip(self, other)]
+
+
+# _foreach_add.Tensor(Tensor[] self, Tensor other, *, Scalar alpha=1) -> Tensor[]
+@map_to(aten._foreach_add.Tensor)
+def aten__foreach_add_tensor(
+    self: list[TensorValue], other: TensorValue, alpha: Scalar = 1
+) -> list[TensorValue]:
+    return [aten_add(x, other, alpha=alpha) for x in self]
 
 
 # masked_fill.Scalar(Tensor self, Tensor mask, Scalar value) -> Tensor
