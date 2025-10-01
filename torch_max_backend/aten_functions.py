@@ -2671,6 +2671,12 @@ def aten__foreach_mul_list(
     return [aten_mul(x, y) for x, y in zip(self, other)]
 
 
+# _foreach_neg(Tensor[] self) -> Tensor[]
+@map_to(aten._foreach_neg)
+def aten__foreach_neg(self: list[TensorValue]) -> list[TensorValue]:
+    return [aten_neg(x) for x in self]
+
+
 # _foreach_pow.Scalar(Tensor[] self, Scalar exponent) -> Tensor[]
 @map_to(aten._foreach_pow.Scalar)
 def aten__foreach_pow_scalar(
