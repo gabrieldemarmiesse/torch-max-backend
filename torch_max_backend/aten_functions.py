@@ -1476,7 +1476,7 @@ def aten_full(
     device = torch_device_to_max_device(device)
 
     # Create a scalar constant with the fill value
-    scalar = max_ops.constant(np.array(fill_value), dtype=dtype, device=device)
+    scalar = max_ops.constant(fill_value, dtype=dtype, device=device)
 
     # Broadcast the scalar to the target shape
     return max_ops.broadcast_to(scalar, size)
@@ -1510,9 +1510,7 @@ def aten_full_like(
     target_shape = input.shape
 
     # Create a scalar constant with the fill value
-    scalar = max_ops.constant(
-        np.array(fill_value), dtype=target_dtype, device=target_device
-    )
+    scalar = max_ops.constant(fill_value, dtype=target_dtype, device=target_device)
 
     # Broadcast the scalar to the target shape
     return max_ops.broadcast_to(scalar, target_shape)
@@ -2651,15 +2649,9 @@ def aten__scaled_dot_product_efficient_attention(
     # Use output tensor properties for device and dtype consistency
 
     # Create a zero scalar and broadcast to different shapes
-    zero_scalar = max_ops.constant(
-        np.array(0.0), dtype=output.dtype, device=output.device
-    )
-    zero_int_scalar = max_ops.constant(
-        np.array(0), dtype=DType.int32, device=output.device
-    )
-    zero_int64_scalar = max_ops.constant(
-        np.array(0), dtype=DType.int64, device=output.device
-    )
+    zero_scalar = max_ops.constant(0, dtype=output.dtype, device=output.device)
+    zero_int_scalar = max_ops.constant(0, dtype=DType.int32, device=output.device)
+    zero_int64_scalar = max_ops.constant(0, dtype=DType.int64, device=output.device)
 
     # Create appropriately shaped tensors
     # Convert all dimensions to int for indexing
