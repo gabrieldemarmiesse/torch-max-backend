@@ -559,12 +559,9 @@ def aten_abs(x: TensorValue):
 @map_to(aten.add)
 def aten_add(input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1):
     input, other = type_promotion(input, other)
-
     if alpha != 1:
-        raise NotImplementedError(
-            "The 'alpha' argument is not supported in the aten.add equivalent."
-        )
-    return input + other * alpha
+        other = aten_mul(other, alpha)
+    return input + other
 
 
 # addmm(Tensor self, Tensor mat1, Tensor mat2, *, Scalar beta=1, Scalar alpha=1) -> Tensor
