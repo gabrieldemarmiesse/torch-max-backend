@@ -2284,11 +2284,8 @@ def aten_sub(
     input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1
 ) -> TensorValue:
     input, other = type_promotion(input, other)
-
     if alpha != 1:
-        raise NotImplementedError(
-            "The 'alpha' argument is not supported in the aten.sub equivalent."
-        )
+        other = aten_mul(other, alpha)
     return input - other
 
 
@@ -2583,6 +2580,41 @@ def aten__foreach_add_list(
             f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
         )
     return [aten_add(x, y, alpha=alpha) for x, y in zip(self, other)]
+
+
+# _foreach_sub.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
+@map_to(aten._foreach_sub.Scalar)
+def aten__foreach_sub_scalar(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+    alpha: Scalar = 1,
+) -> list[TensorValue]:
+    return [aten_sub(x, other, alpha=alpha) for x in self]
+
+
+# _foreach_sub.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_sub.ScalarList)
+def aten__foreach_sub_scalar_list(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
+        )
+    return [aten_sub(tensor, scalar) for tensor, scalar in zip(self, other)]
+
+
+# _foreach_sub.List(Tensor[] self, Tensor[] other, *, Scalar alpha=1) -> Tensor[]
+@map_to(aten._foreach_sub.List)
+def aten__foreach_sub_list(
+    self: list[TensorValue], other: list[TensorValue], alpha: Scalar = 1
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
+        )
+    return [aten_sub(x, y, alpha=alpha) for x, y in zip(self, other)]
 
 
 # masked_fill.Scalar(Tensor self, Tensor mask, Scalar value) -> Tensor
