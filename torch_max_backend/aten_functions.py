@@ -2549,18 +2549,6 @@ def aten__foreach_add_scalar(
     return [aten_add(x, other, alpha=alpha) for x in self]
 
 
-# _foreach_add.List(Tensor[] self, Tensor[] other, *, Scalar alpha=1) -> Tensor[]
-@map_to(aten._foreach_add.List)
-def aten__foreach_add_list(
-    self: list[TensorValue], other: list[TensorValue], alpha: Scalar = 1
-) -> list[TensorValue]:
-    if len(self) != len(other):
-        raise ValueError(
-            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
-        )
-    return [aten_add(x, y, alpha=alpha) for x, y in zip(self, other)]
-
-
 # _foreach_add.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
 @map_to(aten._foreach_add.ScalarList)
 def aten__foreach_add_scalar_list(
@@ -2580,6 +2568,18 @@ def aten__foreach_add_tensor(
     self: list[TensorValue], other: TensorValue, alpha: Scalar = 1
 ) -> list[TensorValue]:
     return [aten_add(x, other, alpha=alpha) for x in self]
+
+
+# _foreach_add.List(Tensor[] self, Tensor[] other, *, Scalar alpha=1) -> Tensor[]
+@map_to(aten._foreach_add.List)
+def aten__foreach_add_list(
+    self: list[TensorValue], other: list[TensorValue], alpha: Scalar = 1
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
+        )
+    return [aten_add(x, y, alpha=alpha) for x, y in zip(self, other)]
 
 
 # masked_fill.Scalar(Tensor self, Tensor mask, Scalar value) -> Tensor
