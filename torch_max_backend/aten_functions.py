@@ -2739,6 +2739,12 @@ def aten__foreach_div_list(
     return [aten_div(x, y) for x, y in zip(self, other)]
 
 
+# _foreach_sqrt(Tensor[] self) -> Tensor[]
+@map_to(aten._foreach_sqrt)
+def aten__foreach_sqrt(self: list[TensorValue]) -> list[TensorValue]:
+    return [aten_sqrt(x) for x in self]
+
+
 # masked_fill.Scalar(Tensor self, Tensor mask, Scalar value) -> Tensor
 # masked_fill.Tensor(Tensor self, Tensor mask, Tensor value) -> Tensor
 @map_to(aten.masked_fill)

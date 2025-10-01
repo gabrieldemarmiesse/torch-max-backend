@@ -837,6 +837,26 @@ def test_foreach_div_tensor(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x, y, z, other])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_sqrt(device: str, dtype: torch.dtype):
+    """Test _foreach_sqrt - computes square root of each tensor in list"""
+    # xfail for float64 on CUDA due to current MAX limitation with sqrt intrinsic
+    if device == "cuda" and dtype == torch.float64:
+        pytest.xfail(
+            "float64 sqrt on CUDA currently fails in MAX (llvm.nvvm.sqrt.approx.d intrinsic issue)"
+        )
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_sqrt(tensors)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device).abs() + 0.1
+    y = torch.randn(2, 5, dtype=dtype, device=device).abs() + 0.1
+    z = torch.randn(4, dtype=dtype, device=device).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_ceil_basic(device: str, dtype: torch.dtype):
     """Test aten.ceil basic functionality with floating point numbers"""
