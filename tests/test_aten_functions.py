@@ -70,8 +70,6 @@ def test_scaled_dot_product_flash_attention_with_scale(cuda_device: str, dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dtype):
     """Test basic batch normalization inference with different dtypes"""
-    if device == "cuda":
-        pytest.xfail("_native_batch_norm_legit_no_training not working on gpus yet")
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
         outputs = aten._native_batch_norm_legit_no_training.default(
@@ -102,13 +100,15 @@ def test_native_batch_norm_legit_no_training_different_channels(
     device: str, channels: int
 ):
     """Test batch norm with different numbers of channels"""
-    if device == "cuda":
-        pytest.xfail("_native_batch_norm_legit_no_training not working on gpus yet")
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
-        return aten._native_batch_norm_legit_no_training.default(
+        output = aten._native_batch_norm_legit_no_training.default(
             input_tensor, weight, bias, running_mean, running_var, 0.1, 1e-5
         )
+        # We don't support returning the saved mean and variance yet.
+        # It's not sure we'll ever support returning those, notably because of
+        # https://github.com/pytorch/pytorch/issues/85960
+        return output[0]
 
     # Create test tensors with varying channel dimensions
     batch_size, height, width = 2, 8, 8
@@ -126,13 +126,15 @@ def test_native_batch_norm_legit_no_training_different_channels(
 
 def test_native_batch_norm_legit_no_training_none_weight_bias(device: str):
     """Test batch norm with None weight and bias"""
-    if device == "cuda":
-        pytest.xfail("_native_batch_norm_legit_no_training not working on gpus yet")
 
     def fn(input_tensor, running_mean, running_var):
-        return aten._native_batch_norm_legit_no_training.default(
+        output = aten._native_batch_norm_legit_no_training.default(
             input_tensor, None, None, running_mean, running_var, 0.1, 1e-5
         )
+        # We don't support returning the saved mean and variance yet.
+        # It's not sure we'll ever support returning those, notably because of
+        # https://github.com/pytorch/pytorch/issues/85960
+        return output[0]
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
@@ -149,13 +151,15 @@ def test_native_batch_norm_legit_no_training_none_weight_bias(device: str):
 @pytest.mark.parametrize("eps", [1e-5, 1e-3])
 def test_native_batch_norm_legit_no_training_different_eps(device: str, eps: float):
     """Test batch norm with different epsilon values"""
-    if device == "cuda":
-        pytest.xfail("_native_batch_norm_legit_no_training not working on gpus yet")
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
-        return aten._native_batch_norm_legit_no_training.default(
+        output = aten._native_batch_norm_legit_no_training.default(
             input_tensor, weight, bias, running_mean, running_var, 0.1, eps
         )
+        # We don't support returning the saved mean and variance yet.
+        # It's not sure we'll ever support returning those, notably because of
+        # https://github.com/pytorch/pytorch/issues/85960
+        return output[0]
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
@@ -173,13 +177,15 @@ def test_native_batch_norm_legit_no_training_different_eps(device: str, eps: flo
 
 def test_native_batch_norm_legit_no_training_2d_input(device: str):
     """Test batch norm with 2D input (N, C)"""
-    if device == "cuda":
-        pytest.xfail("_native_batch_norm_legit_no_training not working on gpus yet")
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
-        return aten._native_batch_norm_legit_no_training.default(
+        output = aten._native_batch_norm_legit_no_training.default(
             input_tensor, weight, bias, running_mean, running_var, 0.1, 1e-5
         )
+        # We don't support returning the saved mean and variance yet.
+        # It's not sure we'll ever support returning those, notably because of
+        # https://github.com/pytorch/pytorch/issues/85960
+        return output[0]
 
     # Create 2D test tensors (batch_size, channels)
     batch_size, channels = 10, 5
