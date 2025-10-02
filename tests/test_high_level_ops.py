@@ -4672,23 +4672,23 @@ def test_movedim_2d_tensor(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_optimizer():
+def test_optimizer(device: str):
     # Create two identical models
     torch.manual_seed(42)
     model_compiled = torch.nn.Sequential(
-        torch.nn.Linear(8, 8, False, device="cuda"),
-        torch.nn.Linear(8, 8, False, device="cuda"),
+        torch.nn.Linear(8, 8, False, device=device),
+        torch.nn.Linear(8, 8, False, device=device),
     )
 
     torch.manual_seed(42)
     model_uncompiled = torch.nn.Sequential(
-        torch.nn.Linear(8, 8, False, device="cuda"),
-        torch.nn.Linear(8, 8, False, device="cuda"),
+        torch.nn.Linear(8, 8, False, device=device),
+        torch.nn.Linear(8, 8, False, device=device),
     )
 
     # Same input for both
     torch.manual_seed(123)
-    input_data = torch.rand(8, device="cuda")
+    input_data = torch.rand(8, device=device)
 
     # Forward and backward for compiled version
     output_compiled = model_compiled(input_data)
@@ -4720,7 +4720,7 @@ def test_optimizer():
 
     # Run a second forward/backward pass and optimizer step
     torch.manual_seed(456)
-    input_data_2 = torch.rand(8, device="cuda")
+    input_data_2 = torch.rand(8, device=device)
 
     # Second forward and backward for compiled version
     output_compiled_2 = model_compiled(input_data_2)

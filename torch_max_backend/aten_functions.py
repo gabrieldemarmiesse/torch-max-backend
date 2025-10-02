@@ -2310,7 +2310,7 @@ def aten_squeeze(input: TensorValue, dim: int | list[int]) -> TensorValue:
 # sub.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
 @map_to(aten.sub)
 def aten_sub(
-    input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1
+    input: TensorValue | int | float, other: TensorValue | Scalar, alpha: Scalar = 1
 ) -> TensorValue:
     input, other = type_promotion(input, other)
     if alpha != 1:
