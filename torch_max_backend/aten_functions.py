@@ -564,6 +564,18 @@ def aten_add(input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1)
     return input + other
 
 
+# addcdiv(Tensor self, Tensor tensor1, Tensor tensor2, *, Scalar value=1) -> Tensor
+@map_to(aten.addcdiv)
+def aten_addcdiv(
+    input: TensorValue, tensor1: TensorValue, tensor2: TensorValue, *, value: Scalar = 1
+) -> TensorValue:
+    # addcdiv computes: input + value * tensor1 / tensor2
+    div_result = aten_div(tensor1, tensor2)
+    if value != 1:
+        div_result = aten_mul(div_result, value)
+    return aten_add(input, div_result)
+
+
 # addcmul(Tensor self, Tensor tensor1, Tensor tensor2, *, Scalar value=1) -> Tensor
 @map_to(aten.addcmul)
 def aten_addcmul(
@@ -2116,6 +2128,11 @@ def aten_pow(x: Scalar | TensorValue, y: Scalar | TensorValue) -> TensorValue:
 # randn(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 # randperm(SymInt n, *, ScalarType? dtype=long, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 # reciprocal(Tensor self) -> Tensor
+@map_to(aten.reciprocal)
+def aten_reciprocal(tensor: TensorValue) -> TensorValue:
+    return 1.0 / tensor
+
+
 # reflection_pad1d(Tensor self, SymInt[2] padding) -> Tensor
 # reflection_pad2d(Tensor self, SymInt[4] padding) -> Tensor
 # reflection_pad3d(Tensor self, SymInt[6] padding) -> Tensor
@@ -2765,10 +2782,63 @@ def aten__foreach_div_list(
     return [aten_div(x, y) for x, y in zip(self, other)]
 
 
+# _foreach_reciprocal(Tensor[] self) -> Tensor[]
+@map_to(aten._foreach_reciprocal)
+def aten__foreach_reciprocal(self: list[TensorValue]) -> list[TensorValue]:
+    return [aten_reciprocal(x) for x in self]
+
+
 # _foreach_sqrt(Tensor[] self) -> Tensor[]
 @map_to(aten._foreach_sqrt)
 def aten__foreach_sqrt(self: list[TensorValue]) -> list[TensorValue]:
     return [aten_sqrt(x) for x in self]
+
+
+# _foreach_addcdiv.Scalar(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar value=1) -> Tensor[]
+@map_to(aten._foreach_addcdiv.Scalar)
+def aten__foreach_addcdiv_scalar(
+    self: list[TensorValue],
+    tensor1: list[TensorValue],
+    tensor2: list[TensorValue],
+    value: Scalar = 1,
+) -> list[TensorValue]:
+    if len(self) != len(tensor1) or len(self) != len(tensor2):
+        raise ValueError(
+            f"Expected len(self) == len(tensor1) == len(tensor2), but got {len(self)}, {len(tensor1)}, {len(tensor2)}"
+        )
+    return [
+        aten_addcdiv(s, t1, t2, value=value)
+        for s, t1, t2 in zip(self, tensor1, tensor2)
+    ]
+
+
+# _foreach_addcdiv.ScalarList(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_addcdiv.ScalarList)
+def aten__foreach_addcdiv_scalarlist(
+    self: list[TensorValue],
+    tensor1: list[TensorValue],
+    tensor2: list[TensorValue],
+    scalars: list[Scalar],
+) -> list[TensorValue]:
+    if (
+        len(self) != len(tensor1)
+        or len(self) != len(tensor2)
+        or len(self) != len(scalars)
+    ):
+        raise ValueError(
+            f"Expected len(self) == len(tensor1) == len(tensor2) == len(scalars), but got {len(self)}, {len(tensor1)}, {len(tensor2)}, {len(scalars)}"
+        )
+    return [
+        aten_addcdiv(s, t1, t2, value=val)
+        for s, t1, t2, val in zip(self, tensor1, tensor2, scalars)
+    ]
+
+
+# NOTE: _foreach_addcdiv.Tensor is NOT supported
+# The .Tensor variant requires a 1-D CPU tensor with concrete values to extract scalars,
+# which is incompatible with torch.compile's meta tensor tracing.
+# Use .Scalar or .ScalarList variants instead.
+# See: https://github.com/pytorch/pytorch/issues/139795
 
 
 # _foreach_addcmul.Scalar(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar value=1) -> Tensor[]

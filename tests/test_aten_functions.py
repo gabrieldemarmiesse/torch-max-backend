@@ -875,6 +875,22 @@ def test_foreach_neg(device: str, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_reciprocal(device: str, dtype: torch.dtype):
+    """Test _foreach_reciprocal - computes reciprocal (1/x) of each tensor in list"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_reciprocal(tensors)
+
+    # Add small offset to avoid division by zero
+    x = torch.randn(3, 4, dtype=dtype, device=device) + 0.5
+    y = torch.randn(2, 5, dtype=dtype, device=device) + 0.5
+    z = torch.randn(4, dtype=dtype, device=device) + 0.5
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_foreach_addcmul_scalar(device: str, dtype: torch.dtype):
     """Test _foreach_addcmul.Scalar - adds element-wise product scaled by scalar"""
 
@@ -926,6 +942,63 @@ def test_foreach_addcmul_scalarlist(device: str, dtype: torch.dtype):
 
 
 # NOTE: _foreach_addcmul.Tensor is NOT tested
+# The .Tensor variant requires a 1-D CPU tensor with concrete values to extract scalars,
+# which is incompatible with torch.compile's meta tensor tracing.
+# See: https://github.com/pytorch/pytorch/issues/139795
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_addcdiv_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_addcdiv.Scalar - adds element-wise quotient scaled by scalar"""
+
+    def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
+        self_tensors = [x1, y1, z1]
+        tensor1_list = [x2, y2, z2]
+        tensor2_list = [x3, y3, z3]
+        return aten._foreach_addcdiv.Scalar(
+            self_tensors, tensor1_list, tensor2_list, value=2.0
+        )
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+    x3 = torch.randn(3, 4, dtype=dtype, device=device) + 0.5
+    y3 = torch.randn(2, 5, dtype=dtype, device=device) + 0.5
+    z3 = torch.randn(4, dtype=dtype, device=device) + 0.5
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_addcdiv_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_addcdiv.ScalarList - adds element-wise quotient scaled by scalar list"""
+
+    def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
+        self_tensors = [x1, y1, z1]
+        tensor1_list = [x2, y2, z2]
+        tensor2_list = [x3, y3, z3]
+        scalars = [1.0, 2.0, 0.5]
+        return aten._foreach_addcdiv.ScalarList(
+            self_tensors, tensor1_list, tensor2_list, scalars
+        )
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+    x3 = torch.randn(3, 4, dtype=dtype, device=device) + 0.5
+    y3 = torch.randn(2, 5, dtype=dtype, device=device) + 0.5
+    z3 = torch.randn(4, dtype=dtype, device=device) + 0.5
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+
+
+# NOTE: _foreach_addcdiv.Tensor is NOT tested
 # The .Tensor variant requires a 1-D CPU tensor with concrete values to extract scalars,
 # which is incompatible with torch.compile's meta tensor tracing.
 # See: https://github.com/pytorch/pytorch/issues/139795
