@@ -873,6 +873,22 @@ def test_foreach_neg(device: str, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_reciprocal(device: str, dtype: torch.dtype):
+    """Test _foreach_reciprocal - computes reciprocal (1/x) of each tensor in list"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_reciprocal(tensors)
+
+    # Add small offset to avoid division by zero
+    x = torch.randn(3, 4, dtype=dtype, device=device) + 0.5
+    y = torch.randn(2, 5, dtype=dtype, device=device) + 0.5
+    z = torch.randn(4, dtype=dtype, device=device) + 0.5
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_foreach_addcmul_scalar(device: str, dtype: torch.dtype):
     """Test _foreach_addcmul.Scalar - adds element-wise product scaled by scalar"""
 

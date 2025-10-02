@@ -2112,6 +2112,11 @@ def aten_pow(x: Scalar | TensorValue, y: Scalar | TensorValue) -> TensorValue:
 # randn(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 # randperm(SymInt n, *, ScalarType? dtype=long, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 # reciprocal(Tensor self) -> Tensor
+@map_to(aten.reciprocal)
+def aten_reciprocal(tensor: TensorValue) -> TensorValue:
+    return 1.0 / tensor
+
+
 # reflection_pad1d(Tensor self, SymInt[2] padding) -> Tensor
 # reflection_pad2d(Tensor self, SymInt[4] padding) -> Tensor
 # reflection_pad3d(Tensor self, SymInt[6] padding) -> Tensor
@@ -2755,6 +2760,12 @@ def aten__foreach_div_list(
             f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
         )
     return [aten_div(x, y) for x, y in zip(self, other)]
+
+
+# _foreach_reciprocal(Tensor[] self) -> Tensor[]
+@map_to(aten._foreach_reciprocal)
+def aten__foreach_reciprocal(self: list[TensorValue]) -> list[TensorValue]:
+    return [aten_reciprocal(x) for x in self]
 
 
 # _foreach_sqrt(Tensor[] self) -> Tensor[]
