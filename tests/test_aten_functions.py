@@ -1044,7 +1044,7 @@ def test_aten_ceil_scalar_tensor(device: str):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16])
 @pytest.mark.parametrize("fn", [aten.cosh, aten.sinh])
 def test_aten_trigon_basic(device: str, fn: Callable, dtype: torch.dtype):
-    """Test aten.cosh basic functionality with floating point numbers"""
+    """Test trigonometric functions basic functionality with floating point numbers"""
     # Skip float16 on CPU as MAX doesn't support f16 on CPU
     if device == "cpu" and dtype == torch.float16:
         pytest.xfail("float16 not supported on CPU in MAX")
@@ -1057,7 +1057,7 @@ def test_aten_trigon_basic(device: str, fn: Callable, dtype: torch.dtype):
 
 @pytest.mark.parametrize("fn", [aten.cosh, aten.sinh])
 def test_aten_trigon_2d_tensor(device: str, fn: Callable):
-    """Test aten.cosh with 2D tensor"""
+    """Test trigonometric functions with 2D tensor"""
 
     x = torch.tensor(
         [[-1.5, -0.5], [0.0, 1.0], [1.5, 2.5]], dtype=torch.float32, device=device
@@ -1067,7 +1067,7 @@ def test_aten_trigon_2d_tensor(device: str, fn: Callable):
 
 @pytest.mark.parametrize("fn", [aten.cosh, aten.sinh])
 def test_aten_trigon_3d_tensor(device: str, fn: Callable):
-    """Test aten.cosh with 3D tensor"""
+    """Test trigonometric functions with 3D tensor"""
 
     x = torch.randn(2, 3, 4, dtype=torch.float32, device=device)
     check_functions_are_equivalent(fn, device, [x])
@@ -1075,7 +1075,7 @@ def test_aten_trigon_3d_tensor(device: str, fn: Callable):
 
 @pytest.mark.parametrize("fn", [aten.cosh, aten.sinh])
 def test_aten_trigon_large_values(device: str, fn: Callable):
-    """test aten.cosh with large values (may approach infinity)"""
+    """Test trigonometric functions with large values (may approach infinity)"""
 
     # large values will produce large results due to exponential growth
     x = torch.tensor([-5.0, -3.0, 3.0, 5.0], dtype=torch.float32, device=device)
@@ -1084,7 +1084,7 @@ def test_aten_trigon_large_values(device: str, fn: Callable):
 
 @pytest.mark.parametrize("fn", [aten.cosh, aten.sinh])
 def test_aten_trigon_small_values(device: str, fn: Callable):
-    """test aten.cosh with small values near zero"""
+    """Test trigonometric functions with small values near zero"""
 
     # for small x, cosh(x) ≈ 1 + x²/2
     x = torch.tensor(
@@ -1095,7 +1095,7 @@ def test_aten_trigon_small_values(device: str, fn: Callable):
 
 @pytest.mark.parametrize("fn", [aten.cosh, aten.sinh])
 def test_aten_trigon_single_element(device: str, fn: Callable):
-    """test aten.cosh with single element tensor"""
+    """Test trigonometric functions with single element tensor"""
 
     x = torch.tensor([1.5], dtype=torch.float32, device=device)
     check_functions_are_equivalent(fn, device, [x])
@@ -1103,92 +1103,8 @@ def test_aten_trigon_single_element(device: str, fn: Callable):
 
 @pytest.mark.parametrize("fn", [aten.cosh, aten.sinh])
 def test_aten_trigon_scalar_tensor(device: str, fn: Callable):
-    """Test aten.cosh with scalar tensor"""
+    """Test trigonometric functions with scalar tensor"""
 
-    x = torch.tensor(1.0, dtype=torch.float32, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16])
-def test_aten_sinh_basic(device: str, dtype: torch.dtype):
-    """Test aten.sinh basic functionality with floating point numbers"""
-    # Skip float16 on CPU as MAX doesn't support f16 on CPU
-    if device == "cpu" and dtype == torch.float16:
-        pytest.xfail("float16 not supported on CPU in MAX")
-
-    def fn(x):
-        return aten.sinh(x)
-
-    # Test with positive, negative, and zero values
-    # sinh(0) = 0, cosh is even function: sinh(-x) = sinh(x)
-    x = torch.tensor([-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0], dtype=dtype, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_aten_sinh_2d_tensor(device: str):
-    """Test aten.sinh with 2D tensor"""
-
-    def fn(x):
-        return aten.sinh(x)
-
-    x = torch.tensor(
-        [[-1.5, -0.5], [0.0, 1.0], [1.5, 2.5]], dtype=torch.float32, device=device
-    )
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_aten_sinh_3d_tensor(device: str):
-    """Test aten.sinh with 3D tensor"""
-
-    def fn(x):
-        return aten.sinh(x)
-
-    x = torch.randn(2, 3, 4, dtype=torch.float32, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_aten_sinh_large_values(device: str):
-    """test aten.sinh with large values (may approach infinity)"""
-
-    def fn(x):
-        return aten.sinh(x)
-
-    # large values will produce large results due to exponential growth
-    x = torch.tensor([-5.0, -3.0, 3.0, 5.0], dtype=torch.float32, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_aten_sinh_small_values(device: str):
-    """test aten.sinh with small values near zero"""
-
-    def fn(x):
-        return aten.sinh(x)
-
-    # for small x, sinh(x) ≈ 1 + x²/2
-    x = torch.tensor(
-        [-0.1, -0.01, -0.001, 0.001, 0.01, 0.1], dtype=torch.float32, device=device
-    )
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_aten_sinh_single_element(device: str):
-    """test aten.sinh with single element tensor"""
-
-    def fn(x):
-        return aten.sinh(x)
-
-    x = torch.tensor([1.5], dtype=torch.float32, device=device)
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_aten_sinh_scalar_tensor(device: str):
-    """Test aten.sinh with scalar tensor"""
-
-    def fn(x):
-        return aten.sinh(x)
-
-=======
->>>>>>> afd2ce4 (Parametrize the sinh and cosh functions in a lot of tests)
     x = torch.tensor(1.0, dtype=torch.float32, device=device)
     check_functions_are_equivalent(fn, device, [x])
 
