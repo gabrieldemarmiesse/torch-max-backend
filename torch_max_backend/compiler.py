@@ -4,17 +4,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import max.driver
 import max.graph.value
 import torch
 from functorch.compile import make_boxed_func
 from max import engine, mlir
 from max.dtype import DType
 from max.graph import Graph, KernelLibrary
-from max.torch.torch import max_device_ref
 from torch._dynamo.backends.common import aot_autograd
 
 from torch_max_backend import debug
-from torch_max_backend.aten_functions import DECOMPOSITION_TABLE
+from torch_max_backend.aten_functions import (
+    DECOMPOSITION_TABLE,
+    torch_device_to_max_device,
+)
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 from torch_max_backend.utils import get_error_message, get_fully_qualified_name
 
@@ -75,14 +78,19 @@ def gather_stats_on_graph(gm: torch.fx.GraphModule):
 def keep_only_tensors(
     inputs: list[int | float | torch.Tensor] | tuple[int | float | torch.Tensor, ...],
     detach: bool = False,
-) -> list[torch.Tensor]:
+) -> tuple[list[torch.Tensor | max.driver.Tensor], bool]:
+    max_device_used = False
     result = []
     for x in inputs:
         if isinstance(x, torch.Tensor):
+            if x.device.type == "max_device":
+                result.append(x._max_data)
+                max_device_used = True
+                continue
             if detach:
                 x = x.detach()
             result.append(x)
-    return result
+    return result, max_device_used
 
 
 class TensorsBook:
@@ -204,7 +212,7 @@ class _GraphFactory:
                 max.graph.value.TensorType(
                     dtype=DType.from_torch(example_value.dtype),
                     shape=shape,
-                    device=max_device_ref(example_value.device),
+                    device=torch_device_to_max_device(example_value.device),
                 )
             )
             self.names_to_input_idx[node.name] = len(self.graph_inputs) - 1
@@ -341,8 +349,21 @@ class BaseMaxCompiler:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
             start_inference_time = time.time_ns()
-        outputs = self.model.execute(*keep_only_tensors(args, detach=True))
-        tensor_outputs = [torch.from_dlpack(x) for x in outputs]
+
+        input_with_only_tensors, max_device_used = keep_only_tensors(args, detach=True)
+        # are those max tensors?
+
+        outputs = self.model.execute(*input_with_only_tensors)
+        # TODO: we should be able to do much better here
+        # notably if there are multiple inputs and outputs and on different devices
+        if max_device_used:
+            from torch_max_backend.max_device import make_max_tensor_from_max
+
+            print("converting outputs to max_device tensors")
+            tensor_outputs = [make_max_tensor_from_max(x) for x in outputs]
+        else:
+            print("using dlpack")
+            tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
         debug.debug_graph_if_required(self.gm, args)
 

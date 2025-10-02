@@ -6,13 +6,14 @@ import torch
 from PIL import Image
 from torchvision import models, transforms
 
-from torch_max_backend import max_backend
+from torch_max_backend import max_backend, register_max_devices
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
 
+register_max_devices()
 
-device = "cuda"
+device = "max_device"
 
 model = models.vgg11(pretrained=True)
 

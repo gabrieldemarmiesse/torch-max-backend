@@ -21,9 +21,10 @@ def device(request, gpu_available: bool):
     return device_name
 
 
+# TODO cleanup the tests
 @pytest.fixture
 def gpu_available() -> bool:
-    return len(list(get_accelerators())) > 1
+    return len(list(get_accelerators())) > 1 and torch.cuda.is_available()
 
 
 @pytest.fixture
