@@ -1126,7 +1126,7 @@ def test_aten_sinh_basic(device: str, dtype: torch.dtype):
     """Test aten.sinh basic functionality with floating point numbers"""
     # Skip float16 on CPU as MAX doesn't support f16 on CPU
     if device == "cpu" and dtype == torch.float16:
-        pytest.skip("float16 not supported on CPU in MAX")
+        pytest.xfail("float16 not supported on CPU in MAX")
 
     def fn(x):
         return aten.sinh(x)
