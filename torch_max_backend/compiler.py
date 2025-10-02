@@ -23,6 +23,7 @@ from torch_max_backend.flags import profiling_enabled, verbose_enabled
 from torch_max_backend.utils import get_error_message, get_fully_qualified_name
 
 from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
+from .profiler import profile
 from .utils import get_accelerators
 
 
@@ -341,10 +342,9 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
+    @profile
     def __call__(self, *args) -> list[torch.Tensor | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
-        if profiling_enabled():
-            start_inference_time = time.time_ns()
         input_tensors = keep_only_tensors(args, detach=True)
         # convert to max tensors
         input_tensors = [fast_from_dlpack(x) for x in input_tensors]
@@ -360,12 +360,6 @@ class BaseMaxCompiler:
                 result.append(None)
             else:
                 result.append(tensor_outputs[i])
-        if profiling_enabled():
-            end_inference_time = time.time_ns()
-            inference_duration = dt.timedelta(
-                microseconds=(end_inference_time - start_inference_time) / 1000
-            )
-            print(f"Running the Max graph in {inference_duration}")
         return result
 
 
