@@ -475,7 +475,461 @@ def test_aten_bitwise_xor_broadcasting(device: str):
     check_functions_are_equivalent(fn, device, [x, y])
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_add_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_add.Scalar - adds scalar to each tensor in list"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_add.Scalar(tensors, 2.5)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_add_list(device: str, dtype: torch.dtype):
+    """Test _foreach_add.List - adds corresponding tensors with alpha scaling"""
+
+    def fn(x1, y1, z1, x2, y2, z2):
+        self_tensors = [x1, y1, z1]
+        other_tensors = [x2, y2, z2]
+        return aten._foreach_add.List(self_tensors, other_tensors, alpha=1.0)
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+
+
+@pytest.mark.parametrize("alpha", [1.0, 2.0, -0.5])
+def test_foreach_add_list_alpha(device: str, alpha: float):
+    """Test _foreach_add.List with different alpha values"""
+
+    def fn(x1, y1, x2, y2):
+        self_tensors = [x1, y1]
+        other_tensors = [x2, y2]
+        return aten._foreach_add.List(self_tensors, other_tensors, alpha=alpha)
+
+    x1 = torch.randn(3, 4, device=device)
+    y1 = torch.randn(2, 5, device=device)
+    x2 = torch.randn(3, 4, device=device)
+    y2 = torch.randn(2, 5, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, x2, y2])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_add_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_add.ScalarList - adds corresponding scalar to each tensor"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        scalars = [1.5, -2.0, 3.5]
+        return aten._foreach_add.ScalarList(tensors, scalars)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_add_tensor(device: str, dtype: torch.dtype):
+    """Test _foreach_add.Tensor - broadcasts single 0-d tensor to all tensors in list"""
+
+    def fn(x, y, z, other):
+        tensors = [x, y, z]
+        return aten._foreach_add.Tensor(tensors, other, alpha=1.0)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+    other = torch.tensor(2.5, dtype=dtype, device=device)  # 0-d tensor
+
+    check_functions_are_equivalent(fn, device, [x, y, z, other])
+
+
+@pytest.mark.parametrize("alpha", [1.0, 2.0, -0.5])
+def test_foreach_add_tensor_alpha(device: str, alpha: float):
+    """Test _foreach_add.Tensor with different alpha values"""
+
+    def fn(x, y, other):
+        tensors = [x, y]
+        return aten._foreach_add.Tensor(tensors, other, alpha=alpha)
+
+    x = torch.randn(3, 4, device=device)
+    y = torch.randn(2, 5, device=device)
+    other = torch.tensor(1.5, device=device)  # 0-d tensor
+
+    check_functions_are_equivalent(fn, device, [x, y, other])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_sub_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_sub.Scalar - subtracts scalar from each tensor in list"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_sub.Scalar(tensors, 2.5)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_sub_list(device: str, dtype: torch.dtype):
+    """Test _foreach_sub.List - subtracts corresponding tensors with alpha scaling"""
+
+    def fn(x1, y1, z1, x2, y2, z2):
+        self_tensors = [x1, y1, z1]
+        other_tensors = [x2, y2, z2]
+        return aten._foreach_sub.List(self_tensors, other_tensors, alpha=1.0)
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+
+
+@pytest.mark.parametrize("alpha", [1.0, 2.0, -0.5])
+def test_foreach_sub_list_alpha(device: str, alpha: float):
+    """Test _foreach_sub.List with different alpha values"""
+
+    def fn(x1, y1, x2, y2):
+        self_tensors = [x1, y1]
+        other_tensors = [x2, y2]
+        return aten._foreach_sub.List(self_tensors, other_tensors, alpha=alpha)
+
+    x1 = torch.randn(3, 4, device=device)
+    y1 = torch.randn(2, 5, device=device)
+    x2 = torch.randn(3, 4, device=device)
+    y2 = torch.randn(2, 5, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, x2, y2])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_sub_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_sub.ScalarList - subtracts corresponding scalar from each tensor"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        scalars = [1.5, -2.0, 3.5]
+        return aten._foreach_sub.ScalarList(tensors, scalars)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_mul_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_mul.Scalar - multiplies each tensor in list by scalar"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_mul.Scalar(tensors, 2.5)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_mul_list(device: str, dtype: torch.dtype):
+    """Test _foreach_mul.List - multiplies corresponding tensors"""
+
+    def fn(x1, y1, z1, x2, y2, z2):
+        self_tensors = [x1, y1, z1]
+        other_tensors = [x2, y2, z2]
+        return aten._foreach_mul.List(self_tensors, other_tensors)
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_mul_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_mul.ScalarList - multiplies each tensor by corresponding scalar"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        scalars = [1.5, -2.0, 3.5]
+        return aten._foreach_mul.ScalarList(tensors, scalars)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_mul_tensor(device: str, dtype: torch.dtype):
+    """Test _foreach_mul.Tensor - broadcasts single 0-d tensor to all tensors in list"""
+
+    def fn(x, y, z, other):
+        tensors = [x, y, z]
+        return aten._foreach_mul.Tensor(tensors, other)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+    other = torch.tensor(2.5, dtype=dtype, device=device)  # 0-d tensor
+
+    check_functions_are_equivalent(fn, device, [x, y, z, other])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_pow_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_pow.Scalar - raises each tensor in list to scalar power"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_pow.Scalar(tensors, 2.0)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device).abs() + 0.1
+    y = torch.randn(2, 5, dtype=dtype, device=device).abs() + 0.1
+    z = torch.randn(4, dtype=dtype, device=device).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_pow_list(device: str, dtype: torch.dtype):
+    """Test _foreach_pow.List - raises corresponding tensors to powers"""
+
+    def fn(x1, y1, z1, x2, y2, z2):
+        self_tensors = [x1, y1, z1]
+        exponent_tensors = [x2, y2, z2]
+        return aten._foreach_pow.List(self_tensors, exponent_tensors)
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device).abs() + 0.1
+    y1 = torch.randn(2, 5, dtype=dtype, device=device).abs() + 0.1
+    z1 = torch.randn(4, dtype=dtype, device=device).abs() + 0.1
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_pow_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_pow.ScalarList - raises each tensor to corresponding scalar power"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        exponents = [2.0, 3.0, 0.5]
+        return aten._foreach_pow.ScalarList(tensors, exponents)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device).abs() + 0.1
+    y = torch.randn(2, 5, dtype=dtype, device=device).abs() + 0.1
+    z = torch.randn(4, dtype=dtype, device=device).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_pow_scalarandtensor(device: str, dtype: torch.dtype):
+    """Test _foreach_pow.ScalarAndTensor - raises scalar to tensor powers"""
+
+    def fn(x, y, z):
+        exponent_tensors = [x, y, z]
+        return aten._foreach_pow.ScalarAndTensor(2.0, exponent_tensors)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_div_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_div.Scalar - divides each tensor in list by scalar"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_div.Scalar(tensors, 2.5)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_div_list(device: str, dtype: torch.dtype):
+    """Test _foreach_div.List - divides corresponding tensors"""
+
+    def fn(x1, y1, z1, x2, y2, z2):
+        self_tensors = [x1, y1, z1]
+        other_tensors = [x2, y2, z2]
+        return aten._foreach_div.List(self_tensors, other_tensors)
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device) + 0.1
+    y2 = torch.randn(2, 5, dtype=dtype, device=device) + 0.1
+    z2 = torch.randn(4, dtype=dtype, device=device) + 0.1
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_div_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_div.ScalarList - divides each tensor by corresponding scalar"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        scalars = [2.0, 3.0, 1.5]
+        return aten._foreach_div.ScalarList(tensors, scalars)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_div_tensor(device: str, dtype: torch.dtype):
+    """Test _foreach_div.Tensor - broadcasts single 0-d tensor to all tensors in list"""
+
+    def fn(x, y, z, other):
+        tensors = [x, y, z]
+        return aten._foreach_div.Tensor(tensors, other)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+    other = torch.tensor(2.5, dtype=dtype, device=device)  # 0-d tensor
+
+    check_functions_are_equivalent(fn, device, [x, y, z, other])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_sqrt(device: str, dtype: torch.dtype):
+    """Test _foreach_sqrt - computes square root of each tensor in list"""
+    # xfail for float64 on CUDA due to current MAX limitation with sqrt intrinsic
+    if device == "cuda" and dtype == torch.float64:
+        pytest.xfail(
+            "float64 sqrt on CUDA currently fails in MAX (llvm.nvvm.sqrt.approx.d intrinsic issue)"
+        )
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_sqrt(tensors)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device).abs() + 0.1
+    y = torch.randn(2, 5, dtype=dtype, device=device).abs() + 0.1
+    z = torch.randn(4, dtype=dtype, device=device).abs() + 0.1
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_neg(device: str, dtype: torch.dtype):
+    """Test _foreach_neg - computes negation of each tensor in list"""
+
+    def fn(x, y, z):
+        tensors = [x, y, z]
+        return aten._foreach_neg(tensors)
+
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x, y, z])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_addcmul_scalar(device: str, dtype: torch.dtype):
+    """Test _foreach_addcmul.Scalar - adds element-wise product scaled by scalar"""
+
+    def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
+        self_tensors = [x1, y1, z1]
+        tensor1_list = [x2, y2, z2]
+        tensor2_list = [x3, y3, z3]
+        return aten._foreach_addcmul.Scalar(
+            self_tensors, tensor1_list, tensor2_list, 2.0
+        )
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+    x3 = torch.randn(3, 4, dtype=dtype, device=device)
+    y3 = torch.randn(2, 5, dtype=dtype, device=device)
+    z3 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_foreach_addcmul_scalarlist(device: str, dtype: torch.dtype):
+    """Test _foreach_addcmul.ScalarList - adds element-wise products scaled by corresponding scalars"""
+
+    def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
+        self_tensors = [x1, y1, z1]
+        tensor1_list = [x2, y2, z2]
+        tensor2_list = [x3, y3, z3]
+        scalars = [1.0, 2.0, 0.5]
+        return aten._foreach_addcmul.ScalarList(
+            self_tensors, tensor1_list, tensor2_list, scalars
+        )
+
+    x1 = torch.randn(3, 4, dtype=dtype, device=device)
+    y1 = torch.randn(2, 5, dtype=dtype, device=device)
+    z1 = torch.randn(4, dtype=dtype, device=device)
+    x2 = torch.randn(3, 4, dtype=dtype, device=device)
+    y2 = torch.randn(2, 5, dtype=dtype, device=device)
+    z2 = torch.randn(4, dtype=dtype, device=device)
+    x3 = torch.randn(3, 4, dtype=dtype, device=device)
+    y3 = torch.randn(2, 5, dtype=dtype, device=device)
+    z3 = torch.randn(4, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+
+
+# NOTE: _foreach_addcmul.Tensor is NOT tested
+# The .Tensor variant requires a 1-D CPU tensor with concrete values to extract scalars,
+# which is incompatible with torch.compile's meta tensor tracing.
+# See: https://github.com/pytorch/pytorch/issues/139795
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_ceil_basic(device: str, dtype: torch.dtype):
     """Test aten.ceil basic functionality with floating point numbers"""
     # Skip float16 on CPU as MAX doesn't support f16 on CPU

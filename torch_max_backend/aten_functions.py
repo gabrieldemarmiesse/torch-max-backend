@@ -559,12 +559,21 @@ def aten_abs(x: TensorValue):
 @map_to(aten.add)
 def aten_add(input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1):
     input, other = type_promotion(input, other)
-
     if alpha != 1:
-        raise NotImplementedError(
-            "The 'alpha' argument is not supported in the aten.add equivalent."
-        )
-    return input + other * alpha
+        other = aten_mul(other, alpha)
+    return input + other
+
+
+# addcmul(Tensor self, Tensor tensor1, Tensor tensor2, *, Scalar value=1) -> Tensor
+@map_to(aten.addcmul)
+def aten_addcmul(
+    input: TensorValue, tensor1: TensorValue, tensor2: TensorValue, *, value: Scalar = 1
+) -> TensorValue:
+    # addcmul computes: input + value * tensor1 * tensor2
+    mul_result = aten_mul(tensor1, tensor2)
+    if value != 1:
+        mul_result = aten_mul(mul_result, value)
+    return aten_add(input, mul_result)
 
 
 # addmm(Tensor self, Tensor mat1, Tensor mat2, *, Scalar beta=1, Scalar alpha=1) -> Tensor
@@ -1078,14 +1087,20 @@ def aten_ceil(input: TensorValue) -> TensorValue:
     """
     Ceiling of the input tensor, element-wise.
 
-    For floating-point inputs: Implemented as ceil(x) = -floor(-x) since MAX has floor operation available.
+    For floating-point inputs: Uses a custom Mojo kernel for efficient ceil operation.
     For integer inputs: Returns it (no mathematical change needed, following PyTorch behavior).
     """
     if input.type.dtype.is_integral():
         return input
     else:
-        # TODO: Make a Mojo custom op that does this in one single step
-        return -max_ops.floor(-input)
+        return max_ops.custom(
+            name="ceil",
+            device=input.device,
+            values=[input],
+            out_types=[
+                TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+            ],
+        )[0]
 
 
 # clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor
@@ -2281,11 +2296,8 @@ def aten_sub(
     input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1
 ) -> TensorValue:
     input, other = type_promotion(input, other)
-
     if alpha != 1:
-        raise NotImplementedError(
-            "The 'alpha' argument is not supported in the aten.sub equivalent."
-        )
+        other = aten_mul(other, alpha)
     return input - other
 
 
@@ -2539,26 +2551,263 @@ def torch_transpose_equivalent(tensor, dim0, dim1):
     return max_ops.permute(tensor, perm)
 
 
-# TODO: find signature
-@map_to(aten._foreach_add)
-def aten__foreach_add(tensors, others, alpha=1.0):
-    """
-    Equivalent to torch._foreach_add.List - element-wise addition of two lists of tensors.
-    Computes: tensors[i] + alpha * others[i] for each i
-    """
-    if len(tensors) != len(others):
+# _foreach_add.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
+@map_to(aten._foreach_add.Scalar)
+def aten__foreach_add_scalar(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+    alpha: Scalar = 1,
+) -> list[TensorValue]:
+    return [aten_add(x, other, alpha=alpha) for x in self]
+
+
+# _foreach_add.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_add.ScalarList)
+def aten__foreach_add_scalar_list(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+) -> list[TensorValue]:
+    if len(self) != len(other):
         raise ValueError(
-            f"Expected len(tensors) == len(others), but got {len(tensors)} and {len(others)}"
+            f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
         )
+    return [aten_add(tensor, scalar) for tensor, scalar in zip(self, other)]
 
-    result = []
-    for tensor, other in zip(tensors, others):
-        if alpha == 1.0:
-            result.append(tensor + other)
-        else:
-            result.append(tensor + alpha * other)
 
-    return result
+# _foreach_add.Tensor(Tensor[] self, Tensor other, *, Scalar alpha=1) -> Tensor[]
+@map_to(aten._foreach_add.Tensor)
+def aten__foreach_add_tensor(
+    self: list[TensorValue], other: TensorValue, alpha: Scalar = 1
+) -> list[TensorValue]:
+    return [aten_add(x, other, alpha=alpha) for x in self]
+
+
+# _foreach_add.List(Tensor[] self, Tensor[] other, *, Scalar alpha=1) -> Tensor[]
+@map_to(aten._foreach_add.List)
+def aten__foreach_add_list(
+    self: list[TensorValue], other: list[TensorValue], alpha: Scalar = 1
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
+        )
+    return [aten_add(x, y, alpha=alpha) for x, y in zip(self, other)]
+
+
+# _foreach_sub.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
+@map_to(aten._foreach_sub.Scalar)
+def aten__foreach_sub_scalar(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+    alpha: Scalar = 1,
+) -> list[TensorValue]:
+    return [aten_sub(x, other, alpha=alpha) for x in self]
+
+
+# _foreach_sub.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_sub.ScalarList)
+def aten__foreach_sub_scalar_list(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
+        )
+    return [aten_sub(tensor, scalar) for tensor, scalar in zip(self, other)]
+
+
+# _foreach_sub.List(Tensor[] self, Tensor[] other, *, Scalar alpha=1) -> Tensor[]
+@map_to(aten._foreach_sub.List)
+def aten__foreach_sub_list(
+    self: list[TensorValue], other: list[TensorValue], alpha: Scalar = 1
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
+        )
+    return [aten_sub(x, y, alpha=alpha) for x, y in zip(self, other)]
+
+
+# _foreach_mul.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
+@map_to(aten._foreach_mul.Scalar)
+def aten__foreach_mul_scalar(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+) -> list[TensorValue]:
+    return [aten_mul(x, other) for x in self]
+
+
+# _foreach_mul.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_mul.ScalarList)
+def aten__foreach_mul_scalar_list(
+    self: list[TensorValue],
+    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
+        )
+    return [aten_mul(tensor, scalar) for tensor, scalar in zip(self, other)]
+
+
+# _foreach_mul.Tensor(Tensor[] self, Tensor other) -> Tensor[]
+@map_to(aten._foreach_mul.Tensor)
+def aten__foreach_mul_tensor(
+    self: list[TensorValue], other: TensorValue
+) -> list[TensorValue]:
+    return [aten_mul(x, other) for x in self]
+
+
+# _foreach_mul.List(Tensor[] self, Tensor[] other) -> Tensor[]
+@map_to(aten._foreach_mul.List)
+def aten__foreach_mul_list(
+    self: list[TensorValue], other: list[TensorValue]
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
+        )
+    return [aten_mul(x, y) for x, y in zip(self, other)]
+
+
+# _foreach_neg(Tensor[] self) -> Tensor[]
+@map_to(aten._foreach_neg)
+def aten__foreach_neg(self: list[TensorValue]) -> list[TensorValue]:
+    return [aten_neg(x) for x in self]
+
+
+# _foreach_pow.Scalar(Tensor[] self, Scalar exponent) -> Tensor[]
+@map_to(aten._foreach_pow.Scalar)
+def aten__foreach_pow_scalar(
+    self: list[TensorValue], exponent: Scalar
+) -> list[TensorValue]:
+    return [aten_pow(x, exponent) for x in self]
+
+
+# _foreach_pow.ScalarList(Tensor[] self, Scalar[] exponent) -> Tensor[]
+@map_to(aten._foreach_pow.ScalarList)
+def aten__foreach_pow_scalar_list(
+    self: list[TensorValue], exponent: list[Scalar]
+) -> list[TensorValue]:
+    if len(self) != len(exponent):
+        raise ValueError(
+            f"Expected len(self) == len(exponent), but got {len(self)} and {len(exponent)}"
+        )
+    return [aten_pow(tensor, exp) for tensor, exp in zip(self, exponent)]
+
+
+# _foreach_pow.List(Tensor[] self, Tensor[] exponent) -> Tensor[]
+@map_to(aten._foreach_pow.List)
+def aten__foreach_pow_list(
+    self: list[TensorValue], exponent: list[TensorValue]
+) -> list[TensorValue]:
+    if len(self) != len(exponent):
+        raise ValueError(
+            f"Expected len(self) == len(exponent), but got {len(self)} and {len(exponent)}"
+        )
+    return [aten_pow(x, exp) for x, exp in zip(self, exponent)]
+
+
+# _foreach_pow.ScalarAndTensor(Scalar self, Tensor[] exponent) -> Tensor[]
+@map_to(aten._foreach_pow.ScalarAndTensor)
+def aten__foreach_pow_scalarandtensor(
+    self: Scalar, exponent: list[TensorValue]
+) -> list[TensorValue]:
+    return [aten_pow(self, exp) for exp in exponent]
+
+
+# _foreach_div.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
+@map_to(aten._foreach_div.Scalar)
+def aten__foreach_div_scalar(
+    self: list[TensorValue], other: Scalar
+) -> list[TensorValue]:
+    return [aten_div(x, other) for x in self]
+
+
+# _foreach_div.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_div.ScalarList)
+def aten__foreach_div_scalar_list(
+    self: list[TensorValue], other: list[Scalar]
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
+        )
+    return [aten_div(tensor, scalar) for tensor, scalar in zip(self, other)]
+
+
+# _foreach_div.Tensor(Tensor[] self, Tensor other) -> Tensor[]
+@map_to(aten._foreach_div.Tensor)
+def aten__foreach_div_tensor(
+    self: list[TensorValue], other: TensorValue
+) -> list[TensorValue]:
+    return [aten_div(x, other) for x in self]
+
+
+# _foreach_div.List(Tensor[] self, Tensor[] other) -> Tensor[]
+@map_to(aten._foreach_div.List)
+def aten__foreach_div_list(
+    self: list[TensorValue], other: list[TensorValue]
+) -> list[TensorValue]:
+    if len(self) != len(other):
+        raise ValueError(
+            f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
+        )
+    return [aten_div(x, y) for x, y in zip(self, other)]
+
+
+# _foreach_sqrt(Tensor[] self) -> Tensor[]
+@map_to(aten._foreach_sqrt)
+def aten__foreach_sqrt(self: list[TensorValue]) -> list[TensorValue]:
+    return [aten_sqrt(x) for x in self]
+
+
+# _foreach_addcmul.Scalar(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar value=1) -> Tensor[]
+@map_to(aten._foreach_addcmul.Scalar)
+def aten__foreach_addcmul_scalar(
+    self: list[TensorValue],
+    tensor1: list[TensorValue],
+    tensor2: list[TensorValue],
+    value: Scalar = 1,
+) -> list[TensorValue]:
+    if len(self) != len(tensor1) or len(self) != len(tensor2):
+        raise ValueError(
+            f"Expected len(self) == len(tensor1) == len(tensor2), but got {len(self)}, {len(tensor1)}, {len(tensor2)}"
+        )
+    return [
+        aten_addcmul(s, t1, t2, value=value)
+        for s, t1, t2 in zip(self, tensor1, tensor2)
+    ]
+
+
+# _foreach_addcmul.ScalarList(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar[] scalars) -> Tensor[]
+@map_to(aten._foreach_addcmul.ScalarList)
+def aten__foreach_addcmul_scalarlist(
+    self: list[TensorValue],
+    tensor1: list[TensorValue],
+    tensor2: list[TensorValue],
+    scalars: list[Scalar],
+) -> list[TensorValue]:
+    if (
+        len(self) != len(tensor1)
+        or len(self) != len(tensor2)
+        or len(self) != len(scalars)
+    ):
+        raise ValueError(
+            f"Expected len(self) == len(tensor1) == len(tensor2) == len(scalars), but got {len(self)}, {len(tensor1)}, {len(tensor2)}, {len(scalars)}"
+        )
+    return [
+        aten_addcmul(s, t1, t2, value=val)
+        for s, t1, t2, val in zip(self, tensor1, tensor2, scalars)
+    ]
+
+
+# NOTE: _foreach_addcmul.Tensor is NOT supported
+# The .Tensor variant requires a 1-D CPU tensor with concrete values to extract scalars,
+# which is incompatible with torch.compile's meta tensor tracing.
+# Use .Scalar or .ScalarList variants instead.
+# See: https://github.com/pytorch/pytorch/issues/139795
 
 
 # masked_fill.Scalar(Tensor self, Tensor mask, Scalar value) -> Tensor
