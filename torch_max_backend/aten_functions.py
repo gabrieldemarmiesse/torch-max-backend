@@ -222,6 +222,143 @@ def aten__adaptive_avg_pool2d(
 
 
 # _adaptive_avg_pool2d_backward(Tensor grad_output, Tensor self) -> Tensor
+@map_to(aten._adaptive_avg_pool2d_backward)
+def aten__adaptive_avg_pool2d_backward(
+    grad_output: TensorValue, input_tensor: TensorValue
+) -> TensorValue:
+    """Compute gradient for adaptive average pooling 2d backward pass.
+
+    Args:
+        grad_output: Gradient from the output, shape (N, C, H_out, W_out) or (C, H_out, W_out)
+        input_tensor: Original input tensor, shape (N, C, H_in, W_in) or (C, H_in, W_in)
+
+    Returns:
+        Gradient with respect to input, same shape as input_tensor
+    """
+    # Get shapes
+    grad_shape = grad_output.shape
+    input_shape = input_tensor.shape
+
+    # Handle both 3D (C, H, W) and 4D (N, C, H, W) inputs
+    if len(input_shape) == 3:
+        # Add batch dimension
+        grad_output = grad_output.reshape([1] + list(grad_shape))
+        input_tensor_reshaped = input_tensor.reshape([1] + list(input_shape))
+        remove_batch = True
+    else:
+        input_tensor_reshaped = input_tensor
+        remove_batch = False
+
+    # Get dimensions
+    batch_size, channels, input_h, input_w = input_tensor_reshaped.shape
+    _, _, output_h, output_w = grad_output.shape
+
+    # Convert dimensions to int
+    output_h_val = int(output_h) if isinstance(output_h, Dim) else output_h
+    output_w_val = int(output_w) if isinstance(output_w, Dim) else output_w
+    input_h_val = int(input_h) if isinstance(input_h, Dim) else input_h
+    input_w_val = int(input_w) if isinstance(input_w, Dim) else input_w
+
+    # Initialize grad_input to zeros - use zeros_like approach
+    # Create a zero tensor by multiplying input by 0
+    grad_input = input_tensor_reshaped * 0.0
+
+    # Build a mask tensor that will accumulate gradients
+    # For each input position, we'll accumulate all gradients from output positions that include it
+    for oh in range(output_h_val):
+        for ow in range(output_w_val):
+            # Compute input region bounds using the adaptive pooling formula
+            ih_start = (oh * input_h_val) // output_h_val
+            ih_end = ((oh + 1) * input_h_val + output_h_val - 1) // output_h_val
+            iw_start = (ow * input_w_val) // output_w_val
+            iw_end = ((ow + 1) * input_w_val + output_w_val - 1) // output_w_val
+
+            # Compute kernel size for this region
+            kh = ih_end - ih_start
+            kw = iw_end - iw_start
+            region_size = kh * kw
+
+            # Get gradient for this output position
+            grad_val = grad_output[:, :, oh : oh + 1, ow : ow + 1]
+
+            # Divide by region size
+            grad_delta = grad_val / float(region_size)
+
+            # Broadcast grad_delta to the region size
+            values_region = max_ops.broadcast_to(
+                grad_delta, [batch_size, channels, kh, kw]
+            )
+
+            # Now we need to place values_region into mask at [ih_start:ih_end, iw_start:iw_end]
+            # Build the mask by concatenating parts using slices from grad_input (zeros)
+
+            # Top padding
+            if ih_start > 0:
+                top_padding = grad_input[:, :, :ih_start, :] * 0  # Ensure it's zeros
+                # Middle section with values_region
+                # Left padding
+                if iw_start > 0:
+                    left_padding = grad_input[:, :, :kh, :iw_start] * 0
+                    middle_with_left = max_ops.concat(
+                        [left_padding, values_region], axis=3
+                    )
+                else:
+                    middle_with_left = values_region
+
+                # Right padding
+                if iw_end < input_w_val:
+                    right_padding = grad_input[:, :, :kh, : (input_w_val - iw_end)] * 0
+                    middle_row = max_ops.concat(
+                        [middle_with_left, right_padding], axis=3
+                    )
+                else:
+                    middle_row = middle_with_left
+
+                # Bottom padding
+                if ih_end < input_h_val:
+                    bottom_padding = grad_input[:, :, : (input_h_val - ih_end), :] * 0
+                    mask = max_ops.concat(
+                        [top_padding, middle_row, bottom_padding], axis=2
+                    )
+                else:
+                    mask = max_ops.concat([top_padding, middle_row], axis=2)
+            else:
+                # No top padding
+                # Left padding
+                if iw_start > 0:
+                    left_padding = grad_input[:, :, :kh, :iw_start] * 0
+                    middle_with_left = max_ops.concat(
+                        [left_padding, values_region], axis=3
+                    )
+                else:
+                    middle_with_left = values_region
+
+                # Right padding
+                if iw_end < input_w_val:
+                    right_padding = grad_input[:, :, :kh, : (input_w_val - iw_end)] * 0
+                    middle_row = max_ops.concat(
+                        [middle_with_left, right_padding], axis=3
+                    )
+                else:
+                    middle_row = middle_with_left
+
+                # Bottom padding
+                if ih_end < input_h_val:
+                    bottom_padding = grad_input[:, :, : (input_h_val - ih_end), :] * 0
+                    mask = max_ops.concat([middle_row, bottom_padding], axis=2)
+                else:
+                    mask = middle_row
+
+            # Add this mask to grad_input
+            grad_input = grad_input + mask
+
+    # Remove batch dimension if it was added
+    if remove_batch:
+        grad_input = grad_input.reshape(input_shape)
+
+    return grad_input
+
+
 # _adaptive_avg_pool3d(Tensor self, SymInt[3] output_size) -> Tensor
 # _cdist_forward(Tensor x1, Tensor x2, float p, int? compute_mode) -> Tensor
 # _embedding_bag(Tensor weight, Tensor indices, Tensor offsets, bool scale_grad_by_freq=False, int mode=0, bool sparse=False, Tensor? per_sample_weights=None, bool include_last_offset=False, int padding_idx=-1) -> (Tensor, Tensor, Tensor, Tensor)
