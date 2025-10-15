@@ -1259,6 +1259,89 @@ def test_aten_trigon_scalar_tensor(device: str, fn: Callable):
     check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_aten_select_scatter_basic_2d(device: str, dtype: torch.dtype):
+    """Test aten.select_scatter basic functionality with 2D tensors"""
+
+    def fn(self, src):
+        return aten.select_scatter(self, src, dim=0, index=1)
+
+    # Replace row 1 with new values
+    self = torch.zeros(3, 4, dtype=dtype, device=device)
+    src = torch.ones(4, dtype=dtype, device=device) * 5
+
+    check_functions_are_equivalent(fn, device, [self, src])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.int64])
+def test_aten_select_scatter_dim1(device: str, dtype: torch.dtype):
+    """Test aten.select_scatter along dimension 1"""
+
+    def fn(self, src):
+        return aten.select_scatter(self, src, dim=1, index=2)
+
+    # Replace column 2 with new values
+    self = torch.zeros(3, 4, dtype=dtype, device=device)
+    src = torch.ones(3, dtype=dtype, device=device) * 7
+
+    check_functions_are_equivalent(fn, device, [self, src])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_aten_select_scatter_3d_tensor(device: str, dtype: torch.dtype):
+    """Test aten.select_scatter with 3D tensor"""
+    if device == "cpu" and dtype == torch.float16:
+        pytest.skip("float16 not supported on CPU in MAX")
+
+    def fn(self, src):
+        return aten.select_scatter(self, src, dim=1, index=2)
+
+    # Replace middle slice along dimension 1
+    self = torch.zeros(2, 4, 3, dtype=dtype, device=device)
+    src = torch.randn(2, 3, dtype=dtype, device=device)
+
+    check_functions_are_equivalent(fn, device, [self, src])
+
+
+def test_aten_select_scatter_negative_dim(device: str):
+    """Test aten.select_scatter with negative dimension"""
+
+    def fn(self, src):
+        return aten.select_scatter(self, src, dim=-1, index=1)
+
+    # Negative dimension indexing (dim=-1 is last dimension)
+    self = torch.zeros(3, 4, dtype=torch.float32, device=device)
+    src = torch.ones(3, dtype=torch.float32, device=device) * 2
+
+    check_functions_are_equivalent(fn, device, [self, src])
+
+
+def test_aten_select_scatter_negative_index(device: str):
+    """Test aten.select_scatter with negative index"""
+
+    def fn(self, src):
+        return aten.select_scatter(self, src, dim=0, index=-1)
+
+    # Negative index (index=-1 is last index)
+    self = torch.zeros(3, 4, dtype=torch.float32, device=device)
+    src = torch.ones(4, dtype=torch.float32, device=device) * 3
+
+    check_functions_are_equivalent(fn, device, [self, src])
+
+
+def test_aten_select_scatter_scalar_src(device: str):
+    """Test aten.select_scatter with scalar src (1D self)"""
+
+    def fn(self, src):
+        return aten.select_scatter(self, src, dim=0, index=1)
+
+    # When self is 1D, src is a scalar (0D tensor)
+    self = torch.zeros(3, dtype=torch.float32, device=device)
+    src = torch.tensor(5.0, dtype=torch.float32, device=device)
+
+    check_functions_are_equivalent(fn, device, [self, src])
+
+
 @pytest.mark.parametrize("repeats", [1, 2, 3, 5])
 @pytest.mark.parametrize("dim", [0, 1, -1])
 def test_aten_repeat_interleave_basic(device: str, repeats: int, dim: int):

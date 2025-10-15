@@ -2333,6 +2333,55 @@ def aten_select(input: TensorValue, dim: int, index: SymIntType) -> TensorValue:
 
 
 # select_scatter(Tensor self, Tensor src, int dim, SymInt index) -> Tensor
+@map_to(aten.select_scatter)
+def aten_select_scatter(
+    input: TensorValue, src: TensorValue, dim: int, index: int
+) -> TensorValue:
+    """Embeds src values into input at the specified index along dimension dim.
+
+    This is the inverse of select: given input with shape (d0, d1, ..., d_dim, ..., dn),
+    and src with shape (d0, d1, ..., d_{dim-1}, d_{dim+1}, ..., dn),
+    returns a tensor with input's shape where input[..., index, ...] = src.
+
+    Implementation using where + mask:
+        1. Create mask that is True only at the target index along dim
+        2. Unsqueeze src to add back the dimension
+        3. Broadcast src to match input's shape
+        4. Use where to selectively replace values
+    """
+    # Handle negative dimension
+    if dim < 0:
+        dim = dim + len(input.shape)
+
+    # Handle negative index
+    dim_size = input.shape[dim]
+    if index < 0:
+        index = index + dim_size
+
+    # Step 1: Create a range tensor for the dimension to build the mask
+    indices = max_ops.range(0, dim_size, 1, dtype=DType.int64, device=input.device)
+
+    # Step 2: Create 1D boolean mask where indices == index
+    index_tensor = max_ops.constant(index, dtype=DType.int64, device=input.device)
+    mask_1d = max_ops.equal(indices, index_tensor)
+
+    # Step 3: Reshape mask to have correct broadcasting shape
+    # All dimensions except 'dim' should be 1
+    mask_shape = [StaticDim(1)] * len(input.shape)
+    mask_shape[dim] = dim_size
+    mask = max_ops.reshape(mask_1d, mask_shape)
+
+    # Step 4: Broadcast mask to input's shape
+    mask_expanded = max_ops.broadcast_to(mask, input.shape)
+
+    # Step 5: Unsqueeze src to add back the dimension
+    src_unsqueezed = max_ops.unsqueeze(src, dim)
+
+    # Step 6: Broadcast src to match input's shape
+    src_expanded = max_ops.broadcast_to(src_unsqueezed, input.shape)
+
+    # Step 7: Use where to select: where mask is True, use src, else use input
+    return max_ops.where(mask_expanded, src_expanded, input)
 
 
 # sigmoid(Tensor self) -> Tensor
