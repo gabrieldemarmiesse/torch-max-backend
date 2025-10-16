@@ -1199,7 +1199,7 @@ def test_aten_trigon_basic(device: str, fn: Callable, dtype: torch.dtype):
     """Test trigonometric functions basic functionality with floating point numbers"""
 
     if device == "cuda" and dtype == torch.float64 and fn == aten.asinh:
-        pytest.xfail("float64-cuda-asinh currently fails in MAX")
+        pytest.xfail("could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d'")
 
     # Test with positive, negative, and zero values
     # cosh(0) = 1, cosh is even function: cosh(-x) = cosh(x)
