@@ -78,10 +78,12 @@ struct AdaptiveAvgPool2dBackwardKernel:
 
                         # Compute gradient delta (divided by region size for averaging)
                         var grad_delta = grad_val / Scalar[dtype](region_size)
-
                         # Distribute gradient to all input positions in this region
                         for ih in range(ih_start, ih_end):
                             for iw in range(iw_start, iw_end):
                                 var grad_in_idx = IndexList[rank](n, c, ih, iw)
-                                var current_grad = grad_input.load[1](grad_in_idx)
+                                var current_grad = grad_output.load[1](grad_in_idx)
+                                # using grad_input raises this compiling error:
+                                # loading not supported for output tensors
+                                # var current_grad = grad_input.load[1](grad_in_idx)
                                 grad_input.store[1](grad_in_idx, current_grad + grad_delta)
