@@ -268,6 +268,22 @@ def max_device_aten_ones(
     return TorchMaxTensor._from_max_data(max_eager_tensor)
 
 
+@register_aten_op("aten::zeros")
+def max_device_aten_zeros(
+    size: list[int],
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+) -> TorchMaxTensor:
+    dtype = torch.float32 if dtype is None else dtype
+    dtype = DType.from_torch(dtype)
+    device = find_equivalent_max_device(device)
+    max_eager_tensor = MaxEagerTensor.zeros(size, dtype=dtype, device=device)
+    return TorchMaxTensor._from_max_data(max_eager_tensor)
+
+
 @register_aten_op("aten::pow.Tensor_Scalar")
 def max_device_aten_pow(input: TorchMaxTensor, exponent) -> TorchMaxTensor:
     return TorchMaxTensor._from_max_data(F.pow(input._max_data, exponent))
