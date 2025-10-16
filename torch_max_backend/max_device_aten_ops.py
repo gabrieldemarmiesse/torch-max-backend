@@ -117,19 +117,28 @@ def max_device_aten_sqrt(x: TorchMaxTensor):
 
 @register_aten_op("aten::arange")
 def max_device_aten_arange_start_out(
-    start,
-    end=None,
-    step=1,
+    start: int | float,
+    end: int | float | None = None,
+    step: int | float = 1,
     *,
     dtype: torch.dtype | None = None,
     layout: torch.layout | None = None,
     device: torch.device | None = None,
     pin_memory: bool | None = None,
 ) -> TorchMaxTensor:
-    dtype = torch.float32 if dtype is None else dtype
+    dtype = torch.int64 if dtype is None else dtype
     dtype = DType.from_torch(dtype)
     device = find_equivalent_max_device(device)
-    max_eager_tensor = F.range(start, end, step, dtype=dtype, device=device)
+
+    if end is None:
+        end = start
+        start = 0
+
+    out_dim = ((end - start) + (step - 1)) // step
+
+    max_eager_tensor = F.range(
+        start, end, step, out_dim=out_dim, dtype=dtype, device=device
+    )
     return TorchMaxTensor._from_max_data(max_eager_tensor)
 
 
