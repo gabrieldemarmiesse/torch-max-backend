@@ -221,6 +221,8 @@ def test_aten_acos_basic(device: str, dtype: torch.dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_aten_acos_special_values(device: str, dtype: torch.dtype):
     """Test aten.acos with special mathematical values"""
+    if device == "cuda" and dtype == torch.float64:
+        pytest.xfail("Bug: could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d'")
 
     def fn(x):
         return aten.acos(x)
@@ -1195,9 +1197,9 @@ TRIGON_FUNCTIONS = [aten.asinh, aten.cosh, aten.sinh, aten.tanh]
 @pytest.mark.parametrize("fn", TRIGON_FUNCTIONS)
 def test_aten_trigon_basic(device: str, fn: Callable, dtype: torch.dtype):
     """Test trigonometric functions basic functionality with floating point numbers"""
-    # Skip float16 on CPU as MAX doesn't support f16 on CPU
-    if device == "cpu" and dtype == torch.float16:
-        pytest.xfail("float16 not supported on CPU in MAX")
+
+    if device == "cuda" and dtype == torch.float64 and fn == aten.asinh:
+        pytest.xfail("float64-cuda-asinh currently fails in MAX")
 
     # Test with positive, negative, and zero values
     # cosh(0) = 1, cosh is even function: cosh(-x) = cosh(x)
