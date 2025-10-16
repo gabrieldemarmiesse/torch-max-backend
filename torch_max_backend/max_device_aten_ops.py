@@ -54,6 +54,7 @@ def max_device_aten_mul(input: TorchMaxTensor, other: TorchMaxTensor) -> TorchMa
     return TorchMaxTensor._from_max_data(input._max_data * other._max_data)
 
 
+# TODO: We should try to reuse the sum from aten_functions.py
 @register_aten_op("aten::sum.dim_IntList")
 def max_device_aten_sum(
     input: TorchMaxTensor,
