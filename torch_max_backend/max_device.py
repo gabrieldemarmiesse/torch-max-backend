@@ -14,6 +14,28 @@ from torch_max_backend import (
     torch_max_device_module,
 )
 
+# Global registry for functions to register
+_aten_ops_registry: list[tuple[str, Callable]] = []
+
+
+def register_aten_op(op_name: str):
+    """Decorator to mark a function for aten op registration.
+
+    Args:
+        op_name: The aten operation name (e.g., "aten::add.Tensor")
+
+    Usage:
+        @register_aten_op("aten::add.Tensor")
+        def max_device_aten_add(input, other, alpha=1):
+            return execute_with_max_graph(aten.add, (input, other, alpha), {})
+    """
+
+    def decorator(func: Callable) -> Callable:
+        _aten_ops_registry.append((op_name, func))
+        return func
+
+    return decorator
+
 
 class UseStockImplementation(Exception):
     pass
@@ -122,27 +144,22 @@ class MaxTensor(torch.Tensor):
         return super().__sub__(self, other)
 
 
+@register_aten_op("aten::add.Tensor")
 def max_device_aten_add(input, other, alpha=1):
     return execute_with_max_graph(aten.add, (input, other, alpha), {})
 
 
-torch.library.impl("aten::add.Tensor", "privateuseone")(max_device_aten_add)
-
-
+@register_aten_op("aten::sub.Tensor")
 def max_device_aten_sub(input, other, alpha=1):
     return execute_with_max_graph(aten.sub, (input, other, alpha), {})
 
 
-torch.library.impl("aten::sub.Tensor", "privateuseone")(max_device_aten_sub)
-
-
+@register_aten_op("aten::mul.Tensor")
 def max_device_aten_mul(input, other):
     return execute_with_max_graph(aten.mul, (input, other), {})
 
 
-torch.library.impl("aten::mul.Tensor", "privateuseone")(max_device_aten_mul)
-
-
+@register_aten_op("aten::sum.dim_IntList")
 def max_device_aten_sum(
     input,
     dim: list[int] | int | None = None,
@@ -151,9 +168,6 @@ def max_device_aten_sum(
     dtype: torch.dtype | None = None,
 ):
     return execute_with_max_graph(aten.sum, (input, dim, keepdim), dict(dtype=dtype))
-
-
-torch.library.impl("aten::sum.dim_IntList", "privateuseone")(max_device_aten_sum)
 
 
 def make_hashable(obj):
@@ -292,6 +306,8 @@ def make_max_tensor_from_max(tensor: max.driver.Tensor) -> MaxTensor:
     return MaxTensor(shape, dtype=dtype, max_data=tensor)
 
 
+@register_aten_op("aten::empty_strided.memory_format")
+@register_aten_op("aten::empty_strided")
 def empty_strided(
     size, stride, *, dtype=None, layout=None, device=None, pin_memory=None
 ):
@@ -310,10 +326,7 @@ def empty_strided(
     return a
 
 
-torch.library.impl("aten::empty_strided.memory_format", "privateuseone")(empty_strided)
-torch.library.impl("aten::empty_strided", "privateuseone")(empty_strided)
-
-
+@register_aten_op("aten::_copy_from")
 def max_device__copy_from(self, dest):
     if self.device.type == "max_device" and dest.device.type == "cpu":
         x = torch.from_numpy(self._max_data.to_numpy())
@@ -330,9 +343,7 @@ def max_device__copy_from(self, dest):
         )
 
 
-torch.library.impl("aten::_copy_from", "privateuseone")(max_device__copy_from)
-
-
+@register_aten_op("aten::empty.memory_format")
 def max_device_empty_memory_format(
     size, *, dtype=None, layout=None, device=None, pin_memory=None, memory_format=None
 ):
@@ -351,18 +362,12 @@ def max_device_empty_memory_format(
     )
 
 
-torch.library.impl("aten::empty.memory_format", "privateuseone")(
-    max_device_empty_memory_format
-)
-
-
+@register_aten_op("aten::sqrt")
 def max_device_aten_sqrt(x):
     return execute_with_max_graph(aten.sqrt, (x,), {})
 
 
-torch.library.impl("aten::sqrt", "privateuseone")(max_device_aten_sqrt)
-
-
+@register_aten_op("aten::arange")
 def max_device_aten_arange_start_out(
     start,
     end=None,
@@ -388,24 +393,25 @@ def max_device_aten_arange_start_out(
     )
 
 
-torch.library.impl("aten::arange", "privateuseone")(max_device_aten_arange_start_out)
-
-
+@register_aten_op("aten::pow.Tensor_Scalar")
 def max_device_aten_pow(input, exponent):
     return execute_with_max_graph(aten.pow, (input, exponent), {})
 
-
-torch.library.impl("aten::pow.Tensor_Scalar", "privateuseone")(max_device_aten_pow)
 
 _registered = False
 
 
 def register_max_devices():
-    """Enable the max_device globally"""
+    """Enable the max_device globally and register all aten ops"""
     global _registered
     if _registered:
         # Already registered
         return
 
     _setup_privateuseone_for_python_backend("max_device")
+
+    # Register all collected aten operations
+    for op_name, func in _aten_ops_registry:
+        torch.library.impl(op_name, "privateuseone")(func)
+
     _registered = True
