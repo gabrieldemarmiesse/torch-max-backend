@@ -62,7 +62,33 @@ def max_device_aten_sum(
     *,
     dtype: torch.dtype | None = None,
 ) -> TorchMaxTensor:
-    pass
+    result = input._max_data
+
+    # Handle dtype conversion
+    if dtype is not None:
+        max_dtype = DType.from_torch(dtype)
+        result = F.cast(result, dtype=max_dtype)
+
+    # Normalize dim parameter
+    if not dim:
+        dim = tuple(range(len(result.shape)))
+    elif isinstance(dim, int):
+        dim = (dim,)
+
+    # Handle negative dimensions
+    dim = [x if x >= 0 else len(result.shape) + x for x in dim]
+
+    # Sum over each dimension
+    for axis in sorted(dim, reverse=True):
+        result = F.sum(result, axis=axis)
+
+    # Handle keepdim=False - squeeze the reduced dimensions
+    if not keepdim:
+        # MAX's sum keeps dimensions by default, so we need to squeeze
+        for axis in sorted(dim, reverse=True):
+            result = F.squeeze(result, axis=axis)
+
+    return TorchMaxTensor._from_max_data(result)
 
 
 @register_aten_op("aten::empty_strided.memory_format")

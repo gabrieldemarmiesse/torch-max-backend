@@ -143,16 +143,19 @@ def test_multiple_conversions():
     cpu1 = max2.to("cpu")
     cpu2 = cpu1.to("cpu")  # Should work normally
 
-    # TODO: make assert_close work
-    assert torch.sum((max1 - max2) ** 2).to("cpu").item() == 0
+    # Test operations step by step for clearer errors
+    diff = max1 - max2
+    squared = diff**2
+    summed = torch.sum(squared)
+    cpu_result = summed.to("cpu")
+    result_value = cpu_result.item()
+    assert result_value == 0
 
     torch.testing.assert_close(cpu2, tensor)
 
 
 def test_device_ordering():
     """Test that device ordering follows GPU first, CPU last convention"""
-    from torch_max_backend.max_device import get_ordered_accelerators
-
     ordered_accelerators = get_ordered_accelerators()
 
     # Check that we have both GPU and CPU
