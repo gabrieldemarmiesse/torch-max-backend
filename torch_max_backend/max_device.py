@@ -124,22 +124,27 @@ class MaxTensor(torch.Tensor):
         return super().__sub__(self, other)
 
 
-@torch.library.impl("aten::add.Tensor", "privateuseone")
 def max_device_aten_add(input, other, alpha=1):
     return execute_with_max_graph(aten.add, (input, other, alpha), {})
 
 
-@torch.library.impl("aten::sub.Tensor", "privateuseone")
+torch.library.impl("aten::add.Tensor", "privateuseone")(max_device_aten_add)
+
+
 def max_device_aten_sub(input, other, alpha=1):
     return execute_with_max_graph(aten.sub, (input, other, alpha), {})
 
 
-@torch.library.impl("aten::mul.Tensor", "privateuseone")
+torch.library.impl("aten::sub.Tensor", "privateuseone")(max_device_aten_sub)
+
+
 def max_device_aten_mul(input, other):
     return execute_with_max_graph(aten.mul, (input, other), {})
 
 
-@torch.library.impl("aten::sum.dim_IntList", "privateuseone")
+torch.library.impl("aten::mul.Tensor", "privateuseone")(max_device_aten_mul)
+
+
 def max_device_aten_sum(
     input,
     dim: list[int] | int | None = None,
@@ -148,6 +153,9 @@ def max_device_aten_sum(
     dtype: torch.dtype | None = None,
 ):
     return execute_with_max_graph(aten.sum, (input, dim, keepdim), dict(dtype=dtype))
+
+
+torch.library.impl("aten::sum.dim_IntList", "privateuseone")(max_device_aten_sum)
 
 
 def make_hashable(obj):
@@ -308,7 +316,6 @@ aten_library.impl("empty_strided.memory_format", empty_strided, "PrivateUse1")
 aten_library.impl("empty_strided", empty_strided, "PrivateUse1")
 
 
-@torch.library.impl("aten::_copy_from", "privateuseone")
 def max_device__copy_from(self, dest):
     if self.device.type == "max_device" and dest.device.type == "cpu":
         x = torch.from_numpy(self._max_data.to_numpy())
@@ -325,7 +332,9 @@ def max_device__copy_from(self, dest):
         )
 
 
-@torch.library.impl("aten::empty.memory_format", "privateuseone")
+torch.library.impl("aten::_copy_from", "privateuseone")(max_device__copy_from)
+
+
 def max_device_empty_memory_format(
     size, *, dtype=None, layout=None, device=None, pin_memory=None, memory_format=None
 ):
@@ -344,12 +353,18 @@ def max_device_empty_memory_format(
     )
 
 
-@torch.library.impl("aten::sqrt", "privateuseone")
+torch.library.impl("aten::empty.memory_format", "privateuseone")(
+    max_device_empty_memory_format
+)
+
+
 def max_device_aten_sqrt(x):
     return execute_with_max_graph(aten.sqrt, (x,), {})
 
 
-@torch.library.impl("aten::arange", "privateuseone")
+torch.library.impl("aten::sqrt", "privateuseone")(max_device_aten_sqrt)
+
+
 def max_device_aten_arange_start_out(
     start,
     end=None,
@@ -375,10 +390,14 @@ def max_device_aten_arange_start_out(
     )
 
 
-@torch.library.impl("aten::pow.Tensor_Scalar", "privateuseone")
+torch.library.impl("aten::arange", "privateuseone")(max_device_aten_arange_start_out)
+
+
 def max_device_aten_pow(input, exponent):
     return execute_with_max_graph(aten.pow, (input, exponent), {})
 
+
+torch.library.impl("aten::pow.Tensor_Scalar", "privateuseone")(max_device_aten_pow)
 
 _registered = False
 
