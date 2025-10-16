@@ -83,5 +83,6 @@ dev = [
     "pytest-cov>=7.0.0",
     "rich>=14.1.0",
     "matplotlib>=3.10.6",
+    "pytest-random-order>=1.2.0",
 ]
 
