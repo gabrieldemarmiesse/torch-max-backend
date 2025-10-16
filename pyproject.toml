@@ -96,5 +96,6 @@ dev = [
     "rich>=14.1.0",
     "matplotlib>=3.10.6",
     "pytest-random-order>=1.2.0",
+    "setuptools>=80.9.0",
 ]
 
