@@ -14,6 +14,7 @@ from torch_max_backend.compiler import (
 )
 from torch_max_backend.max_device import register_max_devices
 from torch_max_backend.torch_custom_ops import make_torch_op_from_mojo
+from torch_max_backend.torch_max_tensor import TorchMaxTensor
 
 __all__ = [
     "max_backend",
@@ -22,4 +23,5 @@ __all__ = [
     "MaxCompilerError",
     "register_max_devices",
     "make_torch_op_from_mojo",
+    "TorchMaxTensor",
 ]
