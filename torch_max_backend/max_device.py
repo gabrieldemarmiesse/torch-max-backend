@@ -14,8 +14,6 @@ from torch_max_backend import (
     torch_max_device_module,
 )
 
-aten_library = torch.library.Library("aten", "FRAGMENT")
-
 
 class UseStockImplementation(Exception):
     pass
@@ -312,8 +310,8 @@ def empty_strided(
     return a
 
 
-aten_library.impl("empty_strided.memory_format", empty_strided, "PrivateUse1")
-aten_library.impl("empty_strided", empty_strided, "PrivateUse1")
+torch.library.impl("aten::empty_strided.memory_format", "privateuseone")(empty_strided)
+torch.library.impl("aten::empty_strided", "privateuseone")(empty_strided)
 
 
 def max_device__copy_from(self, dest):
