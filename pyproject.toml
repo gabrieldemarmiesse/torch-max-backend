@@ -46,10 +46,18 @@ max-core = [
 mojo-compiler = [
     { index = "modular-nightly" },
 ]
+torch = [
+    { index = "pytorch-nightly" },
+]
 
 [[tool.uv.index]]
 name = "modular-nightly"
 url = "https://dl.modular.com/public/nightly/python/simple/"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-nightly"
+url = "https://download.pytorch.org/whl/nightly/cu130"
 explicit = true
 
 [tool.uv]
