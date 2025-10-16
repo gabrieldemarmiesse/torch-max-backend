@@ -49,6 +49,9 @@ mojo-compiler = [
 torch = [
     { index = "pytorch-nightly" },
 ]
+torchvision = [
+    { index = "pytorch-nightly" },
+]
 
 [[tool.uv.index]]
 name = "modular-nightly"
@@ -58,11 +61,12 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-nightly"
 url = "https://download.pytorch.org/whl/nightly/cu130"
-explicit = true
+explicit = false
 
 [tool.uv]
 prerelease = "allow"
 python-preference = "only-managed"
+index-strategy = "unsafe-best-match"
 
 [tool.ruff.format]
 skip-magic-trailing-comma = true
