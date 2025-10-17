@@ -26,6 +26,7 @@ from torch._ops import OpOverload, OpOverloadPacket
 from torch.ops import aten
 
 from torch_max_backend.flags import verbose_enabled
+from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerators
 
 MaxTensor = TensorValue | MaxEagerTensor
 
@@ -56,7 +57,6 @@ def torch_device_to_max_device(x: torch.device) -> DeviceRef:
         # index None or 0 = first accelerator (first GPU or CPU if no GPU)
         # higher indices = additional GPUs, with CPU at the highest index
         index = x.index if x.index is not None else 0
-        from torch_max_backend.max_device import get_ordered_accelerators
 
         accelerators = get_ordered_accelerators()
         if index >= len(accelerators):
@@ -2189,6 +2189,26 @@ def aten_nonzero(input: MaxTensor) -> MaxTensor:
     return max_ops.nonzero(input)
 
 
+# ones(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
+def aten_ones(
+    size: list[SymIntType],
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+) -> MaxEagerTensor:
+    if dtype is None:
+        dtype = torch.float32
+    dtype = DType.from_torch(dtype)
+
+    if device is None:
+        device = torch.get_default_device()
+    device = torch_device_to_max_device(device)
+
+    return MaxEagerTensor.ones(size, dtype=dtype, device=device)
+
+
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)
 @map_to(aten.permute)
 def aten_permute(x: MaxTensor, dims: list[int]) -> MaxTensor:
@@ -3191,6 +3211,21 @@ def aten__scaled_dot_product_efficient_attention(
 @map_to(aten.transpose)
 def aten_transpose(input: MaxTensor, dim0: int | Dim, dim1: int | Dim) -> MaxTensor:
     return max_ops.transpose(input, dim0, dim1)
+
+
+# zeros(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
+def aten_zeros(
+    size: list[SymIntType],
+    *,
+    dtype: torch.dtype | None = None,
+    layout=None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+) -> MaxTensor:
+    dtype = torch.float32 if dtype is None else dtype
+    dtype = DType.from_torch(dtype)
+    device = torch_device_to_max_device(device)
+    return MaxEagerTensor.zeros(size, dtype=dtype, device=device)
 
 
 if verbose_enabled():

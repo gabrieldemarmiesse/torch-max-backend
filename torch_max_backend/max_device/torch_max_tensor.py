@@ -4,11 +4,6 @@ import max.driver
 import torch
 from max.experimental.tensor import Tensor as MaxEagerTensor
 
-from torch_max_backend.torch_compile_backend.compiler import (
-    MAPPING_TORCH_ATEN_TO_MAX,
-    get_accelerators,
-)
-
 
 class TorchMaxTensor(torch.Tensor):
     """Custom tensor subclass that holds MAX engine data, similar to MyDeviceTensor in trying_stuff.py"""
@@ -42,6 +37,10 @@ class TorchMaxTensor(torch.Tensor):
 
 def get_max_equivalent(func) -> Callable:
     """Get the MAX equivalent of a torch operation"""
+    from torch_max_backend.torch_compile_backend.compiler import (
+        MAPPING_TORCH_ATEN_TO_MAX,
+    )
+
     if func in MAPPING_TORCH_ATEN_TO_MAX:
         return MAPPING_TORCH_ATEN_TO_MAX[func]
     elif (
@@ -57,6 +56,8 @@ def get_max_equivalent(func) -> Callable:
 
 def get_ordered_accelerators():
     """Get accelerators ordered with GPUs first, then CPU last"""
+    from torch_max_backend.torch_compile_backend.compiler import get_accelerators
+
     accelerators = list(get_accelerators())
 
     # Separate GPU and CPU accelerators
