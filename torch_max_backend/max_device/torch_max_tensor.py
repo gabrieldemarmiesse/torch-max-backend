@@ -34,6 +34,8 @@ class TorchMaxTensor(torch.Tensor):
         dtype = max_data.dtype.to_torch()
         return TorchMaxTensor(shape, dtype=dtype, max_data=max_data)
 
+    __torch_function__ = torch._C._disabled_torch_function_impl
+
 
 def get_max_equivalent(func) -> Callable:
     """Get the MAX equivalent of a torch operation"""

@@ -110,6 +110,7 @@ register_aten_op("aten::convolution")(
     wrap_for_max_device(aten_functions.aten_convolution)
 )
 register_aten_op("aten::view")(wrap_for_max_device(aten_functions.aten_view))
+register_aten_op("aten::detach")(wrap_for_max_device(aten_functions.aten_detach))
 
 
 @register_aten_op("aten::empty_strided.memory_format")
