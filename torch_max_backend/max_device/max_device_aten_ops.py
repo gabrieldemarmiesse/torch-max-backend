@@ -106,11 +106,28 @@ register_aten_op("aten::zeros")(wrap_for_max_device(aten_functions.aten_zeros))
 register_aten_op("aten::pow.Tensor_Scalar")(
     wrap_for_max_device(aten_functions.aten_pow)
 )
+register_aten_op("aten::max_pool2d_with_indices")(
+    wrap_for_max_device(aten_functions.aten_max_pool2d_with_indices)
+)
+register_aten_op("aten::_adaptive_avg_pool2d")(
+    wrap_for_max_device(aten_functions.aten__adaptive_avg_pool2d)
+)
+
 register_aten_op("aten::convolution")(
     wrap_for_max_device(aten_functions.aten_convolution)
 )
+register_aten_op("aten::t")(wrap_for_max_device(aten_functions.aten_t))
+register_aten_op("aten::addmm")(wrap_for_max_device(aten_functions.aten_addmm))
 register_aten_op("aten::view")(wrap_for_max_device(aten_functions.aten_view))
 register_aten_op("aten::detach")(wrap_for_max_device(aten_functions.aten_detach))
+register_aten_op("aten::relu")(wrap_for_max_device(aten_functions.aten_relu))
+
+
+@register_aten_op("aten::relu_")
+def max_device_relu_(self: TorchMaxTensor) -> TorchMaxTensor:
+    # in-place relu
+    self._max_data = aten_functions.aten_relu(self._max_data)
+    return self
 
 
 @register_aten_op("aten::empty_strided.memory_format")
