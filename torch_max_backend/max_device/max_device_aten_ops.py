@@ -164,11 +164,16 @@ def max_device_aten_full(
     device: torch.device | None = None,
     pin_memory: bool | None = None,
 ) -> TorchMaxTensor:
-    dtype = torch.float32 if dtype is None else dtype
-    dtype = DType.from_torch(dtype)
-    device = find_equivalent_max_device(device)
-    max_eager_tensor = MaxEagerTensor.full(size, fill_value, dtype=dtype, device=device)
-    return TorchMaxTensor._from_max_data(max_eager_tensor)
+    return TorchMaxTensor._from_max_data(
+        aten_functions.aten_full(
+            size,
+            fill_value,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            pin_memory=pin_memory,
+        )
+    )
 
 
 @register_aten_op("aten::ones")

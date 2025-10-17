@@ -1588,10 +1588,10 @@ def aten_full(
     device = torch_device_to_max_device(device)
 
     # Create a scalar constant with the fill value
-    scalar = max_ops.constant(fill_value, dtype=dtype, device=device)
+    scalar = F.constant(fill_value, dtype=dtype, device=device)
 
     # Broadcast the scalar to the target shape
-    return max_ops.broadcast_to(scalar, size)
+    return F.broadcast_to(scalar, size)
 
 
 # full_like(Tensor self, Scalar fill_value, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
