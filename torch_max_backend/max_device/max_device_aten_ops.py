@@ -38,8 +38,11 @@ def register_aten_op(op_name: str):
 
 def convert_all_torch_max_tensors_to_lazy(x: Any) -> Any:
     """Recursively convert all TorchMaxTensor instances in x to their max_data"""
-    print(x)
     if isinstance(x, TorchMaxTensor):
+        if not hasattr(x, "_max_data"):
+            raise RuntimeError(
+                "TorchMaxTensor does not have _max_data attribute, this is a bug"
+            )
         return x._max_data
     elif isinstance(x, list | tuple):
         return type(x)(convert_all_torch_max_tensors_to_lazy(item) for item in x)
