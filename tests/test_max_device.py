@@ -277,6 +277,14 @@ def test_device_creation(max_device):
     assert torch.allclose(arr_cpu, torch.tensor([0.0, 1.0, 2.0, 3.0]), atol=1e-4)
 
 
+def test_device_basic_full(max_device):
+    def do_full(device):
+        a = torch.full((2, 3), 7.0, device=device, dtype=torch.float32)
+        return a
+
+    function_equivalent_on_both_devices(do_full, max_device)
+
+
 @pytest.mark.xfail(reason="Fixme")
 def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)
