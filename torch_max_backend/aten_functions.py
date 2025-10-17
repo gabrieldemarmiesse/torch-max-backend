@@ -18,6 +18,7 @@ from max.dtype import DType
 from max.experimental import functional as F
 from max.experimental.tensor import Tensor as MaxEagerTensor
 from max.graph import Dim, StaticDim, TensorType, TensorValue
+from max.graph import ops as max_ops
 from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
 from torch._decomp import core_aten_decompositions
@@ -481,9 +482,9 @@ def flash_attention_gpu(
     if valid_length is not None:
         op_name = "mo.mha.padded.no_cache"
         values.append(valid_length)
-    values.append(F.constant(scale, dtype=DType.float32, device=DeviceRef.CPU()))
+    values.append(max_ops.constant(scale, dtype=DType.float32, device=DeviceRef.CPU()))
 
-    return F.custom(
+    return max_ops.custom(
         op_name,
         values=values,
         out_types=[TensorType(dtype=q.dtype, shape=q.shape, device=q.device)],
