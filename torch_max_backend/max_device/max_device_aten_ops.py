@@ -7,7 +7,7 @@ from max.dtype import DType
 from max.experimental import functional as F
 from max.experimental.tensor import Tensor as MaxEagerTensor
 
-from torch_max_backend.torch_max_tensor import (
+from torch_max_backend.max_device.torch_max_tensor import (
     TorchMaxTensor,
     find_equivalent_max_device,
 )

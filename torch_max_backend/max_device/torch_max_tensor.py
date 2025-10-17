@@ -4,10 +4,9 @@ import max.driver
 import torch
 from max.experimental.tensor import Tensor as MaxEagerTensor
 
-from torch_max_backend import (
+from torch_max_backend.torch_compile_backend.compiler import (
     MAPPING_TORCH_ATEN_TO_MAX,
     get_accelerators,
-    torch_max_device_module,
 )
 
 
@@ -70,7 +69,7 @@ def get_ordered_accelerators():
 
 def find_equivalent_torch_device(device: max.driver.Device) -> torch.device:
     if device.label == "cpu":
-        return torch_max_device_module.cpu()
+        return torch.device("cpu")
     elif device.label == "gpu":
         return torch.device(f"max_device:{device.id}")
 

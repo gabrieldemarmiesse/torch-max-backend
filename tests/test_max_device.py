@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from torch_max_backend import TorchMaxTensor, max_backend, register_max_devices
-from torch_max_backend.torch_max_tensor import (
+from torch_max_backend.max_device.torch_max_tensor import (
     find_equivalent_max_device,
     get_ordered_accelerators,
 )

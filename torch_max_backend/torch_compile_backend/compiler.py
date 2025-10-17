@@ -14,15 +14,18 @@ from max.graph import Graph, KernelLibrary
 from max.torch.torch import max_device_ref
 from torch._dynamo.backends.common import aot_autograd
 
-from torch_max_backend import debug
 from torch_max_backend.aten_functions import (
     DECOMPOSITION_TABLE,
     torch_device_to_max_device,
 )
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
-from torch_max_backend.utils import get_error_message, get_fully_qualified_name
+from torch_max_backend.torch_compile_backend import debug
+from torch_max_backend.torch_compile_backend.utils import (
+    get_error_message,
+    get_fully_qualified_name,
+)
 
-from .aten_functions import MAPPING_TORCH_ATEN_TO_MAX
+from ..aten_functions import MAPPING_TORCH_ATEN_TO_MAX
 from .utils import get_accelerators
 
 

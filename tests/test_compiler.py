@@ -11,7 +11,7 @@ from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
 import torch_max_backend
-import torch_max_backend.compiler
+import torch_max_backend.torch_compile_backend.compiler
 from torch_max_backend import (
     MAPPING_TORCH_ATEN_TO_MAX,
     make_torch_op_from_mojo,
@@ -610,7 +610,9 @@ def test_decomposition_overload(monkeypatch):
 
     # grab the input of init_compiler
     input_gm = None
-    init_compiler = torch_max_backend.compiler.BaseMaxCompiler.__init__
+    init_compiler = (
+        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler.__init__
+    )
 
     def fake_init_compiler(self, gm, *args, **kwargs):
         nonlocal input_gm
@@ -618,7 +620,9 @@ def test_decomposition_overload(monkeypatch):
         return init_compiler(self, gm, *args, **kwargs)
 
     monkeypatch.setattr(
-        torch_max_backend.compiler.BaseMaxCompiler, "__init__", fake_init_compiler
+        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler,
+        "__init__",
+        fake_init_compiler,
     )
 
     a = torch.compile(backend=max_backend)(fn)
@@ -640,7 +644,9 @@ def test_decomposition_overload_packet(monkeypatch):
 
     # grab the input of init_compiler
     input_gm = None
-    init_compiler = torch_max_backend.compiler.BaseMaxCompiler.__init__
+    init_compiler = (
+        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler.__init__
+    )
 
     def fake_init_compiler(self, gm, *args, **kwargs):
         nonlocal input_gm
@@ -648,7 +654,9 @@ def test_decomposition_overload_packet(monkeypatch):
         return init_compiler(self, gm, *args, **kwargs)
 
     monkeypatch.setattr(
-        torch_max_backend.compiler.BaseMaxCompiler, "__init__", fake_init_compiler
+        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler,
+        "__init__",
+        fake_init_compiler,
     )
 
     a = torch.compile(backend=max_backend)(fn)
