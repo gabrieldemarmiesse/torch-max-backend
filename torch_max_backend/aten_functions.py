@@ -1282,7 +1282,7 @@ def aten_convolution(
     # to MAX RSCF: [kernel_h, kernel_w, in_channels, out_channels]
     weight_rscf = weight.permute([2, 3, 1, 0])
 
-    result = max_ops.conv2d(
+    result = F.conv2d(
         input_nhwc,
         weight_rscf,
         bias=bias,

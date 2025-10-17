@@ -285,6 +285,22 @@ def test_device_basic_full(max_device):
     function_equivalent_on_both_devices(do_full, max_device)
 
 
+def test_convolution_2d(max_device):
+    input_tensor_cpu = torch.randn(1, 3, 32, 32, device="cpu")
+    weight_cpu = torch.randn(6, 3, 5, 5, device="cpu")
+    bias_cpu = torch.randn(6, device="cpu")
+
+    def do_convolution(device):
+        input_tensor = input_tensor_cpu.to(device)
+        weight = weight_cpu.to(device)
+        bias = bias_cpu.to(device)
+        return torch.nn.functional.conv2d(
+            input_tensor, weight, bias=bias, stride=1, padding=2
+        )
+
+    function_equivalent_on_both_devices(do_convolution, max_device)
+
+
 @pytest.mark.xfail(reason="Fixme")
 def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)

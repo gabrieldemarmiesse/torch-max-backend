@@ -102,6 +102,9 @@ register_aten_op("aten::zeros")(wrap_for_max_device(aten_functions.aten_zeros))
 register_aten_op("aten::pow.Tensor_Scalar")(
     wrap_for_max_device(aten_functions.aten_pow)
 )
+register_aten_op("aten::convolution")(
+    wrap_for_max_device(aten_functions.aten_convolution)
+)
 
 
 @register_aten_op("aten::empty_strided.memory_format")
