@@ -138,20 +138,17 @@ def max_device_aten_arange_start_out(
     device: torch.device | None = None,
     pin_memory: bool | None = None,
 ) -> TorchMaxTensor:
-    dtype = torch.int64 if dtype is None else dtype
-    dtype = DType.from_torch(dtype)
-    device = find_equivalent_max_device(device)
-
-    if end is None:
-        end = start
-        start = 0
-
-    out_dim = ((end - start) + (step - 1)) // step
-
-    max_eager_tensor = F.range(
-        start, end, step, out_dim=out_dim, dtype=dtype, device=device
+    return TorchMaxTensor._from_max_data(
+        aten_functions.aten_arange(
+            start,
+            end,
+            step,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            pin_memory=pin_memory,
+        )
     )
-    return TorchMaxTensor._from_max_data(max_eager_tensor)
 
 
 @register_aten_op("aten::full")
