@@ -2480,7 +2480,7 @@ def aten_split_with_sizes(
 # sqrt(Tensor self) -> Tensor
 @map_to(aten.sqrt)
 def aten_sqrt(x: MaxTensor) -> MaxTensor:
-    return max_ops.sqrt(x)
+    return F.sqrt(x)
 
 
 # squeeze.dim(Tensor(a) self, int dim) -> Tensor(a)

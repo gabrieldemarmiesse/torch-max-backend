@@ -1,10 +1,10 @@
 from collections.abc import Callable
+from typing import Any
 
 import max.driver
 import torch
 from max.driver import CPU
 from max.dtype import DType
-from max.experimental import functional as F
 from max.experimental.tensor import Tensor as MaxEagerTensor
 
 from torch_max_backend import aten_functions
@@ -36,45 +36,72 @@ def register_aten_op(op_name: str):
     return decorator
 
 
-@register_aten_op("aten::add.Tensor")
-def max_device_aten_add(
-    input: TorchMaxTensor, other: TorchMaxTensor, alpha=1
-) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(
-        aten_functions.aten_add(input._max_data, other._max_data, alpha=alpha)
-    )
+def convert_all_torch_max_tensors_to_lazy(x: Any) -> Any:
+    """Recursively convert all TorchMaxTensor instances in x to their max_data"""
+    if isinstance(x, TorchMaxTensor):
+        return x._max_data
+    elif isinstance(x, list | tuple):
+        return type(x)(convert_all_torch_max_tensors_to_lazy(item) for item in x)
+    elif isinstance(x, dict):
+        return {
+            key: convert_all_torch_max_tensors_to_lazy(value)
+            for key, value in x.items()
+        }
+    elif isinstance(
+        x, int | float | str | bool | type(None) | torch.dtype | torch.device
+    ):
+        return x
+    else:
+        raise TypeError(
+            f"Unsupported type to automatically convert to lazy tensors: {type(x)}"
+        )
 
 
-@register_aten_op("aten::sub.Tensor")
-def max_device_aten_sub(
-    input: TorchMaxTensor, other: TorchMaxTensor, alpha=1
-) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(
-        aten_functions.aten_sub(input._max_data, other._max_data, alpha=alpha)
-    )
+def convert_all_lazy_to_torch_max_tensors(x: Any) -> Any:
+    if isinstance(x, MaxEagerTensor):
+        return TorchMaxTensor._from_max_data(x)
+    elif isinstance(x, list | tuple):
+        return type(x)(convert_all_lazy_to_torch_max_tensors(item) for item in x)
+    elif isinstance(x, dict):
+        return {
+            key: convert_all_lazy_to_torch_max_tensors(value)
+            for key, value in x.items()
+        }
+    elif isinstance(
+        x, int | float | str | bool | type(None) | torch.dtype | torch.device
+    ):
+        return x
+    else:
+        raise TypeError(
+            f"Unsupported type to automatically convert to TorchMaxTensor: {type(x)}"
+        )
 
 
-@register_aten_op("aten::mul.Tensor")
-def max_device_aten_mul(input: TorchMaxTensor, other: TorchMaxTensor) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(
-        aten_functions.aten_mul(input._max_data, other._max_data)
-    )
+def wrap_for_max_device(func: Callable) -> Callable:
+    def wrapper(*args, **kwargs):
+        args, kwargs = convert_all_torch_max_tensors_to_lazy((args, kwargs))
+        result = func(*args, **kwargs)
+        return convert_all_lazy_to_torch_max_tensors(result)
+
+    return wrapper
 
 
-# TODO: We should try to reuse the sum from aten_functions.py
-@register_aten_op("aten::sum.dim_IntList")
-def max_device_aten_sum(
-    input: TorchMaxTensor,
-    dim: list[int] | int | None = None,
-    keepdim: bool = False,
-    *,
-    dtype: torch.dtype | None = None,
-) -> TorchMaxTensor:
-    result = aten_functions.aten_sum(
-        input._max_data, dim=dim, keepdim=keepdim, dtype=dtype
-    )
+# ----------------------------------------------------------------------------------
+# List of registered aten ops for max_device
+# ----------------------------------------------------------------------------------
 
-    return TorchMaxTensor._from_max_data(result)
+register_aten_op("aten::add.Tensor")(wrap_for_max_device(aten_functions.aten_add))
+register_aten_op("aten::sub.Tensor")(wrap_for_max_device(aten_functions.aten_sub))
+register_aten_op("aten::mul.Tensor")(wrap_for_max_device(aten_functions.aten_mul))
+register_aten_op("aten::sum.dim_IntList")(wrap_for_max_device(aten_functions.aten_sum))
+register_aten_op("aten::sqrt")(wrap_for_max_device(aten_functions.aten_sqrt))
+register_aten_op("aten::arange")(wrap_for_max_device(aten_functions.aten_arange))
+register_aten_op("aten::full")(wrap_for_max_device(aten_functions.aten_full))
+register_aten_op("aten::ones")(wrap_for_max_device(aten_functions.aten_ones))
+register_aten_op("aten::zeros")(wrap_for_max_device(aten_functions.aten_zeros))
+register_aten_op("aten::pow.Tensor_Scalar")(
+    wrap_for_max_device(aten_functions.aten_pow)
+)
 
 
 @register_aten_op("aten::empty_strided.memory_format")
@@ -120,91 +147,3 @@ def max_device_empty_memory_format(
     return TorchMaxTensor._from_max_data(
         MaxEagerTensor.zeros(size, dtype=dtype, device=device)
     )
-
-
-@register_aten_op("aten::sqrt")
-def max_device_aten_sqrt(x: TorchMaxTensor):
-    return TorchMaxTensor._from_max_data(F.sqrt(x._max_data))
-
-
-@register_aten_op("aten::arange")
-def max_device_aten_arange_start_out(
-    start: int | float,
-    end: int | float | None = None,
-    step: int | float = 1,
-    *,
-    dtype: torch.dtype | None = None,
-    layout: torch.layout | None = None,
-    device: torch.device | None = None,
-    pin_memory: bool | None = None,
-) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(
-        aten_functions.aten_arange(
-            start,
-            end,
-            step,
-            dtype=dtype,
-            layout=layout,
-            device=device,
-            pin_memory=pin_memory,
-        )
-    )
-
-
-@register_aten_op("aten::full")
-def max_device_aten_full(
-    size: list[int],
-    fill_value: int | float,
-    *,
-    dtype: torch.dtype | None = None,
-    layout: torch.layout | None = None,
-    device: torch.device | None = None,
-    pin_memory: bool | None = None,
-) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(
-        aten_functions.aten_full(
-            size,
-            fill_value,
-            dtype=dtype,
-            layout=layout,
-            device=device,
-            pin_memory=pin_memory,
-        )
-    )
-
-
-@register_aten_op("aten::ones")
-def max_device_aten_ones(
-    size: list[int],
-    *,
-    dtype: torch.dtype | None = None,
-    layout: torch.layout | None = None,
-    device: torch.device | None = None,
-    pin_memory: bool | None = None,
-) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(
-        aten_functions.aten_ones(
-            size, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
-        )
-    )
-
-
-@register_aten_op("aten::zeros")
-def max_device_aten_zeros(
-    size: list[int],
-    *,
-    dtype: torch.dtype | None = None,
-    layout: torch.layout | None = None,
-    device: torch.device | None = None,
-    pin_memory: bool | None = None,
-) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(
-        aten_functions.aten_zeros(
-            size, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
-        )
-    )
-
-
-@register_aten_op("aten::pow.Tensor_Scalar")
-def max_device_aten_pow(input: TorchMaxTensor, exponent) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(F.pow(input._max_data, exponent))
