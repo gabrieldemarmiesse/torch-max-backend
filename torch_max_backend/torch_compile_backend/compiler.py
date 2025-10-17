@@ -45,7 +45,7 @@ class GlobalMaxObjects:
 
 _global_max_objects: GlobalMaxObjects | None = None
 
-paths_to_mojo_kernels = [Path(__file__).parent / "mojo_kernels"]
+paths_to_mojo_kernels = [Path(__file__).parent.parent / "mojo_kernels"]
 
 
 def global_max_objects() -> GlobalMaxObjects:
