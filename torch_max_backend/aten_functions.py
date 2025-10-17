@@ -16,6 +16,8 @@ import max.graph.type as max_type
 import numpy as np
 import torch
 from max.dtype import DType
+from max.experimental import functional as F
+from max.experimental.tensor import Tensor as MaxEagerTensor
 from max.graph import Dim, StaticDim, TensorType, TensorValue
 from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
@@ -24,6 +26,8 @@ from torch._ops import OpOverload, OpOverloadPacket
 from torch.ops import aten
 
 from torch_max_backend.flags import verbose_enabled
+
+MaxTensor = TensorValue | MaxEagerTensor
 
 
 def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
@@ -2490,15 +2494,15 @@ def aten_sub(
 # sum.dim_IntList(Tensor self, int[1]? dim, bool keepdim=False, *, ScalarType? dtype=None) -> Tensor
 @map_to(aten.sum)
 def aten_sum(
-    input: TensorValue,
+    input: MaxTensor,
     dim: list[int] | int | None = None,
     keepdim: bool = False,
     *,
     dtype: torch.dtype | None = None,
-) -> TensorValue:
+) -> MaxTensor:
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
-        input = max_ops.cast(input, dtype=max_dtype)
+        input = F.cast(input, dtype=max_dtype)
 
     result = input
 
@@ -2511,13 +2515,13 @@ def aten_sum(
 
     # Sum over each dimension
     for axis in sorted(dim, reverse=True):
-        result = max_ops.sum(result, axis=axis)
+        result = F.sum(result, axis=axis)
 
     # Handle keepdim=False - squeeze the reduced dimensions
     if not keepdim:
         # MAX's sum keeps dimensions by default, so we need to squeeze
         for axis in sorted(dim, reverse=True):
-            result = max_ops.squeeze(result, axis=axis)
+            result = F.squeeze(result, axis=axis)
 
     return result
 
@@ -2546,12 +2550,12 @@ def aten_unsqueeze(tensor: TensorValue, dim: int) -> TensorValue:
 
 # view(Tensor(a) self, SymInt[] size) -> Tensor(a)
 @map_to(aten.view)
-def aten_view(tensor: TensorValue, *shape) -> TensorValue:
+def aten_view(tensor: MaxTensor, *shape) -> MaxTensor:
     if len(shape) == 1 and isinstance(shape[0], tuple | list):
         target_shape = list(shape[0])
     else:
         target_shape = list(shape)
-    return max_ops.reshape(tensor, target_shape)
+    return F.reshape(tensor, target_shape)
 
 
 # where.self(Tensor condition, Tensor self, Tensor other) -> Tensor
