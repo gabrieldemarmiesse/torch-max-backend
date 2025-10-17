@@ -40,19 +40,25 @@ def register_aten_op(op_name: str):
 def max_device_aten_add(
     input: TorchMaxTensor, other: TorchMaxTensor, alpha=1
 ) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(input._max_data + other._max_data * alpha)
+    return TorchMaxTensor._from_max_data(
+        aten_functions.aten_add(input._max_data, other._max_data, alpha=alpha)
+    )
 
 
 @register_aten_op("aten::sub.Tensor")
 def max_device_aten_sub(
     input: TorchMaxTensor, other: TorchMaxTensor, alpha=1
 ) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(input._max_data - other._max_data * alpha)
+    return TorchMaxTensor._from_max_data(
+        aten_functions.aten_sub(input._max_data, other._max_data, alpha=alpha)
+    )
 
 
 @register_aten_op("aten::mul.Tensor")
 def max_device_aten_mul(input: TorchMaxTensor, other: TorchMaxTensor) -> TorchMaxTensor:
-    return TorchMaxTensor._from_max_data(input._max_data * other._max_data)
+    return TorchMaxTensor._from_max_data(
+        aten_functions.aten_mul(input._max_data, other._max_data)
+    )
 
 
 # TODO: We should try to reuse the sum from aten_functions.py
