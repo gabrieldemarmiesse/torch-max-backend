@@ -1705,7 +1705,6 @@ def aten_index(input: MaxTensor, indices: list[MaxTensor | None]) -> MaxTensor:
                 stacked = F.broadcast_to(
                     stacked[None, ...], [input.shape[j]] + list(stacked.shape)
                 )
-            print(f"stacked shape: {stacked.shape}")
 
             # batch_dims = start
             result = F.gather_nd(result, stacked, batch_dims=start)

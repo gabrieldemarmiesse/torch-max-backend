@@ -6,10 +6,9 @@ import torch
 from PIL import Image
 from torchvision import models, transforms
 
-from torch_max_backend import log_aten_calls, register_max_devices
+from torch_max_backend import register_max_devices
 
 register_max_devices()
-log_aten_calls()
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
