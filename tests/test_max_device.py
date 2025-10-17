@@ -301,6 +301,21 @@ def test_convolution_2d(max_device):
     function_equivalent_on_both_devices(do_convolution, max_device)
 
 
+def test_convolution_2d_module(max_device):
+    input_tensor_cpu = torch.randn(1, 3, 32, 32, device="cpu")
+    conv_module = torch.nn.Conv2d(3, 6, kernel_size=5, stride=1, padding=2)
+    # Initialize weights and bias to known values
+    torch.nn.init.normal_(conv_module.weight)
+    torch.nn.init.normal_(conv_module.bias)
+
+    def do_convolution_module(device):
+        input_tensor = input_tensor_cpu.to(device)
+        conv = conv_module.to(device)
+        return conv(input_tensor)
+
+    function_equivalent_on_both_devices(do_convolution_module, max_device)
+
+
 @pytest.mark.xfail(reason="Fixme")
 def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)

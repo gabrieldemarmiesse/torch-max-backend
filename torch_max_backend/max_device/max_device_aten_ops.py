@@ -38,6 +38,7 @@ def register_aten_op(op_name: str):
 
 def convert_all_torch_max_tensors_to_lazy(x: Any) -> Any:
     """Recursively convert all TorchMaxTensor instances in x to their max_data"""
+    print(x)
     if isinstance(x, TorchMaxTensor):
         return x._max_data
     elif isinstance(x, list | tuple):
@@ -105,6 +106,7 @@ register_aten_op("aten::pow.Tensor_Scalar")(
 register_aten_op("aten::convolution")(
     wrap_for_max_device(aten_functions.aten_convolution)
 )
+register_aten_op("aten::view")(wrap_for_max_device(aten_functions.aten_view))
 
 
 @register_aten_op("aten::empty_strided.memory_format")
