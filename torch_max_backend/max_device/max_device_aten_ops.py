@@ -7,6 +7,7 @@ from max.dtype import DType
 from max.experimental import functional as F
 from max.experimental.tensor import Tensor as MaxEagerTensor
 
+from torch_max_backend import aten_functions
 from torch_max_backend.max_device.torch_max_tensor import (
     TorchMaxTensor,
     find_equivalent_max_device,
@@ -63,9 +64,9 @@ def max_device_aten_sum(
     *,
     dtype: torch.dtype | None = None,
 ) -> TorchMaxTensor:
-    from torch_max_backend.aten_functions import aten_sum
-
-    result = aten_sum(input._max_data, dim=dim, keepdim=keepdim, dtype=dtype)
+    result = aten_functions.aten_sum(
+        input._max_data, dim=dim, keepdim=keepdim, dtype=dtype
+    )
 
     return TorchMaxTensor._from_max_data(result)
 
