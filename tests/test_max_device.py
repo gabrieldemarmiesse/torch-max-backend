@@ -93,14 +93,13 @@ def test_device_string_variations():
     assert isinstance(t2, TorchMaxTensor)
 
 
-@pytest.mark.xfail(reason="Fixme .device")
+@pytest.mark.xfail(reason="TODO: add pretty repr and str")
 def test_tensor_properties(max_device):
     """Test that MaxTensor preserves tensor properties"""
     original = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
     max_tensor = original.to(max_device)
 
     assert max_tensor.shape == (2, 2)
-    assert max_tensor._dtype == torch.float64
     assert max_tensor.dtype == torch.float64
     assert max_tensor.device == torch.device(max_device)
 

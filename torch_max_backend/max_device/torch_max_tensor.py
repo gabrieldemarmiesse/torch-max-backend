@@ -2,7 +2,10 @@ from collections.abc import Callable
 
 import max.driver
 import torch
+from max.driver import CPU
 from max.experimental.tensor import Tensor as MaxEagerTensor
+
+from torch_max_backend.max_device import torch_max_device_module
 
 
 class TorchMaxTensor(torch.Tensor):
@@ -26,6 +29,15 @@ class TorchMaxTensor(torch.Tensor):
         if hasattr(self, "_max_data"):
             return "MaxTensor(" + repr(self._max_data) + ")"
         return super().__repr__()
+
+    @property
+    def device(self):
+        if hasattr(self, "_max_data"):
+            if self._max_data.device == CPU():
+                return torch_max_device_module.cpu()
+            else:
+                return torch.device(f"max_device:{self._max_data.device.id}")
+        return super().device
 
     @classmethod
     def _from_max_data(cls, max_data: MaxEagerTensor) -> "TorchMaxTensor":
