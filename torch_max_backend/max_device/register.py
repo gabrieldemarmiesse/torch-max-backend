@@ -1,5 +1,4 @@
 import torch
-from torch.utils.backend_registration import _setup_privateuseone_for_python_backend
 
 from .max_device_aten_ops import _aten_ops_registry
 
@@ -8,6 +7,9 @@ _registered = False
 
 def register_max_devices():
     """Enable the max_device globally and register all aten ops"""
+    from torch.utils.backend_registration import _setup_privateuseone_for_python_backend
+
+    # since it's so recent we import it here.
     global _registered
     if _registered:
         # Already registered
