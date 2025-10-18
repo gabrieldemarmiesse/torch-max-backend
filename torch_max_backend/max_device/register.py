@@ -8,7 +8,6 @@ _registered = False
 
 def register_max_devices():
     """Enable the max_device globally and register all aten ops"""
-    raise ValueError
     global _registered
     if _registered:
         # Already registered
