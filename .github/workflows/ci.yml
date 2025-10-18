@@ -50,4 +50,4 @@ jobs:
         env:
           MODULAR_HOME: /tmp/modular/
         run: |
-          uv run pytest -v --splits 8 --group ${{ matrix.test-index }} -k "${{ matrix.max_device }}"
+          uv run pytest -v --splits 8 --group ${{ matrix.test-index }} -k "${{ matrix.max-device }}"
