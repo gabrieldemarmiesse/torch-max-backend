@@ -51,7 +51,7 @@ def conf(request, max_gpu_available: bool, cuda_available: bool):
         # Make sure the device is initialized
         register_max_devices()
 
-    if device_name in ("cuda", "cpu"):
+    if device_name == "cuda":
         device_name += ":0"
 
     return Conf(device=device_name, compile=compile)
