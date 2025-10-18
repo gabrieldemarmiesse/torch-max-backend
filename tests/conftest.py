@@ -25,36 +25,36 @@ def device(request, gpu_available: bool):
 
 @pytest.fixture(
     params=[
-        ("max_device:cpu", True),
-        ("max_device:cpu", False),
-        ("max_device:gpu", True),
-        ("max_device:gpu", False),
-        ("cpu", True),
-        ("cuda", True),
+        Conf("max_device:cpu", True),
+        Conf("max_device:cpu", False),
+        Conf("max_device:gpu", True),
+        Conf("max_device:gpu", False),
+        Conf("cpu", True),
+        Conf("cuda", True),
     ]
 )
 def conf(request, max_gpu_available: bool, cuda_available: bool):
-    device_name, compile = request.param
+    conf = request.param
     # to use max_device:gpu, we need to have a max supported gpu
-    if device_name == "max_device:gpu" and not max_gpu_available:
+    if conf.device == "max_device:gpu" and not max_gpu_available:
         pytest.skip("You do not have a GPU supported by Max")
-    if device_name == "cuda" and not cuda_available:
+    if conf.device == "cuda" and not cuda_available:
         pytest.skip("Pytorch CUDA not available")
 
     # known issues:
-    if device_name.startswith("max_device") and compile:
+    if conf.device.startswith("max_device") and conf.compile:
         pytest.xfail("Known issue: max_device with compilation is not supported yet")
 
-    if device_name.startswith("max_device"):
-        device_name = device_name.replace("gpu", "0")
-        device_name = device_name.replace("cpu", str(len(accelerators) - 1))
+    if conf.device.startswith("max_device"):
+        conf.device = conf.device.replace("gpu", "0")
+        conf.device = conf.device.replace("cpu", str(len(accelerators) - 1))
         # Make sure the device is initialized
         register_max_devices()
 
-    if device_name == "cuda":
-        device_name += ":0"
+    if conf.device == "cuda":
+        conf.device += ":0"
 
-    return Conf(device=device_name, compile=compile)
+    return conf
 
 
 @pytest.fixture
@@ -106,6 +106,7 @@ def pytest_sessionfinish(session, exitstatus):
 
 def pytest_make_parametrize_id(config, val, argname):
     """Custom ID generation for parametrized tests"""
+
     if isinstance(val, torch.dtype):
         return str(val).split(".")[-1]
     if isinstance(val, Conf):

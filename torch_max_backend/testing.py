@@ -43,11 +43,11 @@ class Conf:
     compile: bool
 
     def __str__(self) -> str:
-        if compile:
+        if self.compile:
             word = "compiled"
         else:
             word = "eager"
-        return f"({self.device}, {word})"
+        return f"{self.device}, {word}"
 
 
 def to_device(tensors: list[torch.Tensor], device: str) -> list[torch.Tensor]:
