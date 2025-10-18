@@ -95,6 +95,16 @@ def wrap_for_max_device(func: Callable) -> Callable:
 # ----------------------------------------------------------------------------------
 
 register_aten_op("aten::add.Tensor")(wrap_for_max_device(aten_functions.aten_add))
+
+
+@register_aten_op("aten::add_.Tensor")
+def max_device_add_(
+    self: TorchMaxTensor, other: TorchMaxTensor, alpha: float = 1.0
+) -> TorchMaxTensor:
+    self._max_data = aten_functions.aten_add(self._max_data, other._max_data, alpha)
+    return self
+
+
 register_aten_op("aten::sub.Tensor")(wrap_for_max_device(aten_functions.aten_sub))
 register_aten_op("aten::mul.Tensor")(wrap_for_max_device(aten_functions.aten_mul))
 register_aten_op("aten::sum.dim_IntList")(wrap_for_max_device(aten_functions.aten_sum))
