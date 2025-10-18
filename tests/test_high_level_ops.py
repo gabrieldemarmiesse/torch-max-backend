@@ -6,17 +6,17 @@ import torch.nn.functional as F
 from torch._dynamo import mark_dynamic
 
 from torch_max_backend import max_backend
-from torch_max_backend.testing import check_functions_are_equivalent
+from torch_max_backend.testing import check_functions_are_equivalent, check_outputs
 
 
-def test_basic_addition(device: str):
+def test_basic_addition(conf):
     def fn(x, y):
         return x + y
 
     a = torch.randn(3)
     b = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
 def test_iadd(device: str):
