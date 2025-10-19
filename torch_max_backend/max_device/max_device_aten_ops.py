@@ -133,7 +133,6 @@ register_aten_op("aten::_scaled_dot_product_flash_attention")(
 
 register_aten_op("aten::_softmax")(wrap_for_max_device(aten_functions.aten__softmax))
 
-register_aten_op("aten::_to_copy")(wrap_for_max_device(aten_functions.aten__to_copy))
 
 register_aten_op("aten::abs")(wrap_for_max_device(aten_functions.aten_abs))
 register_aten_op("aten::acos")(wrap_for_max_device(aten_functions.aten_acos))
@@ -200,7 +199,6 @@ register_aten_op("aten::convolution")(
     wrap_for_max_device(aten_functions.aten_convolution)
 )
 
-register_aten_op("aten::copy")(wrap_for_max_device(aten_functions.aten_copy))
 register_aten_op("aten::cos")(wrap_for_max_device(aten_functions.aten_cos))
 register_aten_op("aten::cosh")(wrap_for_max_device(aten_functions.aten_cosh))
 
