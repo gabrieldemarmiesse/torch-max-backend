@@ -237,15 +237,6 @@ def aten__adaptive_avg_pool2d_backward(
 ) -> TensorValue:
     """Compute gradient for adaptive average pooling 2d backward pass.
 
-    NOTE: A Mojo kernel implementation exists in mojo_kernels/pooling.mojo but
-    currently hits JIT elaboration issues due to the complex scatter/accumulate
-    pattern with nested loops. The kernel is functionally correct but the JIT
-    compiler cannot elaborate it. For now, we use MAX graph operations which
-    work correctly but generate larger graphs.
-
-    Future work: Debug the Mojo kernel JIT elaboration to enable the fast path.
-    The ops.custom() call is straightforward once the kernel compiles.
-
     Args:
         grad_output: Gradient from the output, shape (N, C, H_out, W_out) or (C, H_out, W_out)
         input_tensor: Original input tensor, shape (N, C, H_in, W_in) or (C, H_in, W_in)
@@ -267,7 +258,6 @@ def aten__adaptive_avg_pool2d_backward(
         input_tensor_reshaped = input_tensor
         remove_batch = False
 
-    # Try using Mojo kernel (this will trigger JIT elaboration error)
     grad_input = max_ops.custom(
         name="adaptive_avg_pool2d_backward",
         device=input_tensor_reshaped.device,
