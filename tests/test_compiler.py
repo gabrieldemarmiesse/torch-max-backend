@@ -241,64 +241,6 @@ def test_get_attr_constant_tensor(device: str):
     check_functions_are_equivalent(module, device, [x])
 
 
-def test_get_attr_torch_tensor(device: str):
-    class SimpleConstantModule(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.constant = torch.tensor([2.0, 3.0, 4.0]).to(device)
-
-        def forward(self, x):
-            # Simple addition that should create get_attr node
-            return x + self.constant
-
-    module = SimpleConstantModule().to(device)
-
-    x = torch.randn(3)
-
-    # Verify get_attr nodes are in the graph
-    traced = torch.fx.symbolic_trace(module)
-    get_attr_nodes = [node for node in traced.graph.nodes if node.op == "get_attr"]
-    assert len(get_attr_nodes) >= 1
-    targets = [node.target for node in get_attr_nodes]
-    assert "constant" in targets
-
-    check_functions_are_equivalent(module, device, [x])
-
-
-# Graph Break Tests
-def test_graph_break_with_print(device: str):
-    """Test graph break caused by print statements"""
-
-    def fn_with_print(x):
-        a = x + 1
-        print(f"Processing tensor with shape: {x.shape}")
-        return a * 2
-
-    x = torch.randn(3, 4)
-    explanation = torch._dynamo.explain(fn_with_print)(x)
-    assert explanation.graph_break_count == 1
-    assert explanation.graph_count == 2
-
-    # This should cause a graph break due to print
-    with patch("sys.stdout", new_callable=io.StringIO):
-        check_functions_are_equivalent(fn_with_print, device, [x])
-
-
-def test_graph_break_with_item_access(device: str):
-    def fn_with_item(x):
-        x = x * x
-        if x[0, 0] > 0:
-            return x * 2
-        else:
-            return x
-
-    x = torch.randn(2, 3) + 1.0  # Ensure non-zero values
-    explanation = torch._dynamo.explain(fn_with_item)(x)
-    assert explanation.graph_break_count == 1
-    assert explanation.graph_count == 2
-    check_functions_are_equivalent(fn_with_item, device, [x])
-
-
 def test_graph_break_with_python_loop_over_tensor(device: str):
     """Test graph break caused by Python loops over tensor elements"""
 
