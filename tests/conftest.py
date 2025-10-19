@@ -4,11 +4,10 @@ import pytest
 import torch
 
 from torch_max_backend import get_accelerators, register_max_devices
-from torch_max_backend.max_device.log_aten_calls import log_aten_calls
 from torch_max_backend.profiler import profile
 from torch_max_backend.testing import Conf
 
-log_aten_calls()
+# log_aten_calls()
 # Register your helper module for assertion rewriting
 pytest.register_assert_rewrite("torch_max_backend.testing")
 
