@@ -1493,7 +1493,7 @@ def test_tensor_cos_sin_different_shapes(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn_sin, device, [x])
 
 
-def test_tensor_pow_method(conf: Conf):
+def test_tensor_pow_method(device: str):
     """Test tensor.pow() method"""
 
     def fn(x, y):
@@ -1502,7 +1502,7 @@ def test_tensor_pow_method(conf: Conf):
     x = torch.randn(3, 4).abs() + 0.1  # Avoid negative base
     y = torch.randn(3, 4) * 2  # Keep exponent reasonable
 
-    check_outputs(fn, conf, [x, y])
+    check_functions_are_equivalent(fn, device, [x, y])
 
 
 def test_tensor_pow_scalar_exponent(conf: Conf):
