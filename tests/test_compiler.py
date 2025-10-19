@@ -145,27 +145,3 @@ def test_mojo_custom_op(device: str):
     check_functions_are_equivalent(
         more_complexe_graph_eager, None, [img], fn_compiled=complexe_graph_compiled
     )
-
-
-def allocate_outputs_grayscale_multi(
-    pic: torch.Tensor, noise: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    return tuple(pic.new_empty(noise.shape, dtype=torch.float32) for _ in range(2))
-
-
-my_torch_grayscale_multi = make_torch_op_from_mojo(
-    Path(__file__).parent / "dummy_mojo_kernels",
-    "grayscale_multi",
-    allocate_outputs_grayscale_multi,
-)
-
-
-def grayscale_multi_eager(
-    pic: torch.Tensor, noise: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    pic = pic.to(dtype=torch.float32)
-    r = pic[:, :, 0] + noise
-    g = pic[:, :, 1] + noise
-    b = pic[:, :, 2] + noise
-
-    return (torch.clamp((0.21 * r + 0.71 * g + 0.07 * b), max=255), r)
