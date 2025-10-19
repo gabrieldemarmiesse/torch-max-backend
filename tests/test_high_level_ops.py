@@ -43,40 +43,40 @@ def test_t_method(conf: Conf):
     check_outputs(fn, conf, [a])
 
 
-def test_t_function(device: str):
+def test_t_function(conf: Conf):
     def fn(x):
         return torch.t(x)
 
     a = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_new_ones(device: str):
+def test_new_ones(conf: Conf):
     def fn(x):
         return x.new_ones((3, 3))
 
     a = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_new_ones_device(device: str):
+def test_new_ones_device(conf: Conf):
     def fn(x):
-        return x.new_ones((3, 3), device=torch.device(device))
+        return x.new_ones((3, 3), device=torch.device(conf.device))
 
     a = torch.randn(3)
 
-    check_functions_are_equivalent(fn, "cpu", [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_new_ones_dtype(device: str):
+def test_new_ones_dtype(conf: Conf):
     def fn(x):
         return x.new_ones((3, 3), dtype=torch.uint8)
 
     a = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
 def test_operator_add(device: str, tensor_shapes: tuple):
@@ -188,7 +188,7 @@ def test_floor(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
-def test_floor_edge_cases(device: str):
+def test_floor_edge_cases(conf: Conf):
     """Test floor with specific edge cases"""
 
     def fn(x):
@@ -202,17 +202,17 @@ def test_floor_edge_cases(device: str):
     ]
 
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_tensor_floor_method(device: str):
+def test_tensor_floor_method(conf: Conf):
     """Test tensor.floor() method"""
 
     def fn(x):
         return x.floor()
 
     x = torch.randn(3, 4) * 5  # Scale values for better floor testing
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_cos(device: str, tensor_shapes: tuple):
@@ -275,7 +275,7 @@ def test_atanh(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a])
 
 
-def test_outer(device: str):
+def test_outer(conf: Conf):
     def fn(x, y):
         return torch.outer(x, y)
 
@@ -283,10 +283,10 @@ def test_outer(device: str):
     a = torch.randn(5)
     b = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_log1p_basic(device: str):
+def test_log1p_basic(conf: Conf):
     """Test basic log1p functionality"""
 
     def fn(x):
@@ -294,10 +294,10 @@ def test_log1p_basic(device: str):
 
     # log1p domain is x > -1, use values in range (-0.5, 2.0) for safety
     a = torch.rand(3, 4) * 2.5 - 0.5  # Range (-0.5, 2.0)
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_log1p_small_values(device: str):
+def test_log1p_small_values(conf: Conf):
     """Test log1p with small values where it's most beneficial"""
 
     def fn(x):
@@ -311,10 +311,10 @@ def test_log1p_small_values(device: str):
         torch.rand(2, 3) * 0.2 - 0.1,  # Random small values in (-0.1, 0.1)
     ]
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_log_basic(device: str):
+def test_log_basic(conf: Conf):
     """Test basic log functionality"""
 
     def fn(x):
@@ -322,7 +322,7 @@ def test_log_basic(device: str):
 
     # Use positive values only since log is only defined for positive numbers
     a = torch.rand(3, 4) + 0.1  # Range (0.1, 1.1) to avoid values too close to zero
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
 def test_log_various_ranges(device: str):
