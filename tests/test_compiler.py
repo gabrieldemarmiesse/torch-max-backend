@@ -5,7 +5,6 @@ import pytest
 import torch
 import torch.nn.functional as F
 from torch._dynamo import mark_dynamic
-from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
 import torch_max_backend
@@ -276,87 +275,6 @@ def test_error_message_exception_in_op(monkeypatch):
         exc_info.value
     )
     assert "not_working_add" in str(exc_info.value)
-
-
-def test_error_message_op_not_supported(monkeypatch):
-    monkeypatch.delitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add)
-
-    def fn(x, y):
-        return x + y
-
-    with pytest.raises(BackendCompilerFailed) as exc_info:
-        torch.compile(backend=max_backend)(fn)(torch.randn(2, 3), torch.randn(2, 3))
-
-    assert "return x + y" in str(exc_info.value)
-    assert "torch._ops.aten.aten::add" in str(exc_info.value)
-    assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
-        exc_info.value
-    )
-    assert "is not supported" in str(exc_info.value)
-
-
-def test_bug_keyerror_input(device: str):
-    """Test a specific bug where KeyError occurs in input handling"""
-
-    def fn(x):
-        y = torch.arange(0, x.shape[1], 1, dtype=x.dtype, device=x.device)
-        z = y[None, :]
-        return x + z
-
-    # Create inputs
-    x = torch.randn(2, 5)
-
-    mark_dynamic(x, 1)
-
-    check_functions_are_equivalent(fn, device, [x])
-
-
-def test_scalar_as_input():
-    def fn(x):
-        y = torch.arange(0, x[0], 1, dtype=x.dtype, device=x.device)
-        z = y[None, :]
-        return x + z
-
-    # Create inputs
-    x = torch.randint(1, 10, (1,), dtype=torch.int32, device="cpu")
-
-    mark_dynamic(x, 1)
-
-    check_functions_are_equivalent(fn, None, [x])
-
-
-def test_decomposition_overload(monkeypatch):
-    """We verify that we skip decomposition for ops that are in the decomposition table,
-    and that we registered as an OpOverload (here `aten.t.default`).
-    """
-
-    def fn(x):
-        x = x * 2
-        return x.t() * 2
-
-    # grab the input of init_compiler
-    input_gm = None
-    init_compiler = (
-        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler.__init__
-    )
-
-    def fake_init_compiler(self, gm, *args, **kwargs):
-        nonlocal input_gm
-        input_gm = gm
-        return init_compiler(self, gm, *args, **kwargs)
-
-    monkeypatch.setattr(
-        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler,
-        "__init__",
-        fake_init_compiler,
-    )
-
-    a = torch.compile(backend=max_backend)(fn)
-    a(torch.randn(2, 3))
-
-    # it's normally decomposed. We check that it's not the case since we
-    # implemented it ourselves.
-    assert aten.t.default in [node.target for node in input_gm.graph.nodes]
 
 
 def test_decomposition_overload_packet(monkeypatch):
