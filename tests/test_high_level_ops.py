@@ -242,7 +242,7 @@ def test_tanh(conf: Conf, tensor_shapes: tuple):
     check_outputs(fn, conf, [a])
 
 
-def test_sign(device: str, tensor_shapes: tuple):
+def test_sign(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.sign(x)
 
@@ -252,7 +252,7 @@ def test_sign(device: str, tensor_shapes: tuple):
     if a.numel() >= 3:
         a.view(-1)[:3] = torch.tensor([-1.0, 0.0, 1.0])
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -265,14 +265,14 @@ def test_sign_different_dtypes(device: str, dtype):
     check_functions_are_equivalent(fn, device, [a])
 
 
-def test_atanh(device: str, tensor_shapes: tuple):
+def test_atanh(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.atanh(x)
 
     # atanh is defined for |x| < 1, so we need to ensure our test values are in this range
     a = torch.rand(tensor_shapes) * 1.8 - 0.9  # Values in range (-0.9, 0.9)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
 def test_outer(conf: Conf):
@@ -661,26 +661,26 @@ def test_minimum_maximum(device: str, tensor_shapes: tuple, func):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_relu(device: str, tensor_shapes: tuple):
+def test_relu(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return F.relu(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_cat(device: str, tensor_shapes: tuple):
+def test_cat(conf: Conf, tensor_shapes: tuple):
     def fn(x, y):
         return torch.cat([x, y], dim=0)
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_combination_add_mul(device: str, tensor_shapes: tuple):
+def test_combination_add_mul(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return (x + y) * z
 
@@ -688,10 +688,10 @@ def test_combination_add_mul(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_outputs(fn, conf, [a, b, c])
 
 
-def test_combination_sub_div(device: str, tensor_shapes: tuple):
+def test_combination_sub_div(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return (x - y) / z
 
@@ -699,20 +699,20 @@ def test_combination_sub_div(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes) + 1.0  # Avoid division by zero
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_outputs(fn, conf, [a, b, c])
 
 
-def test_combination_trig_arithmetic(device: str, tensor_shapes: tuple):
+def test_combination_trig_arithmetic(conf: Conf, tensor_shapes: tuple):
     def fn(x, y):
         return torch.sin(x) + torch.cos(y)
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_combination_abs_mul_add(device: str, tensor_shapes: tuple):
+def test_combination_abs_mul_add(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return torch.abs(x) * y + z
 
@@ -720,20 +720,20 @@ def test_combination_abs_mul_add(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_outputs(fn, conf, [a, b, c])
 
 
-def test_combination_pow_mod(device: str, tensor_shapes: tuple):
+def test_combination_pow_mod(conf: Conf, tensor_shapes: tuple):
     def fn(x, y):
         return (x**2) % y
 
     a = torch.randn(tensor_shapes).abs() + 0.1
     b = torch.randn(tensor_shapes).abs() + 1.0
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_complex_combination(device: str, tensor_shapes: tuple):
+def test_complex_combination(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return torch.abs(torch.sin(x) * y + torch.cos(z))
 
@@ -741,27 +741,27 @@ def test_complex_combination(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_outputs(fn, conf, [a, b, c])
 
 
-def test_scalar_shapes(device: str):
+def test_scalar_shapes(conf: Conf):
     def fn(x, y):
         return x + y * 2
 
     a = torch.randn(())  # Scalar tensor
     b = torch.randn(())
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_broadcasting_compatible(device: str):
+def test_broadcasting_compatible(conf: Conf):
     def fn(x, y):
         return x + y
 
     a = torch.randn(5, 1)
     b = torch.randn(1, 5)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
 def test_conv2d_basic(device: str):
@@ -1124,49 +1124,49 @@ def test_embedding_padding_idx_scalar(device: str):
     check_functions_are_equivalent(fn, device, [indices, weight])
 
 
-def test_tensor_slice_basic(device: str):
+def test_tensor_slice_basic(conf: Conf):
     def fn(x):
         return x[1:3]  # Basic slice along first dimension
 
     x = torch.randn(5, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_slice_2d(device: str):
+def test_tensor_slice_2d(conf: Conf):
     def fn(x):
         return x[1:3, 0:2]  # Slice along both dimensions
 
     x = torch.randn(5, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_slice_negative_index(device: str):
+def test_tensor_slice_negative_index(conf: Conf):
     def fn(x):
         return x[-2:]  # Negative slice
 
     x = torch.randn(5, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_slice_with_step(device: str):
+def test_tensor_slice_with_step(conf: Conf):
     def fn(x):
         return x[1:10:2]  # Negative slice
 
     x = torch.randn(20, 20)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_to_float(device: str):
+def test_to_float(conf: Conf):
     def fn(x):
         return x.float()
 
     x = torch.randint(0, 10, (5,))
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_expand_basic(device: str):
@@ -2663,7 +2663,7 @@ def test_tensor_unsqueeze_scalar(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_unary_negation(device: str):
+def test_unary_negation(conf: Conf):
     """Test unary negation operator (-x)"""
 
     def fn(x):
@@ -2671,10 +2671,10 @@ def test_unary_negation(device: str):
 
     x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_negation_with_arithmetic(device: str):
+def test_negation_with_arithmetic(conf: Conf):
     """Test negation combined with arithmetic operations"""
 
     def fn(x, y):
@@ -2683,10 +2683,10 @@ def test_negation_with_arithmetic(device: str):
     x = torch.randn(3, 4)
     y = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x, y])
+    check_outputs(fn, conf, [x, y])
 
 
-def test_double_negation(device: str):
+def test_double_negation(conf: Conf):
     """Test double negation (-(-x))"""
 
     def fn(x):
@@ -2694,7 +2694,7 @@ def test_double_negation(device: str):
 
     x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_negation_different_shapes(device: str, tensor_shapes: tuple):
