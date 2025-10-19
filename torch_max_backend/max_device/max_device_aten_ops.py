@@ -119,6 +119,8 @@ def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMa
         )
 
 
+register_aten_op("aten::abs")(wrap_for_max_device(aten_functions.aten_abs))
+register_aten_op("aten::acos")(wrap_for_max_device(aten_functions.aten_acos))
 register_aten_op("aten::add.Tensor")(wrap_for_max_device(aten_functions.aten_add))
 
 
@@ -133,7 +135,19 @@ def max_device_add_(
 register_aten_op("aten::addmm")(wrap_for_max_device(aten_functions.aten_addmm))
 register_aten_op("aten::arange")(wrap_for_max_device(aten_functions.aten_arange))
 
+register_aten_op("aten::asinh")(wrap_for_max_device(aten_functions.aten_asinh))
+register_aten_op("aten::atanh")(wrap_for_max_device(aten_functions.aten_atanh))
+
+register_aten_op("aten::avg_pool2d")(
+    wrap_for_max_device(aten_functions.aten_avg_pool2d)
+)
+
+register_aten_op("aten::bmm")(wrap_for_max_device(aten_functions.aten_bmm))
+
 register_aten_op("aten::cat")(wrap_for_max_device(aten_functions.aten_cat))
+
+register_aten_op("aten::ceil")(wrap_for_max_device(aten_functions.aten_ceil))
+register_aten_op("aten::clamp")(wrap_for_max_device(aten_functions.aten_clamp))
 register_aten_op("aten::clone")(wrap_for_max_device(aten_functions.aten_clone))
 
 register_aten_op("aten::convolution")(
@@ -141,10 +155,13 @@ register_aten_op("aten::convolution")(
 )
 
 register_aten_op("aten::cos")(wrap_for_max_device(aten_functions.aten_cos))
+register_aten_op("aten::cosh")(wrap_for_max_device(aten_functions.aten_cosh))
 
 register_aten_op("aten::detach")(wrap_for_max_device(aten_functions.aten_detach))
 
 register_aten_op("aten::div.Tensor")(wrap_for_max_device(aten_functions.aten_div))
+
+register_aten_op("aten::embedding")(wrap_for_max_device(aten_functions.aten_embedding))
 
 
 @register_aten_op("aten::empty.memory_format")
@@ -172,19 +189,38 @@ def empty_strided(
     )
 
 
+register_aten_op("aten::eq")(wrap_for_max_device(aten_functions.aten_eq))
 register_aten_op("aten::exp")(wrap_for_max_device(aten_functions.aten_exp))
+register_aten_op("aten::expand")(wrap_for_max_device(aten_functions.aten_expand))
 
+register_aten_op("aten::floor")(wrap_for_max_device(aten_functions.aten_floor))
 register_aten_op("aten::full")(wrap_for_max_device(aten_functions.aten_full))
 
+register_aten_op("aten::ge")(wrap_for_max_device(aten_functions.aten_ge))
+register_aten_op("aten::gelu")(wrap_for_max_device(aten_functions.aten_gelu))
+register_aten_op("aten::gt")(wrap_for_max_device(aten_functions.aten_gt))
+
+register_aten_op("aten::le")(wrap_for_max_device(aten_functions.aten_le))
 register_aten_op("aten::log")(wrap_for_max_device(aten_functions.aten_log))
+register_aten_op("aten::log1p")(wrap_for_max_device(aten_functions.aten_log1p))
+register_aten_op("aten::lt")(wrap_for_max_device(aten_functions.aten_lt))
+
+register_aten_op("aten::max")(wrap_for_max_device(aten_functions.aten_max))
 
 register_aten_op("aten::max_pool2d_with_indices")(
     wrap_for_max_device(aten_functions.aten_max_pool2d_with_indices)
 )
 
+register_aten_op("aten::maximum")(wrap_for_max_device(aten_functions.aten_maximum))
+register_aten_op("aten::mean")(wrap_for_max_device(aten_functions.aten_mean))
+register_aten_op("aten::min")(wrap_for_max_device(aten_functions.aten_min))
+register_aten_op("aten::minimum")(wrap_for_max_device(aten_functions.aten_minimum))
+
 register_aten_op("aten::mul.Tensor")(wrap_for_max_device(aten_functions.aten_mul))
 
 register_aten_op("aten::mm")(wrap_for_max_device(aten_functions.aten_mm))
+
+register_aten_op("aten::ne")(wrap_for_max_device(aten_functions.aten_ne))
 register_aten_op("aten::neg")(wrap_for_max_device(aten_functions.aten_neg))
 register_aten_op("aten::ones")(wrap_for_max_device(aten_functions.aten_ones))
 
@@ -204,9 +240,18 @@ def max_device_relu_(self: TorchMaxTensor) -> TorchMaxTensor:
     return self
 
 
+register_aten_op("aten::reciprocal")(
+    wrap_for_max_device(aten_functions.aten_reciprocal)
+)
+register_aten_op("aten::rsqrt")(wrap_for_max_device(aten_functions.aten_rsqrt))
+
+register_aten_op("aten::select")(wrap_for_max_device(aten_functions.aten_select))
 register_aten_op("aten::sigmoid")(wrap_for_max_device(aten_functions.aten_sigmoid))
 register_aten_op("aten::sin")(wrap_for_max_device(aten_functions.aten_sin))
+
+register_aten_op("aten::slice.Tensor")(wrap_for_max_device(aten_functions.aten_slice))
 register_aten_op("aten::sqrt")(wrap_for_max_device(aten_functions.aten_sqrt))
+register_aten_op("aten::squeeze.dim")(wrap_for_max_device(aten_functions.aten_squeeze))
 register_aten_op("aten::sub.Tensor")(wrap_for_max_device(aten_functions.aten_sub))
 register_aten_op("aten::sum.dim_IntList")(wrap_for_max_device(aten_functions.aten_sum))
 register_aten_op("aten::t")(wrap_for_max_device(aten_functions.aten_t))
