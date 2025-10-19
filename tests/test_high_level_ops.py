@@ -723,14 +723,14 @@ def test_combination_abs_mul_add(conf: Conf, tensor_shapes: tuple):
     check_outputs(fn, conf, [a, b, c])
 
 
-def test_combination_pow_mod(conf: Conf, tensor_shapes: tuple):
+def test_combination_pow_mod(device: str, tensor_shapes: tuple):
     def fn(x, y):
         return (x**2) % y
 
     a = torch.randn(tensor_shapes).abs() + 0.1
     b = torch.randn(tensor_shapes).abs() + 1.0
 
-    check_outputs(fn, conf, [a, b])
+    check_functions_are_equivalent(fn, device, [a, b])
 
 
 def test_complex_combination(conf: Conf, tensor_shapes: tuple):
