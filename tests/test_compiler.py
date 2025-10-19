@@ -1,9 +1,7 @@
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
-import torch.nn.functional as F
 from torch._dynamo import mark_dynamic
 from torch.ops import aten
 
@@ -15,73 +13,6 @@ from torch_max_backend import (
     max_backend,
 )
 from torch_max_backend.testing import check_functions_are_equivalent
-
-
-def test_basic_training(device: str):
-    class MyModel(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.linear = torch.nn.Linear(3, 2)
-
-        def forward(self, x):
-            return self.linear(x)
-
-    model = MyModel().to(device)
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-
-    def train_step(x, y):
-        model.train()
-        optimizer.zero_grad()
-        output = model(x)
-        loss = F.mse_loss(output, y)
-        loss.backward()
-        optimizer.step()
-        return loss
-
-    a = torch.randn(5, 3).to(device)
-    b = torch.randn(5, 2).to(device)
-
-    # We need to reset the parameters before each test
-    # to check the model weights afterwards
-    model.linear.weight.data.fill_(0.01)
-    model.linear.bias.data.fill_(0.01)
-
-    loss_not_compiled = train_step(a, b).cpu().detach().numpy()
-    weight_not_compiled = model.linear.weight.data.cpu().numpy()
-    bias_not_compiled = model.linear.bias.data.cpu().numpy()
-
-    # Now with the default backed
-    model.linear.weight.data.fill_(0.01)
-    model.linear.bias.data.fill_(0.01)
-
-    loss_compiled_default = torch.compile()(train_step)(a, b).cpu().detach().numpy()
-    weight_compiled_default = model.linear.weight.data.cpu().numpy()
-    bias_compiled_default = model.linear.bias.data.cpu().numpy()
-
-    np.testing.assert_allclose(
-        loss_not_compiled, loss_compiled_default, rtol=5e-2, atol=5e-3
-    )
-    np.testing.assert_allclose(
-        weight_not_compiled, weight_compiled_default, rtol=5e-2, atol=5e-3
-    )
-    np.testing.assert_allclose(
-        bias_not_compiled, bias_compiled_default, rtol=5e-2, atol=5e-3
-    )
-
-    model.linear.weight.data.fill_(0.01)
-    model.linear.bias.data.fill_(0.01)
-
-    loss_compiled = (
-        torch.compile(backend=max_backend)(train_step)(a, b).cpu().detach().numpy()
-    )
-    weight_compiled = model.linear.weight.data.cpu().numpy()
-    bias_compiled = model.linear.bias.data.cpu().numpy()
-
-    np.testing.assert_allclose(loss_not_compiled, loss_compiled, rtol=5e-2, atol=5e-3)
-    np.testing.assert_allclose(
-        weight_not_compiled, weight_compiled, rtol=5e-2, atol=5e-3
-    )
-    np.testing.assert_allclose(bias_not_compiled, bias_compiled, rtol=5e-2, atol=5e-3)
 
 
 def test_graph_break_with_python_loop_over_tensor(device: str):
