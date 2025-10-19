@@ -3,14 +3,17 @@ import os
 import pytest
 import torch
 
-from torch_max_backend import get_accelerators
+from torch_max_backend import get_accelerators, register_max_devices
 from torch_max_backend.profiler import profile
+from torch_max_backend.testing import Conf
 
+# log_aten_calls()
 # Register your helper module for assertion rewriting
 pytest.register_assert_rewrite("torch_max_backend.testing")
 
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+accelerators = list(get_accelerators())
 
 
 @pytest.fixture(params=["cpu", "cuda"])
@@ -21,9 +24,43 @@ def device(request, gpu_available: bool):
     return device_name
 
 
+@pytest.fixture(
+    params=[
+        Conf("max_device:cpu", True),
+        Conf("max_device:cpu", False),
+        Conf("max_device:gpu", True),
+        Conf("max_device:gpu", False),
+        Conf("cpu", True),
+        Conf("cuda", True),
+    ]
+)
+def conf(request, max_gpu_available: bool, cuda_available: bool):
+    conf = request.param
+    # to use max_device:gpu, we need to have a max supported gpu
+    if conf.device == "max_device:gpu" and not max_gpu_available:
+        pytest.skip("You do not have a GPU supported by Max")
+    if conf.device == "cuda" and not cuda_available:
+        pytest.skip("Pytorch CUDA not available")
+
+    # known issues:
+    if conf.device.startswith("max_device") and conf.compile:
+        pytest.xfail("Known issue: max_device with compilation is not supported yet")
+
+    if conf.device.startswith("max_device"):
+        conf.device = conf.device.replace("gpu", "0")
+        conf.device = conf.device.replace("cpu", str(len(accelerators) - 1))
+        # Make sure the device is initialized
+        register_max_devices()
+
+    if conf.device == "cuda":
+        conf.device += ":0"
+
+    return conf
+
+
 @pytest.fixture
 def gpu_available() -> bool:
-    return len(list(get_accelerators())) > 1
+    return len(accelerators) > 1
 
 
 @pytest.fixture
@@ -33,7 +70,7 @@ def cuda_available() -> bool:
 
 @pytest.fixture
 def max_gpu_available() -> bool:
-    return len(list(get_accelerators())) > 1
+    return len(accelerators) > 1
 
 
 @pytest.fixture(params=[(3,), (2, 3)])
@@ -70,7 +107,10 @@ def pytest_sessionfinish(session, exitstatus):
 
 def pytest_make_parametrize_id(config, val, argname):
     """Custom ID generation for parametrized tests"""
+
     if isinstance(val, torch.dtype):
         return str(val).split(".")[-1]
+    if isinstance(val, Conf):
+        return str(val)
     # Return None to fall back to default behavior for other types
     return None

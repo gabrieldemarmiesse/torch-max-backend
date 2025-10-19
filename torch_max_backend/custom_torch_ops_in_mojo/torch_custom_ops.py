@@ -7,7 +7,7 @@ from max.graph import TensorType
 from max.torch import CustomOpLibrary
 
 import torch_max_backend
-import torch_max_backend.compiler
+import torch_max_backend.torch_compile_backend.compiler
 
 
 def make_torch_op_from_mojo(
@@ -36,7 +36,7 @@ def make_torch_op_from_mojo(
             ),
         )
 
-    if torch_max_backend.compiler._global_max_objects is not None:
+    if torch_max_backend.torch_compile_backend.compiler._global_max_objects is not None:
         # TODO: make more flexible
         # torch_max_backend.compiler._global_max_objects = None ?
         raise ValueError("Must be called before any compilation")
@@ -46,7 +46,9 @@ def make_torch_op_from_mojo(
 
     mojo_custom_op_with_signature.__signature__ = mojo_custom_op.torch_signature
 
-    torch_max_backend.compiler.paths_to_mojo_kernels.append(path_to_kernels)
+    torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels.append(
+        path_to_kernels
+    )
     torch_max_backend.MAPPING_TORCH_ATEN_TO_MAX[
         f"{path_to_kernels.name}.{mojo_custom_op_str}"
     ] = compiler_fn

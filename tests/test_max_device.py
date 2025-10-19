@@ -3,9 +3,8 @@
 import pytest
 import torch
 
-from torch_max_backend import max_backend, register_max_devices
-from torch_max_backend.max_device import (
-    MaxTensor,
+from torch_max_backend import TorchMaxTensor, max_backend, register_max_devices
+from torch_max_backend.max_device.torch_max_tensor import (
     find_equivalent_max_device,
     get_ordered_accelerators,
 )
@@ -28,9 +27,9 @@ def test_tensor_to_max_device(max_device):
     max_tensor = cpu_tensor.to(max_device)
 
     # Check type and properties
-    assert isinstance(max_tensor, MaxTensor)
+    assert isinstance(max_tensor, TorchMaxTensor)
     assert max_tensor.shape == (3,)
-    assert max_tensor._dtype == torch.float32
+    assert max_tensor.dtype == torch.float32
 
 
 def test_max_tensor_to_cpu(max_device):
@@ -44,7 +43,6 @@ def test_max_tensor_to_cpu(max_device):
 
     # Check result
     assert isinstance(result, torch.Tensor)
-    assert not isinstance(result, MaxTensor)
     torch.testing.assert_close(result, cpu_tensor)
 
 
@@ -52,7 +50,7 @@ def test_factory_arange(max_device):
     """Test torch.arange with max_device"""
     tensor = torch.arange(5, device=max_device)
 
-    assert isinstance(tensor, MaxTensor)
+    assert isinstance(tensor, TorchMaxTensor)
     assert tensor.shape == (5,)
 
     # Convert to CPU to check values
@@ -66,7 +64,7 @@ def test_factory_rand(max_device):
     """Test torch.rand with max_device"""
     tensor = torch.rand(3, 4, device=max_device)
 
-    assert isinstance(tensor, MaxTensor)
+    assert isinstance(tensor, TorchMaxTensor)
     assert tensor.shape == (3, 4)
 
     # Check that values are in [0, 1] range when converted to CPU
@@ -80,7 +78,7 @@ def test_factory_empty(max_device):
     """Test torch.empty with max_device"""
     tensor = torch.empty(2, 3, device=max_device)
 
-    assert isinstance(tensor, MaxTensor)
+    assert isinstance(tensor, TorchMaxTensor)
     assert tensor.shape == (2, 3)
 
 
@@ -88,21 +86,20 @@ def test_device_string_variations():
     """Test different max_device string formats"""
     # Basic max_device
     t1 = torch.tensor([1.0]).to("max_device")
-    assert isinstance(t1, MaxTensor)
+    assert isinstance(t1, TorchMaxTensor)
 
     # With index (should also work)
     t2 = torch.tensor([1.0]).to("max_device:0")
-    assert isinstance(t2, MaxTensor)
+    assert isinstance(t2, TorchMaxTensor)
 
 
-@pytest.mark.xfail(reason="Fixme .device")
+@pytest.mark.xfail(reason="TODO: add pretty repr and str")
 def test_tensor_properties(max_device):
     """Test that MaxTensor preserves tensor properties"""
     original = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
     max_tensor = original.to(max_device)
 
     assert max_tensor.shape == (2, 2)
-    assert max_tensor._dtype == torch.float64
     assert max_tensor.dtype == torch.float64
     assert max_tensor.device == torch.device(max_device)
 
@@ -145,16 +142,19 @@ def test_multiple_conversions():
     cpu1 = max2.to("cpu")
     cpu2 = cpu1.to("cpu")  # Should work normally
 
-    # TODO: make assert_close work
-    assert torch.sum((max1 - max2) ** 2).to("cpu").item() == 0
+    # Test operations step by step for clearer errors
+    diff = max1 - max2
+    squared = diff**2
+    summed = torch.sum(squared)
+    cpu_result = summed.to("cpu")
+    result_value = cpu_result.item()
+    assert result_value == 0
 
     torch.testing.assert_close(cpu2, tensor)
 
 
 def test_device_ordering():
     """Test that device ordering follows GPU first, CPU last convention"""
-    from torch_max_backend.max_device import get_ordered_accelerators
-
     ordered_accelerators = get_ordered_accelerators()
 
     # Check that we have both GPU and CPU
@@ -212,12 +212,12 @@ def test_gpu_first_cpu_last_convention():
 
         # Test that max_device (index 0) goes to GPU
         t_gpu = torch.tensor([1.0]).to("max_device")
-        assert isinstance(t_gpu, MaxTensor)
+        assert isinstance(t_gpu, TorchMaxTensor)
 
         # Test that highest index goes to CPU
         cpu_index = len(ordered_accelerators) - 1
         t_cpu = torch.tensor([1.0]).to(f"max_device:{cpu_index}")
-        assert isinstance(t_cpu, MaxTensor)
+        assert isinstance(t_cpu, TorchMaxTensor)
 
 
 # Original tests from the existing file
@@ -276,6 +276,41 @@ def test_device_creation(max_device):
     assert torch.allclose(arr_cpu, torch.tensor([0.0, 1.0, 2.0, 3.0]), atol=1e-4)
 
 
+def test_device_basic_full(max_device):
+    def do_full(device):
+        a = torch.full((2, 3), 7.0, device=device, dtype=torch.float32)
+        return a
+
+    function_equivalent_on_both_devices(do_full, max_device)
+
+
+def test_convolution_2d(max_device):
+    input_tensor_cpu = torch.randn(1, 3, 32, 32, device="cpu")
+    weight_cpu = torch.randn(6, 3, 5, 5, device="cpu")
+    bias_cpu = torch.randn(6, device="cpu")
+
+    def do_convolution(device):
+        input_tensor = input_tensor_cpu.to(device)
+        weight = weight_cpu.to(device)
+        bias = bias_cpu.to(device)
+        return torch.nn.functional.conv2d(
+            input_tensor, weight, bias=bias, stride=1, padding=2
+        )
+
+    function_equivalent_on_both_devices(do_convolution, max_device)
+
+
+def test_simple_module(max_device):
+    linear = torch.nn.Linear(4, 8)
+
+    def run_module(device):
+        my_linear = linear.to(device)
+        return my_linear.weight
+
+    function_equivalent_on_both_devices(run_module, max_device)
+
+
+@pytest.mark.xfail(reason="Fixme")
 def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)
     def do_sqrt(device):

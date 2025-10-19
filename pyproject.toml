@@ -46,15 +46,27 @@ max-core = [
 mojo-compiler = [
     { index = "modular-nightly" },
 ]
+torch = [
+    { index = "pytorch-nightly" },
+]
+torchvision = [
+    { index = "pytorch-nightly" },
+]
 
 [[tool.uv.index]]
 name = "modular-nightly"
 url = "https://dl.modular.com/public/nightly/python/simple/"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-nightly"
+url = "https://download.pytorch.org/whl/nightly/cu128"
+explicit = false
+
 [tool.uv]
 prerelease = "allow"
 python-preference = "only-managed"
+index-strategy = "unsafe-best-match"
 
 [tool.ruff.format]
 skip-magic-trailing-comma = true
@@ -62,10 +74,10 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "mblack==25.7.0.dev2025100101",
-    "max==25.7.0.dev2025100101",
-    "max-core==25.7.0.dev2025100101",
-    "mojo-compiler==0.25.7.0.dev2025100101",
+    "mblack==25.7.0.dev2025101518",
+    "max==25.7.0.dev2025101518",
+    "max-core==25.7.0.dev2025101518",
+    "mojo-compiler==0.25.7.0.dev2025101518",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",
@@ -83,5 +95,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "rich>=14.1.0",
     "matplotlib>=3.10.6",
+    "pytest-random-order>=1.2.0",
+    "setuptools>=80.9.0",
 ]
 

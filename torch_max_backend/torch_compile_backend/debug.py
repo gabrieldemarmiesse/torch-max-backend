@@ -17,7 +17,7 @@ from max.driver.tensor import load_max_tensor
 from max.graph import TensorValue
 
 from torch_max_backend.flags import debug_graph
-from torch_max_backend.utils import get_error_message
+from torch_max_backend.torch_compile_backend.utils import get_error_message
 
 # TODO: directory creation and cleanup
 output_directory = Path("/tmp/.torch_max_backend_debug")

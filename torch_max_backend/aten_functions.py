@@ -11,12 +11,14 @@ import operator
 import os
 from typing import Literal
 
-import max.graph.ops as max_ops
 import max.graph.type as max_type
 import numpy as np
 import torch
 from max.dtype import DType
+from max.experimental import functional as F
+from max.experimental.tensor import Tensor as MaxEagerTensor
 from max.graph import Dim, StaticDim, TensorType, TensorValue
+from max.graph import ops as max_ops
 from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
 from torch._decomp import core_aten_decompositions
@@ -24,6 +26,9 @@ from torch._ops import OpOverload, OpOverloadPacket
 from torch.ops import aten
 
 from torch_max_backend.flags import verbose_enabled
+from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerators
+
+MaxTensor = TensorValue | MaxEagerTensor
 
 
 def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
@@ -52,7 +57,6 @@ def torch_device_to_max_device(x: torch.device) -> DeviceRef:
         # index None or 0 = first accelerator (first GPU or CPU if no GPU)
         # higher indices = additional GPUs, with CPU at the highest index
         index = x.index if x.index is not None else 0
-        from torch_max_backend.max_device import get_ordered_accelerators
 
         accelerators = get_ordered_accelerators()
         if index >= len(accelerators):
@@ -168,8 +172,8 @@ def type_promotion(x, y):
     int_dtype = get_int_dtype(x, y)
     if float_dtype is not None and int_dtype is not None:
         # If both are float and int, promote to float
-        x = max_ops.cast(x, dtype=float_dtype)
-        y = max_ops.cast(y, dtype=float_dtype)
+        x = F.cast(x, dtype=float_dtype)
+        y = F.cast(y, dtype=float_dtype)
 
     return x, y
 
@@ -182,8 +186,8 @@ def aten_floordiv(x, y):
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
 @map_to(aten._adaptive_avg_pool2d)
 def aten__adaptive_avg_pool2d(
-    input: TensorValue, output_size: list[SymIntType]
-) -> TensorValue:
+    input: MaxTensor, output_size: list[SymIntType]
+) -> MaxTensor:
     # For now, we'll implement this using global average pooling for (1, 1) output
     # and regular avg pooling for other sizes
     if output_size == (1, 1) or output_size == 1:
@@ -193,6 +197,11 @@ def aten__adaptive_avg_pool2d(
         # For other output sizes, we'll use avg_pool2d with calculated kernel size and stride
         # Get input spatial dimensions (assuming NCHW format)
         input_h, input_w = input.shape[2], input.shape[3]
+        try:
+            input_h = int(input_h)
+            input_w = int(input_w)
+        except TypeError:
+            pass
 
         if isinstance(output_size, int):
             output_h = output_w = output_size
@@ -208,7 +217,7 @@ def aten__adaptive_avg_pool2d(
         # Convert input from NCHW to NHWC for MAX
         input_nhwc = input.permute([0, 2, 3, 1])
 
-        result = max_ops.avg_pool2d(
+        result = F.avg_pool2d(
             input_nhwc,
             kernel_size=(kernel_h, kernel_w),
             stride=(stride_h, stride_w),
@@ -370,14 +379,14 @@ def aten__adaptive_avg_pool2d_backward(
 # _native_batch_norm_legit_no_training(Tensor input, Tensor? weight, Tensor? bias, Tensor running_mean, Tensor running_var, float momentum, float eps) -> (Tensor, Tensor, Tensor)
 @map_to(aten._native_batch_norm_legit_no_training)
 def aten__native_batch_norm_legit_no_training(
-    input: TensorValue,
-    weight: TensorValue | None,
-    bias: TensorValue | None,
-    running_mean: TensorValue,
-    running_var: TensorValue,
+    input: MaxTensor,
+    weight: MaxTensor | None,
+    bias: MaxTensor | None,
+    running_mean: MaxTensor,
+    running_var: MaxTensor,
     momentum: float,
     eps: float,
-) -> tuple[TensorValue, NotImplementedError, NotImplementedError]:
+) -> tuple[MaxTensor, NotImplementedError, NotImplementedError]:
     """
     Implements batch normalization for inference (no training).
 
@@ -404,21 +413,19 @@ def aten__native_batch_norm_legit_no_training(
     broadcast_shape[1] = num_channels  # Set channel dimension
 
     # Reshape running mean and variance for broadcasting
-    running_mean_reshaped = max_ops.reshape(running_mean, broadcast_shape)
-    running_var_reshaped = max_ops.reshape(running_var, broadcast_shape)
+    running_mean_reshaped = F.reshape(running_mean, broadcast_shape)
+    running_var_reshaped = F.reshape(running_var, broadcast_shape)
 
     # Compute normalization: (input - mean) / sqrt(var + eps)
-    normalized = (input - running_mean_reshaped) / max_ops.sqrt(
-        running_var_reshaped + eps
-    )
+    normalized = (input - running_mean_reshaped) / F.sqrt(running_var_reshaped + eps)
 
     # Apply weight (gamma) and bias (beta) if provided
     if weight is not None:
-        weight_reshaped = max_ops.reshape(weight, broadcast_shape)
+        weight_reshaped = F.reshape(weight, broadcast_shape)
         normalized = normalized * weight_reshaped
 
     if bias is not None:
-        bias_reshaped = max_ops.reshape(bias, broadcast_shape)
+        bias_reshaped = F.reshape(bias, broadcast_shape)
         normalized = normalized + bias_reshaped
 
     # It's not sure we'll ever support returning those, notably because of
@@ -440,9 +447,9 @@ def aten__native_batch_norm_legit_no_training(
 # _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)
 @map_to(aten._scaled_dot_product_flash_attention)
 def aten__scaled_dot_product_flash_attention(
-    query: TensorValue,
-    key: TensorValue,
-    value: TensorValue,
+    query: MaxTensor,
+    key: MaxTensor,
+    value: MaxTensor,
     dropout_p: float = 0.0,
     is_causal: bool = False,
     return_debug_mask: bool = False,
@@ -453,9 +460,9 @@ def aten__scaled_dot_product_flash_attention(
     # MAX expects tensors in shape [batch, seq_len, num_heads, head_dim]
 
     # Transpose from PyTorch format to MAX format
-    q = max_ops.permute(query, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
-    k = max_ops.permute(key, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
-    v = max_ops.permute(value, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
+    q = F.permute(query, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
+    k = F.permute(key, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
+    v = F.permute(value, [0, 2, 1, 3])  # [batch, seq_len, num_heads, head_dim]
 
     # Calculate scale if not provided
     if scale is None:
@@ -473,7 +480,7 @@ def aten__scaled_dot_product_flash_attention(
     attn_out = flash_attention_gpu(q, k, v, mask_variant=mask_variant, scale=scale)
 
     # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
-    result = max_ops.permute(attn_out, [0, 2, 1, 3])
+    result = F.permute(attn_out, [0, 2, 1, 3])
 
     # Return tuple as expected by PyTorch (we only support inference, not training)
     # The full signature returns 9 values for training, but we only need the first one
@@ -538,14 +545,14 @@ _MHA_MASK_CONFIG_DICT = {
 
 
 def flash_attention_gpu(
-    q: TensorValue,
-    k: TensorValue,
-    v: TensorValue,
+    q: MaxTensor,
+    k: MaxTensor,
+    v: MaxTensor,
     mask_variant: MHAMaskVariant,
     scale: float,
     local_window_size: int = -1,
-    valid_length: TensorValue | None = None,
-) -> TensorValue:
+    valid_length: MaxTensor | None = None,
+) -> MaxTensor:
     """Computes flash attention using GPU-optimized kernel.
 
     Args:
@@ -625,7 +632,7 @@ def flash_attention_gpu(
 
 # _softmax(Tensor self, int dim, bool half_to_float) -> Tensor
 @map_to(aten._softmax)
-def aten__softmax(self: TensorValue, dim: int, half_to_float: bool):
+def aten__softmax(self: MaxTensor, dim: int, half_to_float: bool):
     if half_to_float:
         dtype = torch.float32
     else:
@@ -637,7 +644,7 @@ def aten__softmax(self: TensorValue, dim: int, half_to_float: bool):
 def aten_softmax(input, dim=-1, dtype=None):
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
-        input = max_ops.cast(input, dtype=max_dtype)
+        input = F.cast(input, dtype=max_dtype)
 
     # Handle negative dim
     if dim < 0:
@@ -651,7 +658,7 @@ def aten_softmax(input, dim=-1, dtype=None):
     x_shifted = input - x_max
 
     # Compute exponential
-    x_exp = max_ops.exp(x_shifted)
+    x_exp = F.exp(x_shifted)
 
     # Sum along the axis, keeping dimensions for broadcasting
     x_sum = aten_sum(x_exp, dim=[dim], keepdim=True)
@@ -663,7 +670,7 @@ def aten_softmax(input, dim=-1, dtype=None):
 # _to_copy(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, bool non_blocking=False, MemoryFormat? memory_format=None) -> Tensor
 @map_to(aten._to_copy)
 def aten__to_copy(
-    tensor: TensorValue,
+    tensor: MaxTensor,
     *,
     dtype: torch.dtype | None = None,
     layout: torch.layout | None = None,
@@ -674,21 +681,21 @@ def aten__to_copy(
 ):
     result = tensor
     if device is not None:
-        result = max_ops.transfer_to(result, device=torch_device_to_max_device(device))
+        result = F.transfer_to(result, device=torch_device_to_max_device(device))
     if dtype is not None:
-        result = max_ops.cast(result, dtype=DType.from_torch(dtype))
+        result = F.cast(result, dtype=DType.from_torch(dtype))
     return result
 
 
 # abs(Tensor self) -> Tensor
 @map_to(aten.abs)
-def aten_abs(x: TensorValue):
-    return max_ops.abs(x)
+def aten_abs(x: MaxTensor):
+    return F.abs(x)
 
 
 # acos(Tensor self) -> Tensor
 @map_to(aten.acos)
-def aten_acos(x: TensorValue) -> TensorValue:
+def aten_acos(x: MaxTensor) -> MaxTensor:
     """Computes the arccosine (inverse cosine) of the input tensor.
 
     Returns values in the range [0, π] for inputs in [-1, 1].
@@ -700,14 +707,14 @@ def aten_acos(x: TensorValue) -> TensorValue:
     Returns:
         Arccosine of the input in radians [0, π]
     """
-    # Create constants as tensors for use in max_ops.where()
-    zero = max_ops.constant(0.0, dtype=x.dtype, device=x.device)
-    one = max_ops.constant(1.0, dtype=x.dtype, device=x.device)
-    neg_one = max_ops.constant(-1.0, dtype=x.dtype, device=x.device)
+    # Create constants as tensors for use in F.where()
+    zero = F.constant(0.0, dtype=x.dtype, device=x.device)
+    one = F.constant(1.0, dtype=x.dtype, device=x.device)
+    neg_one = F.constant(-1.0, dtype=x.dtype, device=x.device)
 
     # Clamp input to valid domain [-1, 1]
-    x_clamped = max_ops.max(max_ops.min(x, 1.0), -1.0)
-    x_abs = max_ops.abs(x_clamped)
+    x_clamped = F.max(F.min(x, 1.0), -1.0)
+    x_abs = F.abs(x_clamped)
 
     # Domain split at 0.5
     small_domain = x_abs < 0.5
@@ -717,15 +724,15 @@ def aten_acos(x: TensorValue) -> TensorValue:
     # Large domain: x_squared = (1 - |x|) / 2, d = sqrt(x_squared)
     x_squared_small = x_clamped * x_clamped
     x_squared_large = (1.0 - x_abs) * 0.5
-    x_squared = max_ops.where(small_domain, x_squared_small, x_squared_large)
+    x_squared = F.where(small_domain, x_squared_small, x_squared_large)
 
     d_small = x_abs
-    d_large = max_ops.sqrt(x_squared_large)
-    d = max_ops.where(small_domain, d_small, d_large)
+    d_large = F.sqrt(x_squared_large)
+    d = F.where(small_domain, d_small, d_large)
 
     # Handle special case |x| = 1 (d should be 0)
     is_one = x_abs >= 1.0
-    d = max_ops.where(is_one, zero, d)
+    d = F.where(is_one, zero, d)
 
     # Polynomial evaluation using Horner's method
     # Coefficients from Mojo stdlib (Remez approximation)
@@ -739,7 +746,7 @@ def aten_acos(x: TensorValue) -> TensorValue:
     # Small domain: π/2 - (d + poly) with sign preservation
     # copysign(d, x) is implemented as d * sign(x)
     is_negative = x_clamped < 0.0
-    sign_x = max_ops.where(is_negative, neg_one, one)
+    sign_x = F.where(is_negative, neg_one, one)
     d_signed = d * sign_x
     poly_signed = poly * sign_x
     result_small = (math.pi * 0.5) - (d_signed + poly_signed)
@@ -748,10 +755,10 @@ def aten_acos(x: TensorValue) -> TensorValue:
     result_large = 2.0 * (d + poly)
 
     # For large domain with negative x: π - result
-    result_large = max_ops.where(is_negative, math.pi - result_large, result_large)
+    result_large = F.where(is_negative, math.pi - result_large, result_large)
 
     # Select based on domain
-    result = max_ops.where(small_domain, result_small, result_large)
+    result = F.where(small_domain, result_small, result_large)
 
     return result
 
@@ -763,7 +770,7 @@ def aten_acos(x: TensorValue) -> TensorValue:
 # add.Scalar(Tensor self, Scalar other, Scalar alpha=1) -> Tensor
 # add.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
 @map_to(aten.add)
-def aten_add(input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1):
+def aten_add(input: MaxTensor, other: MaxTensor | Scalar, alpha: Scalar = 1):
     input, other = type_promotion(input, other)
     if alpha != 1:
         other = aten_mul(other, alpha)
@@ -773,8 +780,8 @@ def aten_add(input: TensorValue, other: TensorValue | Scalar, alpha: Scalar = 1)
 # addcdiv(Tensor self, Tensor tensor1, Tensor tensor2, *, Scalar value=1) -> Tensor
 @map_to(aten.addcdiv)
 def aten_addcdiv(
-    input: TensorValue, tensor1: TensorValue, tensor2: TensorValue, *, value: Scalar = 1
-) -> TensorValue:
+    input: MaxTensor, tensor1: MaxTensor, tensor2: MaxTensor, *, value: Scalar = 1
+) -> MaxTensor:
     # addcdiv computes: input + value * tensor1 / tensor2
     div_result = aten_div(tensor1, tensor2)
     if value != 1:
@@ -785,8 +792,8 @@ def aten_addcdiv(
 # addcmul(Tensor self, Tensor tensor1, Tensor tensor2, *, Scalar value=1) -> Tensor
 @map_to(aten.addcmul)
 def aten_addcmul(
-    input: TensorValue, tensor1: TensorValue, tensor2: TensorValue, *, value: Scalar = 1
-) -> TensorValue:
+    input: MaxTensor, tensor1: MaxTensor, tensor2: MaxTensor, *, value: Scalar = 1
+) -> MaxTensor:
     # addcmul computes: input + value * tensor1 * tensor2
     mul_result = aten_mul(tensor1, tensor2)
     if value != 1:
@@ -797,13 +804,13 @@ def aten_addcmul(
 # addmm(Tensor self, Tensor mat1, Tensor mat2, *, Scalar beta=1, Scalar alpha=1) -> Tensor
 @map_to(aten.addmm)
 def aten_addmm(
-    input: TensorValue,
-    mat1: TensorValue,
-    mat2: TensorValue,
+    input: MaxTensor,
+    mat1: MaxTensor,
+    mat2: MaxTensor,
     *,
     beta: Scalar = 1.0,
     alpha: Scalar = 1.0,
-) -> TensorValue:
+) -> MaxTensor:
     # addmm computes: beta * input + alpha * mat1 @ mat2
     matmul_result = operator.matmul(mat1, mat2)
 
@@ -821,15 +828,15 @@ def aten_addmm(
 
 # alias(Tensor(a) self) -> Tensor(a)
 @map_to(aten.alias)
-def aten_alias(input: TensorValue) -> TensorValue:
+def aten_alias(input: MaxTensor) -> MaxTensor:
     return input
 
 
 # amax(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 @map_to(aten.amax)
 def aten_amax(
-    input: TensorValue, dim: list[int] = [], keepdim: bool = False
-) -> TensorValue:
+    input: MaxTensor, dim: list[int] = [], keepdim: bool = False
+) -> MaxTensor:
     # If empty dim list is provided, reduce over all dimensions
     if not dim:
         dim = [i for i in range(len(input.shape))]
@@ -837,12 +844,12 @@ def aten_amax(
     # Reduce each dimension one by one, similar to aten_mean
     result = input
     for axis in dim:
-        result = max_ops.max(result, axis=axis)
+        result = F.max(result, axis=axis)
 
     if not keepdim:
         # Squeeze the reduced dimensions - sort in reverse order to avoid index shifting
         for axis in sorted(dim, reverse=True):
-            result = max_ops.squeeze(result, axis=axis)
+            result = F.squeeze(result, axis=axis)
 
     return result
 
@@ -850,8 +857,8 @@ def aten_amax(
 # amin(Tensor self, int[1] dim=[], bool keepdim=False) -> Tensor
 @map_to(aten.amin)
 def aten_amin(
-    input: TensorValue, dim: list[int] = [], keepdim: bool = False
-) -> TensorValue:
+    input: MaxTensor, dim: list[int] = [], keepdim: bool = False
+) -> MaxTensor:
     # If empty dim list is provided, reduce over all dimensions
     if not dim:
         dim = [i for i in range(len(input.shape))]
@@ -859,12 +866,12 @@ def aten_amin(
     # Reduce each dimension one by one, similar to aten_mean
     result = input
     for axis in dim:
-        result = max_ops.min(result, axis=axis)
+        result = F.min(result, axis=axis)
 
     if not keepdim:
         # Squeeze the reduced dimensions - sort in reverse order to avoid index shifting
         for axis in sorted(dim, reverse=True):
-            result = max_ops.squeeze(result, axis=axis)
+            result = F.squeeze(result, axis=axis)
 
     return result
 
@@ -874,15 +881,15 @@ def aten_amin(
 # any.dims(Tensor self, int[]? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.any)
 def aten_any(
-    input: TensorValue, dim: int | list[int] | None = None, keepdim: bool = False
-) -> TensorValue:
+    input: MaxTensor, dim: int | list[int] | None = None, keepdim: bool = False
+) -> MaxTensor:
     """
     Equivalent to torch.any.
     Tests if any elements in the input are True (non-zero).
     Uses max() on boolean tensor since True > False.
     """
     # Convert input to boolean first (non-zero values become True)
-    input_bool = max_ops.not_equal(input, 0)
+    input_bool = F.not_equal(input, 0)
 
     if dim is None:
         # Return True if any element is True (reduce all dimensions)
@@ -896,13 +903,13 @@ def aten_any(
     result = input_bool
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
-        result = max_ops.max(result, axis=axis)
+        result = F.max(result, axis=axis)
 
     # Handle keepdim=False
     if not keepdim:
         # Squeeze the reduced dimensions
         for axis in sorted(dim, reverse=True):
-            result = max_ops.squeeze(result, axis=axis)
+            result = F.squeeze(result, axis=axis)
 
     return result
 
@@ -918,7 +925,7 @@ def aten_arange(
     layout: torch.layout | None = None,
     device: torch.device | None = None,
     pin_memory: bool | None = None,
-) -> TensorValue:
+) -> MaxTensor:
     if isinstance(start, float):
         raise ValueError("We don't support float start values for torch.arange")
     if isinstance(step, float):
@@ -938,14 +945,14 @@ def aten_arange(
         end = start
         start = 0
 
-    # Calculate output dimension for max_ops.range
+    # Calculate output dimension for F.range
     # The length is ceil((end - start) / step) as per PyTorch docs
     out_dim = end - start
     if step != 1:
         out_dim = int(math.ceil(out_dim / step))
 
-    # Use max_ops.range to create the sequence
-    result = max_ops.range(
+    # Use F.range to create the sequence
+    result = F.range(
         Dim(start),
         Dim(end),
         Dim(step),
@@ -955,26 +962,26 @@ def aten_arange(
     )
     # TODO: Remove this when the bug is addressed in MAX, range doesn't produce the correct dtype
     # https://github.com/modular/modular/issues/5178
-    return max_ops.cast(result, dtype=dtype)
+    return F.cast(result, dtype=dtype)
 
 
 # argmax(Tensor self, int? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.argmax)
 def aten_argmax(
-    input: TensorValue, dim: int | None = None, keepdim: bool = False
-) -> TensorValue:
+    input: MaxTensor, dim: int | None = None, keepdim: bool = False
+) -> MaxTensor:
     # If dim is None, return argmax of flattened tensor
     if dim is None:
         # Flatten the tensor and compute argmax along axis 0
-        flattened = max_ops.reshape(input, [-1])
-        result = max_ops.argmax(flattened, axis=0)
+        flattened = F.reshape(input, [-1])
+        result = F.argmax(flattened, axis=0)
         if keepdim:
             # Return tensor with same number of dimensions as input, all size 1
             result_shape = [1] * len(input.shape)
-            result = max_ops.reshape(result, result_shape)
+            result = F.reshape(result, result_shape)
         else:
             # Return scalar (0-dimensional tensor)
-            result = max_ops.squeeze(result, axis=0)
+            result = F.squeeze(result, axis=0)
     else:
         # Compute argmax along specified dimension
         # MAX only supports argmax on innermost axis, so we need to transpose
@@ -987,10 +994,10 @@ def aten_argmax(
         # If dim is not the last dimension, transpose to make it last
         if dim != ndim - 1:
             # Swap target dimension with last dimension
-            transposed_input = max_ops.transpose(input, dim, ndim - 1)
+            transposed_input = F.transpose(input, dim, ndim - 1)
 
             # Perform argmax on last axis
-            result = max_ops.argmax(transposed_input, axis=-1)
+            result = F.argmax(transposed_input, axis=-1)
 
             # Swap back if needed
             if not keepdim:
@@ -999,20 +1006,20 @@ def aten_argmax(
                 if dim < result_ndim:
                     # Swap back: what was at position dim is now at position (result_ndim - 1)
                     # We want to move it back to position dim
-                    result = max_ops.transpose(result, dim, result_ndim - 1)
+                    result = F.transpose(result, dim, result_ndim - 1)
             else:
                 # For keepdim=True, the result still has the same number of dimensions
                 # Swap the dimensions back
-                result = max_ops.transpose(result, dim, ndim - 1)
+                result = F.transpose(result, dim, ndim - 1)
         else:
             # Target axis is already the last dimension
-            result = max_ops.argmax(input, axis=dim)
+            result = F.argmax(input, axis=dim)
 
         if not keepdim:
             # Find the dimension with size 1 and squeeze it
             for i, size in enumerate(result.shape):
                 if size == 1:
-                    result = max_ops.squeeze(result, axis=i)
+                    result = F.squeeze(result, axis=i)
                     break
     return result
 
@@ -1020,20 +1027,20 @@ def aten_argmax(
 # argmin(Tensor self, int? dim=None, bool keepdim=False) -> Tensor
 @map_to(aten.argmin)
 def aten_argmin(
-    input: TensorValue, dim: int | None = None, keepdim: bool = False
-) -> TensorValue:
+    input: MaxTensor, dim: int | None = None, keepdim: bool = False
+) -> MaxTensor:
     # If dim is None, return argmin of flattened tensor
     if dim is None:
         # Flatten the tensor and compute argmin along axis 0
-        flattened = max_ops.reshape(input, [-1])
-        result = max_ops.argmin(flattened, axis=0)
+        flattened = F.reshape(input, [-1])
+        result = F.argmin(flattened, axis=0)
         if keepdim:
             # Return tensor with same number of dimensions as input, all size 1
             result_shape = [1] * len(input.shape)
-            result = max_ops.reshape(result, result_shape)
+            result = F.reshape(result, result_shape)
         else:
             # Return scalar (0-dimensional tensor)
-            result = max_ops.squeeze(result, axis=0)
+            result = F.squeeze(result, axis=0)
     else:
         # Compute argmin along specified dimension
         # MAX only supports argmin on innermost axis, so we need to transpose
@@ -1046,10 +1053,10 @@ def aten_argmin(
         # If dim is not the last dimension, transpose to make it last
         if dim != ndim - 1:
             # Swap target dimension with last dimension
-            transposed_input = max_ops.transpose(input, dim, ndim - 1)
+            transposed_input = F.transpose(input, dim, ndim - 1)
 
             # Perform argmin on last axis
-            result = max_ops.argmin(transposed_input, axis=-1)
+            result = F.argmin(transposed_input, axis=-1)
 
             # Swap back if needed
             if not keepdim:
@@ -1058,20 +1065,20 @@ def aten_argmin(
                 if dim < result_ndim:
                     # Swap back: what was at position dim is now at position (result_ndim - 1)
                     # We want to move it back to position dim
-                    result = max_ops.transpose(result, dim, result_ndim - 1)
+                    result = F.transpose(result, dim, result_ndim - 1)
             else:
                 # For keepdim=True, the result still has the same number of dimensions
                 # Swap the dimensions back
-                result = max_ops.transpose(result, dim, ndim - 1)
+                result = F.transpose(result, dim, ndim - 1)
         else:
             # Target axis is already the last dimension
-            result = max_ops.argmin(input, axis=dim)
+            result = F.argmin(input, axis=dim)
 
         if not keepdim:
             # Find the dimension with size 1 and squeeze it
             for i, size in enumerate(result.shape):
                 if size == 1:
-                    result = max_ops.squeeze(result, axis=i)
+                    result = F.squeeze(result, axis=i)
                     break
     return result
 
@@ -1082,9 +1089,9 @@ def aten_argmin(
 
 # asinh(Tensor self) -> Tensor
 @map_to(aten.asinh)
-def aten_asinh(x: TensorValue) -> TensorValue:
+def aten_asinh(x: MaxTensor) -> MaxTensor:
     """Computes inverse hyperbolic sine using asinh(x) = log(x + sqrt(x² + 1))"""
-    return max_ops.log(x + max_ops.sqrt(x * x + 1))
+    return F.log(x + F.sqrt(x * x + 1))
 
 
 # atan(Tensor self) -> Tensor
@@ -1094,8 +1101,8 @@ def aten_asinh(x: TensorValue) -> TensorValue:
 
 # atanh(Tensor self) -> Tensor
 @map_to(aten.atanh)
-def aten_atanh(x: TensorValue) -> TensorValue:
-    return max_ops.atanh(x)
+def aten_atanh(x: MaxTensor) -> MaxTensor:
+    return F.atanh(x)
 
 
 # avg_pool1d(Tensor self, int[1] kernel_size, int[1] stride=[], int[1] padding=0, bool ceil_mode=False, bool count_include_pad=True) -> Tensor
@@ -1104,7 +1111,7 @@ def aten_atanh(x: TensorValue) -> TensorValue:
 # avg_pool2d(Tensor self, int[2] kernel_size, int[2] stride=[], int[2] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None) -> Tensor
 @map_to(aten.avg_pool2d)
 def aten_avg_pool2d(
-    input: TensorValue,
+    input: MaxTensor,
     kernel_size: list[int],
     stride: list[int] | None = None,
     padding: list[int] = [0, 0],
@@ -1155,7 +1162,7 @@ def aten_avg_pool2d(
     input_nhwc = input.permute([0, 2, 3, 1])
 
     # Apply average pooling using MAX
-    result = max_ops.avg_pool2d(
+    result = F.avg_pool2d(
         input_nhwc,
         kernel_size=kernel_size,
         stride=stride,
@@ -1174,8 +1181,8 @@ def aten_avg_pool2d(
 
 # bitwise_and.Scalar(Tensor self, Scalar other) -> Tensor
 @map_to(aten.bitwise_and.Scalar)
-def aten_bitwise_and_scalar(input: TensorValue, other: Scalar) -> TensorValue:
-    return max_ops.custom(
+def aten_bitwise_and_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
+    return F.custom(
         name="bitwise_and_scalar",
         device=input.device,
         values=[input],
@@ -1188,14 +1195,14 @@ def aten_bitwise_and_scalar(input: TensorValue, other: Scalar) -> TensorValue:
 
 # bitwise_and.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.bitwise_and.Tensor)
-def aten_bitwise_and(input: TensorValue, other: TensorValue) -> TensorValue:
+def aten_bitwise_and(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     # For the moment we only support tensors of the same dimension
 
     final_shape = find_broadcast_shape(input.shape, other.shape)
-    input = max_ops.broadcast_to(input, final_shape)
-    other = max_ops.broadcast_to(other, final_shape)
+    input = F.broadcast_to(input, final_shape)
+    other = F.broadcast_to(other, final_shape)
 
-    return max_ops.custom(
+    return F.custom(
         name="bitwise_and",
         device=input.device,
         values=[input, other],
@@ -1207,8 +1214,8 @@ def aten_bitwise_and(input: TensorValue, other: TensorValue) -> TensorValue:
 
 # bitwise_not(Tensor self) -> Tensor
 @map_to(aten.bitwise_not)
-def aten_bitwise_not(input: TensorValue) -> TensorValue:
-    return max_ops.custom(
+def aten_bitwise_not(input: MaxTensor) -> MaxTensor:
+    return F.custom(
         name="bitwise_not",
         device=input.device,
         values=[input],
@@ -1220,8 +1227,8 @@ def aten_bitwise_not(input: TensorValue) -> TensorValue:
 
 # bitwise_or.Scalar(Tensor self, Scalar other) -> Tensor
 @map_to(aten.bitwise_or.Scalar)
-def aten_bitwise_or_scalar(input: TensorValue, other: Scalar) -> TensorValue:
-    return max_ops.custom(
+def aten_bitwise_or_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
+    return F.custom(
         name="bitwise_or_scalar",
         device=input.device,
         values=[input],
@@ -1234,14 +1241,14 @@ def aten_bitwise_or_scalar(input: TensorValue, other: Scalar) -> TensorValue:
 
 # bitwise_or.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.bitwise_or.Tensor)
-def aten_bitwise_or(input: TensorValue, other: TensorValue) -> TensorValue:
+def aten_bitwise_or(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     # For the moment we only support tensors of the same dimension
 
     final_shape = find_broadcast_shape(input.shape, other.shape)
-    input = max_ops.broadcast_to(input, final_shape)
-    other = max_ops.broadcast_to(other, final_shape)
+    input = F.broadcast_to(input, final_shape)
+    other = F.broadcast_to(other, final_shape)
 
-    return max_ops.custom(
+    return F.custom(
         name="bitwise_or",
         device=input.device,
         values=[input, other],
@@ -1253,8 +1260,8 @@ def aten_bitwise_or(input: TensorValue, other: TensorValue) -> TensorValue:
 
 # bitwise_xor.Scalar(Tensor self, Scalar other) -> Tensor
 @map_to(aten.bitwise_xor.Scalar)
-def aten_bitwise_xor_scalar(input: TensorValue, other: Scalar) -> TensorValue:
-    return max_ops.custom(
+def aten_bitwise_xor_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
+    return F.custom(
         name="bitwise_xor_scalar",
         device=input.device,
         values=[input],
@@ -1267,14 +1274,14 @@ def aten_bitwise_xor_scalar(input: TensorValue, other: Scalar) -> TensorValue:
 
 # bitwise_xor.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.bitwise_xor.Tensor)
-def aten_bitwise_xor(input: TensorValue, other: TensorValue) -> TensorValue:
+def aten_bitwise_xor(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     # For the moment we only support tensors of the same dimension
 
     final_shape = find_broadcast_shape(input.shape, other.shape)
-    input = max_ops.broadcast_to(input, final_shape)
-    other = max_ops.broadcast_to(other, final_shape)
+    input = F.broadcast_to(input, final_shape)
+    other = F.broadcast_to(other, final_shape)
 
-    return max_ops.custom(
+    return F.custom(
         name="bitwise_xor",
         device=input.device,
         values=[input, other],
@@ -1286,7 +1293,7 @@ def aten_bitwise_xor(input: TensorValue, other: TensorValue) -> TensorValue:
 
 # bmm(Tensor self, Tensor mat2) -> Tensor
 @map_to(aten.bmm)
-def aten_bmm(input: TensorValue, mat2: TensorValue) -> TensorValue:
+def aten_bmm(input: MaxTensor, mat2: MaxTensor) -> MaxTensor:
     """
     Batch matrix multiplication equivalent to torch.bmm.
 
@@ -1298,18 +1305,18 @@ def aten_bmm(input: TensorValue, mat2: TensorValue) -> TensorValue:
         3D tensor of shape [batch_size, n, p]
     """
     # MAX's matmul handles batch dimensions automatically through broadcasting
-    return max_ops.matmul(input, mat2)
+    return F.matmul(input, mat2)
 
 
 # cat(Tensor[] tensors, int dim=0) -> Tensor
 @map_to(aten.cat)
-def aten_cat(tensors: list[TensorValue], dim: int = 0) -> TensorValue:
-    return max_ops.concat(tensors, axis=dim)
+def aten_cat(tensors: list[MaxTensor], dim: int = 0) -> MaxTensor:
+    return F.concat(tensors, axis=dim)
 
 
 # ceil(Tensor self) -> Tensor
 @map_to(aten.ceil)
-def aten_ceil(input: TensorValue) -> TensorValue:
+def aten_ceil(input: MaxTensor) -> MaxTensor:
     """
     Ceiling of the input tensor, element-wise.
 
@@ -1319,7 +1326,7 @@ def aten_ceil(input: TensorValue) -> TensorValue:
     if input.type.dtype.is_integral():
         return input
     else:
-        return max_ops.custom(
+        return F.custom(
             name="ceil",
             device=input.device,
             values=[input],
@@ -1333,24 +1340,24 @@ def aten_ceil(input: TensorValue) -> TensorValue:
 # clamp.Tensor(Tensor self, Tensor? min=None, Tensor? max=None) -> Tensor
 @map_to(aten.clamp)
 def aten_clamp(
-    input: TensorValue,
-    min: TensorValue | Scalar | None = None,
-    max: TensorValue | Scalar | None = None,
-) -> TensorValue:
+    input: MaxTensor,
+    min: MaxTensor | Scalar | None = None,
+    max: MaxTensor | Scalar | None = None,
+) -> MaxTensor:
     """
     Implements torch.clamp by clamping all elements in input to the range [min, max].
-    Uses max_ops.max and max_ops.min to implement clamp as:
+    Uses F.max and F.min to implement clamp as:
     clamp(x, min, max) = min(max(x, min), max)
     """
     result = input
 
     # Apply lower bound if min is provided
     if min is not None:
-        result = max_ops.max(result, min)
+        result = F.max(result, min)
 
     # Apply upper bound if max is provided
     if max is not None:
-        result = max_ops.min(result, max)
+        result = F.min(result, max)
 
     return result
 
@@ -1358,8 +1365,8 @@ def aten_clamp(
 # clone(Tensor self, *, MemoryFormat? memory_format=None) -> Tensor
 @map_to(aten.clone)
 def aten_clone(
-    input: TensorValue, *, memory_format: torch.memory_format | None = None
-) -> TensorValue:
+    input: MaxTensor, *, memory_format: torch.memory_format | None = None
+) -> MaxTensor:
     return input
 
 
@@ -1370,16 +1377,16 @@ def aten_clone(
 # convolution(Tensor input, Tensor weight, Tensor? bias, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups) -> Tensor
 @map_to(aten.convolution)
 def aten_convolution(
-    input: TensorValue,
-    weight: TensorValue,
-    bias: TensorValue | None,
+    input: MaxTensor,
+    weight: MaxTensor,
+    bias: MaxTensor | None,
     stride: list[SymIntType],
     padding: list[SymIntType],
     dilation: list[SymIntType],
     transposed: bool,
     output_padding: list[SymIntType],
     groups: SymIntType,
-) -> TensorValue:
+) -> MaxTensor:
     # For now, we only support the 2D case that maps to F.conv2d
     if transposed:
         raise NotImplementedError("Transposed convolution is not supported yet")
@@ -1415,7 +1422,7 @@ def aten_convolution(
     # to MAX RSCF: [kernel_h, kernel_w, in_channels, out_channels]
     weight_rscf = weight.permute([2, 3, 1, 0])
 
-    result = max_ops.conv2d(
+    result = F.conv2d(
         input_nhwc,
         weight_rscf,
         bias=bias,
@@ -1435,29 +1442,29 @@ def aten_convolution(
 # copy(Tensor self, Tensor src, bool non_blocking=False) -> Tensor
 @map_to(aten.copy)
 def aten_copy(
-    input: TensorValue, src: TensorValue, non_blocking: bool = False
-) -> TensorValue:
+    input: MaxTensor, src: MaxTensor, non_blocking: bool = False
+) -> MaxTensor:
     return src
 
 
 # cos(Tensor self) -> Tensor
 @map_to(aten.cos)
-def aten_cos(x: TensorValue) -> TensorValue:
-    return max_ops.cos(x)
+def aten_cos(x: MaxTensor) -> MaxTensor:
+    return F.cos(x)
 
 
 # cosh(Tensor self) -> Tensor
 @map_to(aten.cosh)
-def aten_cosh(x: TensorValue) -> TensorValue:
+def aten_cosh(x: MaxTensor) -> MaxTensor:
     """Computes hyperbolic cosine using cosh(x) = (exp(x) + exp(-x)) / 2"""
-    return (max_ops.exp(x) + max_ops.exp(-x)) / 2
+    return (F.exp(x) + F.exp(-x)) / 2
 
 
 # cumsum(Tensor self, int dim, *, ScalarType? dtype=None) -> Tensor
 @map_to(aten.cumsum)
 def aten_cumsum(
-    input: TensorValue, dim: int, *, dtype: torch.dtype | None = None
-) -> TensorValue:
+    input: MaxTensor, dim: int, *, dtype: torch.dtype | None = None
+) -> MaxTensor:
     """
     Returns the cumulative sum of elements of input in the dimension dim.
 
@@ -1468,16 +1475,16 @@ def aten_cumsum(
     """
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
-        input = max_ops.cast(input, dtype=max_dtype)
+        input = F.cast(input, dtype=max_dtype)
 
     # MAX's cumsum handles negative dimensions automatically, so no need to convert
-    return max_ops.cumsum(input, axis=dim)
+    return F.cumsum(input, axis=dim)
 
 
 # TODO: handle inplace?
 # detach(Tensor(a) self) -> Tensor(a)
 @map_to(aten.detach)
-def aten_detach(input: TensorValue) -> TensorValue:
+def aten_detach(input: MaxTensor) -> MaxTensor:
     return input
 
 
@@ -1490,8 +1497,8 @@ def aten_detach(input: TensorValue) -> TensorValue:
 # div.Tensor_mode(Tensor self, Tensor other, *, str? rounding_mode) -> Tensor
 @map_to(aten.div)
 def aten_div(
-    input: TensorValue, other: TensorValue | Scalar, *, rounding_mode: str | None = None
-) -> TensorValue:
+    input: MaxTensor, other: MaxTensor | Scalar, *, rounding_mode: str | None = None
+) -> MaxTensor:
     # Handle torch.div with different rounding modes
     if rounding_mode is None:
         return operator.truediv(input, other)
@@ -1500,7 +1507,7 @@ def aten_div(
     elif rounding_mode == "trunc":
         # Truncation towards zero (not implemented in operator, need custom logic)
         result = operator.truediv(input, other)
-        return max_ops.trunc(result)
+        return F.trunc(result)
     else:
         raise ValueError(f"Unsupported rounding_mode: {rounding_mode}")
 
@@ -1511,8 +1518,8 @@ def aten_div(
 # embedding(Tensor weight, Tensor indices, SymInt padding_idx=-1, bool scale_grad_by_freq=False, bool sparse=False) -> Tensor
 @map_to(aten.embedding)
 def aten_embedding(
-    input: TensorValue,
-    weight: TensorValue,
+    input: MaxTensor,
+    weight: MaxTensor,
     padding_idx: SymIntType = -1,
     scale_grad_by_freq: bool = False,
     sparse: bool = False,
@@ -1554,14 +1561,14 @@ def torch_embedding_equivalent(
     # but MAX gather may need proper shape handling
     original_shape = input.shape
     if len(original_shape) == 0:  # Scalar tensor
-        input_reshaped = max_ops.unsqueeze(input, axis=0)
-        result = max_ops.gather(weight, input_reshaped, axis=0)
+        input_reshaped = F.unsqueeze(input, axis=0)
+        result = F.gather(weight, input_reshaped, axis=0)
         # Remove the added dimension: [1, embedding_dim] -> [embedding_dim]
-        return max_ops.squeeze(result, axis=0)
+        return F.squeeze(result, axis=0)
     else:
         # Use gather to select rows from weight matrix based on input indices
         # axis=0 means we're gathering along the first dimension (vocab dimension)
-        return max_ops.gather(weight, input, axis=0)
+        return F.gather(weight, input, axis=0)
 
 
 # embedding_dense_backward(Tensor grad_output, Tensor indices, SymInt num_weights, SymInt padding_idx, bool scale_grad_by_freq) -> Tensor
@@ -1577,7 +1584,7 @@ def aten_empty_memory_format(
     device: torch.device | None = None,
     pin_memory: bool | None = None,
     memory_format: torch.memory_format | None = None,
-) -> TensorValue:
+) -> MaxTensor:
     return aten_full(
         size, 0, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
     )
@@ -1593,7 +1600,7 @@ def aten_empty_strided(
     layout: torch.layout | None = None,
     device: torch.device | None = None,
     pin_memory: bool | None = None,
-) -> TensorValue:
+) -> MaxTensor:
     return aten_full(
         size, 0, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
     )
@@ -1609,7 +1616,7 @@ def aten_empty_permuted(
     layout: torch.layout | None = None,
     device: torch.device | None = None,
     pin_memory: bool | None = None,
-) -> TensorValue:
+) -> MaxTensor:
     return aten_full(
         size, 0, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
     )
@@ -1618,7 +1625,7 @@ def aten_empty_permuted(
 # eq.Scalar(Tensor self, Scalar other) -> Tensor
 # eq.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.eq)
-def aten_eq(x: TensorValue, y: TensorValue | Scalar) -> TensorValue:
+def aten_eq(x: MaxTensor, y: MaxTensor | Scalar) -> MaxTensor:
     return operator.eq(x, y)
 
 
@@ -1627,15 +1634,15 @@ def aten_eq(x: TensorValue, y: TensorValue | Scalar) -> TensorValue:
 
 # exp(Tensor self) -> Tensor
 @map_to(aten.exp)
-def aten_exp(input: TensorValue) -> TensorValue:
-    return max_ops.exp(input)
+def aten_exp(input: MaxTensor) -> MaxTensor:
+    return F.exp(input)
 
 
 # expand(Tensor(a) self, SymInt[] size, *, bool implicit=False) -> Tensor(a)
 @map_to(aten.expand)
 def aten_expand(
-    tensor: TensorValue, size: list[SymIntType], *, implicit: bool = False
-) -> TensorValue:
+    tensor: MaxTensor, size: list[SymIntType], *, implicit: bool = False
+) -> MaxTensor:
     target_shape = []
 
     # Get current tensor shape - we need this to handle -1 values
@@ -1661,13 +1668,13 @@ def aten_expand(
         else:
             target_shape.append(dim_size)
 
-    return max_ops.broadcast_to(tensor, target_shape)
+    return F.broadcast_to(tensor, target_shape)
 
 
 # expm1(Tensor self) -> Tensor
 # fill.Scalar(Tensor self, Scalar value) -> Tensor
 @map_to(aten.fill)
-def aten_fill_scalar(input: TensorValue, value: Scalar) -> TensorValue:
+def aten_fill_scalar(input: MaxTensor, value: Scalar) -> MaxTensor:
     """
     Returns a tensor filled with the scalar value, with the same shape as the input tensor.
     This creates a new tensor (functional version, not in-place).
@@ -1678,10 +1685,10 @@ def aten_fill_scalar(input: TensorValue, value: Scalar) -> TensorValue:
     target_shape = input.shape
 
     # Create a scalar constant with the fill value
-    scalar = max_ops.constant(value, dtype=target_dtype, device=target_device)
+    scalar = F.constant(value, dtype=target_dtype, device=target_device)
 
     # Broadcast the scalar to the target shape
-    return max_ops.broadcast_to(scalar, target_shape)
+    return F.broadcast_to(scalar, target_shape)
 
 
 # flip(Tensor self, int[] dims) -> Tensor
@@ -1689,12 +1696,12 @@ def aten_fill_scalar(input: TensorValue, value: Scalar) -> TensorValue:
 
 # floor(Tensor self) -> Tensor
 @map_to(aten.floor)
-def aten_floor(input: TensorValue) -> TensorValue:
+def aten_floor(input: MaxTensor) -> MaxTensor:
     """
     Returns a new tensor with the floor of the elements of input,
     the largest integer less than or equal to each element.
     """
-    return max_ops.floor(input)
+    return F.floor(input)
 
 
 # fmod.Scalar(Tensor self, Scalar other) -> Tensor
@@ -1721,16 +1728,16 @@ def aten_full(
     device = torch_device_to_max_device(device)
 
     # Create a scalar constant with the fill value
-    scalar = max_ops.constant(fill_value, dtype=dtype, device=device)
+    scalar = F.constant(fill_value, dtype=dtype, device=device)
 
     # Broadcast the scalar to the target shape
-    return max_ops.broadcast_to(scalar, size)
+    return F.broadcast_to(scalar, size)
 
 
 # full_like(Tensor self, Scalar fill_value, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
 @map_to(aten.full_like)
 def aten_full_like(
-    input: TensorValue,
+    input: MaxTensor,
     fill_value: Scalar,
     *,
     dtype: torch.dtype | None = None,
@@ -1738,7 +1745,7 @@ def aten_full_like(
     device: torch.device | None = None,
     pin_memory: bool | None = None,
     memory_format: torch.memory_format | None = None,
-) -> TensorValue:
+) -> MaxTensor:
     # If dtype is not specified, use the input tensor's dtype
     if dtype is None:
         target_dtype = input.dtype
@@ -1755,10 +1762,10 @@ def aten_full_like(
     target_shape = input.shape
 
     # Create a scalar constant with the fill value
-    scalar = max_ops.constant(fill_value, dtype=target_dtype, device=target_device)
+    scalar = F.constant(fill_value, dtype=target_dtype, device=target_device)
 
     # Broadcast the scalar to the target shape
-    return max_ops.broadcast_to(scalar, target_shape)
+    return F.broadcast_to(scalar, target_shape)
 
 
 # gather(Tensor self, int dim, Tensor index, *, bool sparse_grad=False) -> Tensor
@@ -1767,16 +1774,16 @@ def aten_full_like(
 # ge.Scalar(Tensor self, Scalar other) -> Tensor
 # ge.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.ge)
-def aten_ge(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
+def aten_ge(input: MaxTensor, other: MaxTensor | Scalar) -> MaxTensor:
     return input >= other
 
 
 # gelu(Tensor self, *, str approximate='none') -> Tensor
 @map_to(aten.gelu)
 def aten_gelu(
-    input: TensorValue, approximate: Literal["tanh", "none"] = "none"
-) -> TensorValue:
-    return max_ops.gelu(input, approximate=approximate)
+    input: MaxTensor, approximate: Literal["tanh", "none"] = "none"
+) -> MaxTensor:
+    return F.gelu(input, approximate=approximate)
 
 
 # grid_sampler_2d(Tensor input, Tensor grid, int interpolation_mode, int padding_mode, bool align_corners) -> Tensor
@@ -1785,7 +1792,7 @@ def aten_gelu(
 # gt.Scalar(Tensor self, Scalar other) -> Tensor
 # gt.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.gt)
-def aten_gt(x: TensorValue, y: Scalar | TensorValue) -> TensorValue:
+def aten_gt(x: MaxTensor, y: Scalar | MaxTensor) -> MaxTensor:
     return operator.gt(x, y)
 
 
@@ -1794,7 +1801,7 @@ def aten_gt(x: TensorValue, y: Scalar | TensorValue) -> TensorValue:
 
 # index.Tensor(Tensor self, Tensor?[] indices) -> Tensor
 @map_to(aten.index)
-def aten_index(input: TensorValue, indices: list[TensorValue | None]) -> TensorValue:
+def aten_index(input: MaxTensor, indices: list[MaxTensor | None]) -> MaxTensor:
     if not indices:
         raise NotImplementedError("We don't yet support aten.index without indices")
 
@@ -1820,26 +1827,25 @@ def aten_index(input: TensorValue, indices: list[TensorValue | None]) -> TensorV
         if end - start == 1:
             # Single-axis indexing — use gather
             idx = block_tensors[0]
-            result = max_ops.gather(result, idx, axis=start)
+            result = F.gather(result, idx, axis=start)
         else:
             # Multi-axis indexing — use gather_nd
             # First broadcast indices to same shape
             final_shape = broadcast_shape([t.shape for t in block_tensors])
 
-            b_indices = [max_ops.broadcast_to(t, final_shape) for t in block_tensors]
+            b_indices = [F.broadcast_to(t, final_shape) for t in block_tensors]
 
             # Stack into shape [..., num_axes]
-            stacked = max_ops.stack(b_indices, axis=-1)
+            stacked = F.stack(b_indices, axis=-1)
 
             # We still have to broadcast them so that they match the starting dimensions
             for j in range(start - 1, -1, -1):
-                stacked = max_ops.broadcast_to(
+                stacked = F.broadcast_to(
                     stacked[None, ...], [input.shape[j]] + list(stacked.shape)
                 )
-            print(f"stacked shape: {stacked.shape}")
 
             # batch_dims = start
-            result = max_ops.gather_nd(result, stacked, batch_dims=start)
+            result = F.gather_nd(result, stacked, batch_dims=start)
 
     return result
 
@@ -1892,28 +1898,28 @@ def broadcast_shape(shapes):
 
 # isnan(Tensor self) -> Tensor
 @map_to(aten.isnan)
-def aten_isnan(input: TensorValue) -> TensorValue:
+def aten_isnan(input: MaxTensor) -> MaxTensor:
     """
     Returns a new tensor with boolean elements representing if each element is NaN or not.
     """
-    return max_ops.is_nan(input)
+    return F.is_nan(input)
 
 
 # le.Scalar(Tensor self, Scalar other) -> Tensor
 # le.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.le)
-def aten_le(input: TensorValue, other: Scalar | TensorValue) -> TensorValue:
+def aten_le(input: MaxTensor, other: Scalar | MaxTensor) -> MaxTensor:
     return input <= other
 
 
 # leaky_relu(Tensor self, Scalar negative_slope=0.01) -> Tensor
 # log(Tensor self) -> Tensor
 @map_to(aten.log)
-def aten_log(input: TensorValue) -> TensorValue:
+def aten_log(input: MaxTensor) -> MaxTensor:
     """
     Returns a new tensor with the natural logarithm of the elements of input.
     """
-    return max_ops.log(input)
+    return F.log(input)
 
 
 # log10(Tensor self) -> Tensor
@@ -1921,12 +1927,12 @@ def aten_log(input: TensorValue) -> TensorValue:
 
 # log1p(Tensor self) -> Tensor
 @map_to(aten.log1p)
-def aten_log1p(input: TensorValue) -> TensorValue:
+def aten_log1p(input: MaxTensor) -> MaxTensor:
     """
     Returns a new tensor with the natural logarithm of (1 + input).
     This function is more numerically stable than log(1 + input) for small values of input.
     """
-    return max_ops.log1p(input)
+    return F.log1p(input)
 
 
 # log2(Tensor self) -> Tensor
@@ -1934,37 +1940,37 @@ def aten_log1p(input: TensorValue) -> TensorValue:
 
 # logical_and(Tensor self, Tensor other) -> Tensor
 @map_to(aten.logical_and)
-def aten_logical_and(input: TensorValue, other: TensorValue) -> TensorValue:
+def aten_logical_and(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     """
     Computes element-wise logical AND of two tensors.
     Both inputs are converted to boolean first if they aren't already.
     """
     # Convert both inputs to boolean if they aren't already
     if input.dtype != DType.bool:
-        input_bool = max_ops.not_equal(input, 0)
+        input_bool = F.not_equal(input, 0)
     else:
         input_bool = input
 
     if other.dtype != DType.bool:
-        other_bool = max_ops.not_equal(other, 0)
+        other_bool = F.not_equal(other, 0)
     else:
         other_bool = other
 
     # Apply logical and
-    return max_ops.logical_and(input_bool, other_bool)
+    return F.logical_and(input_bool, other_bool)
 
 
 # logical_not(Tensor self) -> Tensor
 @map_to(aten.logical_not)
-def aten_logical_not(input: TensorValue) -> TensorValue:
+def aten_logical_not(input: MaxTensor) -> MaxTensor:
     """
     PyTorch's logical_not treats any non-zero value as True and returns the logical negation.
     MAX's logical_not requires boolean input, so we need to convert first.
     """
     # Convert input to boolean (non-zero -> True, zero -> False)
-    input_bool = max_ops.not_equal(input, 0)
+    input_bool = F.not_equal(input, 0)
     # Apply logical not
-    return max_ops.logical_not(input_bool)
+    return F.logical_not(input_bool)
 
 
 # logical_or(Tensor self, Tensor other) -> Tensor
@@ -1972,30 +1978,30 @@ def aten_logical_not(input: TensorValue) -> TensorValue:
 
 # logical_xor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.logical_xor)
-def aten_logical_xor(input: TensorValue, other: TensorValue) -> TensorValue:
+def aten_logical_xor(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     """
     Computes element-wise logical XOR of two tensors.
     Both inputs are converted to boolean first if they aren't already.
     """
     # Convert both inputs to boolean if they aren't already
     if input.dtype != DType.bool:
-        input_bool = max_ops.not_equal(input, 0)
+        input_bool = F.not_equal(input, 0)
     else:
         input_bool = input
 
     if other.dtype != DType.bool:
-        other_bool = max_ops.not_equal(other, 0)
+        other_bool = F.not_equal(other, 0)
     else:
         other_bool = other
 
     # Apply logical xor
-    return max_ops.logical_xor(input_bool, other_bool)
+    return F.logical_xor(input_bool, other_bool)
 
 
 # lt.Scalar(Tensor self, Scalar other) -> Tensor
 # lt.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.lt)
-def aten_lt(input: TensorValue, other: Scalar | TensorValue) -> TensorValue:
+def aten_lt(input: MaxTensor, other: Scalar | MaxTensor) -> MaxTensor:
     return input < other
 
 
@@ -2005,8 +2011,8 @@ def aten_lt(input: TensorValue, other: Scalar | TensorValue) -> TensorValue:
 # max.dim(Tensor self, int dim, bool keepdim=False) -> (Tensor values, Tensor indices)
 @map_to(aten.max)
 def aten_max(
-    input: TensorValue, dim: int | None = None, keepdim: bool = False
-) -> TensorValue | tuple[TensorValue, TensorValue]:
+    input: MaxTensor, dim: int | None = None, keepdim: bool = False
+) -> MaxTensor | tuple[MaxTensor, MaxTensor]:
     """
     Implements torch.max with dimension-based reduction.
     Returns (values, indices) tuple when dim is specified, single value otherwise.
@@ -2026,7 +2032,7 @@ def aten_max(
 @map_to(aten.max_pool2d_with_indices)
 def aten_max_pool2d_with_indices(
     input, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False
-) -> tuple[TensorValue, TensorValue]:
+) -> tuple[MaxTensor, MaxTensor]:
     # the first output is the values, the second output is the indices
     # most of the time people just want the values so we'll implement that
     # for now.
@@ -2045,7 +2051,7 @@ def aten_max_pool2d_with_indices(
     # Convert input from NCHW (PyTorch default) to NHWC (MAX requirement)
     input_nhwc = input.permute([0, 2, 3, 1])
 
-    result = max_ops.max_pool2d(
+    result = F.max_pool2d(
         input_nhwc,
         kernel_size=kernel_size,
         stride=tuple(stride),
@@ -2071,23 +2077,23 @@ def aten_max_pool2d_with_indices(
 
 # maximum(Tensor self, Tensor other) -> Tensor
 @map_to(aten.maximum)
-def aten_maximum(x: TensorValue, y: TensorValue) -> TensorValue:
-    return max_ops.max(x, y)
+def aten_maximum(x: MaxTensor, y: MaxTensor) -> MaxTensor:
+    return F.max(x, y)
 
 
 # mean(Tensor self, *, ScalarType? dtype=None) -> Tensor
 # mean.dim(Tensor self, int[1]? dim, bool keepdim=False, *, ScalarType? dtype=None) -> Tensor
 @map_to(aten.mean)
 def aten_mean(
-    input: TensorValue,
+    input: MaxTensor,
     dim=None,
     keepdim: bool = False,
     *,
     dtype: torch.dtype | None = None,
-) -> TensorValue:
+) -> MaxTensor:
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
-        input = max_ops.cast(input, dtype=max_dtype)
+        input = F.cast(input, dtype=max_dtype)
 
     result = input
 
@@ -2101,7 +2107,7 @@ def aten_mean(
     # Multiple dimensions reduction - reduce each dimension one by one
     # Sort dimensions in descending order to avoid index shifting issues
     for axis in dim:
-        result = max_ops.mean(result, axis=axis)
+        result = F.mean(result, axis=axis)
 
     # Handle keepdim=False - MAX's mean keeps dimensions by default, so we need to squeeze
     if not keepdim:
@@ -2109,7 +2115,7 @@ def aten_mean(
         # Sort original dimensions and squeeze from highest to lowest
         dims_to_squeeze = sorted(dim, reverse=True)
         for axis in dims_to_squeeze:
-            result = max_ops.squeeze(result, axis=axis)
+            result = F.squeeze(result, axis=axis)
 
     return result
 
@@ -2117,8 +2123,8 @@ def aten_mean(
 # min.dim(Tensor self, int dim, bool keepdim=False) -> (Tensor values, Tensor indices)
 @map_to(aten.min)
 def aten_min(
-    input: TensorValue, dim: int | None = None, keepdim: bool = False
-) -> TensorValue | tuple[TensorValue, TensorValue]:
+    input: MaxTensor, dim: int | None = None, keepdim: bool = False
+) -> MaxTensor | tuple[MaxTensor, MaxTensor]:
     """
     Implements torch.min with dimension-based reduction.
     Returns (values, indices) tuple when dim is specified, single value otherwise.
@@ -2135,20 +2141,20 @@ def aten_min(
 
 # minimum(Tensor self, Tensor other) -> Tensor
 @map_to(aten.minimum)
-def aten_minimum(x: TensorValue, y: TensorValue) -> TensorValue:
-    return max_ops.min(x, y)
+def aten_minimum(x: MaxTensor, y: MaxTensor) -> MaxTensor:
+    return F.min(x, y)
 
 
 # mm(Tensor self, Tensor mat2) -> Tensor
 @map_to(aten.mm)
-def aten_mm(x: TensorValue, y: TensorValue) -> TensorValue:
+def aten_mm(x: MaxTensor, y: MaxTensor) -> MaxTensor:
     return operator.matmul(x, y)
 
 
 # mul.Scalar(Tensor self, Scalar other) -> Tensor
 # mul.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.mul)
-def aten_mul(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
+def aten_mul(input: MaxTensor, other: MaxTensor | Scalar) -> MaxTensor:
     input, other = type_promotion(input, other)
     return input * other
 
@@ -2159,15 +2165,15 @@ def aten_mul(input: TensorValue, other: TensorValue | Scalar) -> TensorValue:
 # native_group_norm(Tensor input, Tensor? weight, Tensor? bias, SymInt N, SymInt C, SymInt HxW, int group, float eps) -> (Tensor, Tensor, Tensor)
 @map_to(aten.native_group_norm)
 def aten_native_group_norm(
-    input: TensorValue,
-    weight: TensorValue | None,
-    bias: TensorValue | None,
+    input: MaxTensor,
+    weight: MaxTensor | None,
+    bias: MaxTensor | None,
     N: SymIntType,
     C: SymIntType,
     HxW: SymIntType,
     group: int,
     eps: float,
-) -> tuple[TensorValue, NotImplementedError, NotImplementedError]:
+) -> tuple[MaxTensor, NotImplementedError, NotImplementedError]:
     """
     This is the low-level operation that F.group_norm gets compiled to.
     Returns (normalized_output, mean, rstd) tuple but we only return the first element for simplicity.
@@ -2183,7 +2189,7 @@ def aten_native_group_norm(
         H, W = HW, 1
 
     # Reshape input to [N, C, H, W]
-    input_reshaped = max_ops.reshape(input, [int(N), int(C), H, W])
+    input_reshaped = F.reshape(input, [int(N), int(C), H, W])
 
     # Use the regular group_norm implementation
     result = torch_group_norm_equivalent(input_reshaped, group, weight, bias, eps)
@@ -2213,7 +2219,7 @@ def torch_group_norm_equivalent(input, num_groups, weight=None, bias=None, eps=1
     channels_per_group = int(C) // num_groups
 
     # Reshape input to [N, num_groups, channels_per_group, H, W]
-    reshaped = max_ops.reshape(
+    reshaped = F.reshape(
         input, [int(N), num_groups, channels_per_group, int(H), int(W)]
     )
 
@@ -2229,20 +2235,20 @@ def torch_group_norm_equivalent(input, num_groups, weight=None, bias=None, eps=1
     variance = aten_mean(centered * centered, dim=axis_to_reduce, keepdim=True)
 
     # Normalize: (x - mean) / sqrt(variance + eps)
-    normalized = centered / max_ops.sqrt(variance + eps)
+    normalized = centered / F.sqrt(variance + eps)
 
     # Reshape back to original shape [N, C, H, W]
-    normalized = max_ops.reshape(normalized, [int(N), int(C), int(H), int(W)])
+    normalized = F.reshape(normalized, [int(N), int(C), int(H), int(W)])
 
     # Apply scale and shift if provided
     if weight is not None:
         # weight shape: [C] - broadcast to [N, C, H, W]
-        weight_reshaped = max_ops.reshape(weight, [1, int(C), 1, 1])
+        weight_reshaped = F.reshape(weight, [1, int(C), 1, 1])
         normalized = normalized * weight_reshaped
 
     if bias is not None:
         # bias shape: [C] - broadcast to [N, C, H, W]
-        bias_reshaped = max_ops.reshape(bias, [1, int(C), 1, 1])
+        bias_reshaped = F.reshape(bias, [1, int(C), 1, 1])
         normalized = normalized + bias_reshaped
 
     return normalized
@@ -2254,12 +2260,12 @@ def torch_group_norm_equivalent(input, num_groups, weight=None, bias=None, eps=1
 # native_layer_norm(Tensor input, SymInt[] normalized_shape, Tensor? weight, Tensor? bias, float eps) -> (Tensor, Tensor, Tensor)
 @map_to(aten.native_layer_norm)
 def aten_native_layer_norm(
-    input: TensorValue,
+    input: MaxTensor,
     normalized_shape: list[SymIntType],
-    weight: TensorValue | None,
-    bias: TensorValue | None,
+    weight: MaxTensor | None,
+    bias: MaxTensor | None,
     eps: float,
-) -> tuple[TensorValue, NotImplementedError, NotImplementedError]:
+) -> tuple[MaxTensor, NotImplementedError, NotImplementedError]:
     # expects a tuple or list for some reason
     # surely for the backward pass,
     # for the moment we only output the first one.
@@ -2277,7 +2283,7 @@ def aten_native_layer_norm(
     variance = aten_mean(centered * centered, dim=axis_to_reduce, keepdim=True)
 
     # Normalize: (x - mean) / sqrt(variance + eps)
-    normalized = centered / max_ops.sqrt(variance + eps)
+    normalized = centered / F.sqrt(variance + eps)
 
     # Apply scale and shift if provided
     if weight is not None:
@@ -2302,37 +2308,57 @@ def aten_native_layer_norm(
 # ne.Scalar(Tensor self, Scalar other) -> Tensor
 # ne.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.ne)
-def aten_ne(x: TensorValue, y: TensorValue | Scalar) -> TensorValue:
+def aten_ne(x: MaxTensor, y: MaxTensor | Scalar) -> MaxTensor:
     return operator.ne(x, y)
 
 
 # neg(Tensor self) -> Tensor
 @map_to(aten.neg)
-def aten_neg(x: TensorValue) -> TensorValue:
+def aten_neg(x: MaxTensor) -> MaxTensor:
     return operator.neg(x)
 
 
 # nonzero(Tensor self) -> Tensor
 @map_to(aten.nonzero)
-def aten_nonzero(input: TensorValue) -> TensorValue:
+def aten_nonzero(input: MaxTensor) -> MaxTensor:
     """
     Returns the indices of the elements that are non-zero.
     Returns a 2D tensor where each row is the indices of a non-zero element.
     """
-    return max_ops.nonzero(input)
+    return F.nonzero(input)
+
+
+# ones(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
+def aten_ones(
+    size: list[SymIntType],
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+) -> MaxEagerTensor:
+    if dtype is None:
+        dtype = torch.float32
+    dtype = DType.from_torch(dtype)
+
+    if device is None:
+        device = torch.get_default_device()
+    device = torch_device_to_max_device(device)
+
+    return MaxEagerTensor.ones(size, dtype=dtype, device=device)
 
 
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)
 @map_to(aten.permute)
-def aten_permute(x: TensorValue, dims: list[int]) -> TensorValue:
-    return max_ops.permute(x, dims)
+def aten_permute(x: MaxTensor, dims: list[int]) -> MaxTensor:
+    return F.permute(x, dims)
 
 
 # pow.Scalar(Scalar self, Tensor exponent) -> Tensor
 # pow.Tensor_Scalar(Tensor self, Scalar exponent) -> Tensor
 # pow.Tensor_Tensor(Tensor self, Tensor exponent) -> Tensor
 @map_to(aten.pow)
-def aten_pow(x: Scalar | TensorValue, y: Scalar | TensorValue) -> TensorValue:
+def aten_pow(x: Scalar | MaxTensor, y: Scalar | MaxTensor) -> MaxTensor:
     return operator.pow(x, y)
 
 
@@ -2343,7 +2369,7 @@ def aten_pow(x: Scalar | TensorValue, y: Scalar | TensorValue) -> TensorValue:
 # randperm(SymInt n, *, ScalarType? dtype=long, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 # reciprocal(Tensor self) -> Tensor
 @map_to(aten.reciprocal)
-def aten_reciprocal(tensor: TensorValue) -> TensorValue:
+def aten_reciprocal(tensor: MaxTensor) -> MaxTensor:
     return 1.0 / tensor
 
 
@@ -2354,26 +2380,26 @@ def aten_reciprocal(tensor: TensorValue) -> TensorValue:
 
 # relu(Tensor self) -> Tensor
 @map_to(aten.relu)
-def aten_relu(tensor: TensorValue) -> TensorValue:
+def aten_relu(tensor: MaxTensor) -> MaxTensor:
     # inplace has no meaning in max since it's graph-based
-    return max_ops.relu(tensor)
+    return F.relu(tensor)
 
 
 # remainder.Scalar(Tensor self, Scalar other) -> Tensor
 # remainder.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.remainder)
-def aten_remainder(x: TensorValue, y: TensorValue | Scalar) -> TensorValue:
+def aten_remainder(x: MaxTensor, y: MaxTensor | Scalar) -> MaxTensor:
     return operator.mod(x, y)
 
 
 # repeat(Tensor self, SymInt[] repeats) -> Tensor
 @map_to(aten.repeat)
-def aten_repeat(input: TensorValue, repeats: list[SymIntType]) -> TensorValue:
+def aten_repeat(input: MaxTensor, repeats: list[SymIntType]) -> MaxTensor:
     """
     Equivalent to torch.repeat - repeats the tensor along each dimension.
     Each dimension is repeated the number of times specified in repeats.
     """
-    return max_ops.tile(input, repeats)
+    return F.tile(input, repeats)
 
 
 # replication_pad2d(Tensor self, SymInt[4] padding) -> Tensor
@@ -2383,9 +2409,9 @@ def aten_repeat(input: TensorValue, repeats: list[SymIntType]) -> TensorValue:
 # TODO: handle in-place correctly
 # relu_(Tensor(a!) self) -> Tensor(a!)
 @map_to(aten.relu_)
-def aten_relu_(tensor: TensorValue) -> TensorValue:
+def aten_relu_(tensor: MaxTensor) -> MaxTensor:
     # inplace has no meaning in max since it's graph-based
-    return max_ops.relu(tensor)
+    return F.relu(tensor)
 
 
 # resize_(Tensor(a!) self, SymInt[] size, *, MemoryFormat? memory_format=None) -> Tensor(a!)
@@ -2394,8 +2420,8 @@ def aten_relu_(tensor: TensorValue) -> TensorValue:
 
 # rsqrt(Tensor self) -> Tensor
 @map_to(aten.rsqrt)
-def aten_rsqrt(x: TensorValue) -> TensorValue:
-    return max_ops.rsqrt(x)
+def aten_rsqrt(x: MaxTensor) -> MaxTensor:
+    return F.rsqrt(x)
 
 
 # scalar_tensor(Scalar s, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
@@ -2405,13 +2431,13 @@ def aten_scalar_tensor(
     dtype: torch.dtype = None,
     layout: torch.layout = None,
     device: torch.device = None,
-) -> TensorValue:
+) -> MaxTensor:
     if dtype is None:
         dtype = torch.float32
     if device is None:
         device = torch.get_default_device()
 
-    return max_ops.constant(
+    return F.constant(
         value, dtype=DType.from_torch(dtype), device=torch_device_to_max_device(device)
     )
 
@@ -2419,8 +2445,8 @@ def aten_scalar_tensor(
 # scatter.src(Tensor self, int dim, Tensor index, Tensor src) -> Tensor
 @map_to(aten.scatter.src)
 def aten_scatter_src(
-    input: TensorValue, dim: int, index: TensorValue, src: TensorValue
-) -> TensorValue:
+    input: MaxTensor, dim: int, index: MaxTensor, src: MaxTensor
+) -> MaxTensor:
     """Scatters values from src tensor into input at positions specified by index along dimension dim.
 
     For a 3D tensor with dim=0, this performs:
@@ -2429,14 +2455,14 @@ def aten_scatter_src(
     For a 3D tensor with dim=1, this performs:
         output[i][index[i][j][k]][k] = src[i][j][k]
     """
-    return max_ops.scatter(input, src, index, axis=dim)
+    return F.scatter(input, src, index, axis=dim)
 
 
 # scatter.value(Tensor self, int dim, Tensor index, Scalar value) -> Tensor
 @map_to(aten.scatter.value)
 def aten_scatter_value(
-    input: TensorValue, dim: int, index: TensorValue, value: Scalar
-) -> TensorValue:
+    input: MaxTensor, dim: int, index: MaxTensor, value: Scalar
+) -> MaxTensor:
     """Scatters a scalar value into input tensor at positions specified by index along dimension dim.
 
     For a 3D tensor with dim=0, this performs:
@@ -2447,10 +2473,10 @@ def aten_scatter_value(
     """
     # Broadcast the scalar value to match the index shape
     # We need to create a tensor filled with the value in the same shape as index
-    updates = max_ops.broadcast_to(
-        max_ops.constant(value, dtype=input.dtype, device=input.device), index.shape
+    updates = F.broadcast_to(
+        F.constant(value, dtype=input.dtype, device=input.device), index.shape
     )
-    return max_ops.scatter(input, updates, index, axis=dim)
+    return F.scatter(input, updates, index, axis=dim)
 
 
 # scatter_add(Tensor self, int dim, Tensor index, Tensor src) -> Tensor
@@ -2459,7 +2485,7 @@ def aten_scatter_value(
 
 # select.int(Tensor(a) self, int dim, SymInt index) -> Tensor(a)
 @map_to(aten.select)
-def aten_select(input: TensorValue, dim: int, index: SymIntType) -> TensorValue:
+def aten_select(input: MaxTensor, dim: int, index: SymIntType) -> MaxTensor:
     """
     Equivalent to torch.select - selects a slice of the tensor along the given dimension at the given index.
     """
@@ -2470,52 +2496,101 @@ def aten_select(input: TensorValue, dim: int, index: SymIntType) -> TensorValue:
 
 
 # select_scatter(Tensor self, Tensor src, int dim, SymInt index) -> Tensor
+@map_to(aten.select_scatter)
+def aten_select_scatter(
+    input: MaxTensor, src: MaxTensor, dim: int, index: int
+) -> MaxTensor:
+    """Embeds src values into input at the specified index along dimension dim.
+
+    This is the inverse of select: given input with shape (d0, d1, ..., d_dim, ..., dn),
+    and src with shape (d0, d1, ..., d_{dim-1}, d_{dim+1}, ..., dn),
+    returns a tensor with input's shape where input[..., index, ...] = src.
+
+    Implementation using where + mask:
+        1. Create mask that is True only at the target index along dim
+        2. Unsqueeze src to add back the dimension
+        3. Broadcast src to match input's shape
+        4. Use where to selectively replace values
+    """
+    # Handle negative dimension
+    if dim < 0:
+        dim = dim + len(input.shape)
+
+    # Handle negative index
+    dim_size = input.shape[dim]
+    if index < 0:
+        index = index + dim_size
+
+    # Step 1: Create a range tensor for the dimension to build the mask
+    indices = F.range(0, dim_size, 1, dtype=DType.int64, device=input.device)
+
+    # Step 2: Create 1D boolean mask where indices == index
+    index_tensor = F.constant(index, dtype=DType.int64, device=input.device)
+    mask_1d = F.equal(indices, index_tensor)
+
+    # Step 3: Reshape mask to have correct broadcasting shape
+    # All dimensions except 'dim' should be 1
+    mask_shape = [StaticDim(1)] * len(input.shape)
+    mask_shape[dim] = dim_size
+    mask = F.reshape(mask_1d, mask_shape)
+
+    # Step 4: Broadcast mask to input's shape
+    mask_expanded = F.broadcast_to(mask, input.shape)
+
+    # Step 5: Unsqueeze src to add back the dimension
+    src_unsqueezed = F.unsqueeze(src, dim)
+
+    # Step 6: Broadcast src to match input's shape
+    src_expanded = F.broadcast_to(src_unsqueezed, input.shape)
+
+    # Step 7: Use where to select: where mask is True, use src, else use input
+    return F.where(mask_expanded, src_expanded, input)
 
 
 # sigmoid(Tensor self) -> Tensor
 @map_to(aten.sigmoid)
-def aten_sigmoid(input: TensorValue) -> TensorValue:
-    return max_ops.sigmoid(input)
+def aten_sigmoid(input: MaxTensor) -> MaxTensor:
+    return F.sigmoid(input)
 
 
 # sign(Tensor self) -> Tensor
 @map_to(aten.sign)
-def aten_sign(x: TensorValue) -> TensorValue:
+def aten_sign(x: MaxTensor) -> MaxTensor:
     # sign(x) = (x > 0) + (x < 0) * (-1)
     # This returns 1.0 for positive, -1.0 for negative, 0.0 for zero
-    positive = max_ops.cast(x > 0, dtype=x.dtype)
-    negative = max_ops.cast(x < 0, dtype=x.dtype)
+    positive = F.cast(x > 0, dtype=x.dtype)
+    negative = F.cast(x < 0, dtype=x.dtype)
     return positive + negative * (-1)
 
 
 # sin(Tensor self) -> Tensor
 @map_to(aten.sin)
-def aten_sin(x: TensorValue) -> TensorValue:
-    return max_ops.sin(x)
+def aten_sin(x: MaxTensor) -> MaxTensor:
+    return F.sin(x)
 
 
 # tanh(Tensor self) -> Tensor
 @map_to(aten.tanh)
-def aten_tanh(x: TensorValue) -> TensorValue:
-    return max_ops.tanh(x)
+def aten_tanh(x: MaxTensor) -> MaxTensor:
+    return F.tanh(x)
 
 
 # sinh(Tensor self) -> Tensor
 @map_to(aten.sinh)
-def aten_sinh(x: TensorValue) -> TensorValue:
+def aten_sinh(x: MaxTensor) -> MaxTensor:
     """Computes hyperbolic sine using sin(x) = (exp(x) - exp(-x)) / 2"""
-    return (max_ops.exp(x) - max_ops.exp(-x)) / 2
+    return (F.exp(x) - F.exp(-x)) / 2
 
 
 # slice.Tensor(Tensor(a) self, int dim=0, SymInt? start=None, SymInt? end=None, SymInt step=1) -> Tensor(a)
 @map_to(aten.slice)
 def aten_slice(
-    input: TensorValue,
+    input: MaxTensor,
     dim: int,
     start: SymIntType | None = None,
     end: SymIntType | None = None,
     step: SymIntType = 1,
-) -> TensorValue:
+) -> MaxTensor:
     if end == 2**63 - 1:  # MAX_INT64
         end = None
     slices = [slice(None)] * len(input.shape)
@@ -2530,8 +2605,8 @@ def aten_slice(
 # split_with_sizes(Tensor(a -> *) self, SymInt[] split_sizes, int dim=0) -> Tensor(a)[]
 @map_to(aten.split_with_sizes)
 def aten_split_with_sizes(
-    input: TensorValue, split_sizes: list[SymIntType], dim: int = 0
-) -> list[TensorValue]:
+    input: MaxTensor, split_sizes: list[SymIntType], dim: int = 0
+) -> list[MaxTensor]:
     result = []
     start = 0
     for size in split_sizes:
@@ -2543,14 +2618,14 @@ def aten_split_with_sizes(
 
 # sqrt(Tensor self) -> Tensor
 @map_to(aten.sqrt)
-def aten_sqrt(x: TensorValue) -> TensorValue:
-    return max_ops.sqrt(x)
+def aten_sqrt(x: MaxTensor) -> MaxTensor:
+    return F.sqrt(x)
 
 
 # squeeze.dim(Tensor(a) self, int dim) -> Tensor(a)
 # squeeze.dims(Tensor(a) self, int[] dim) -> Tensor(a)
 @map_to(aten.squeeze)
-def aten_squeeze(input: TensorValue, dim: int | list[int]) -> TensorValue:
+def aten_squeeze(input: MaxTensor, dim: int | list[int]) -> MaxTensor:
     if isinstance(dim, int):
         dim = [dim]
     result = input
@@ -2559,7 +2634,7 @@ def aten_squeeze(input: TensorValue, dim: int | list[int]) -> TensorValue:
         actual_dim = d if d >= 0 else len(result.shape) + d
         # Only squeeze if the dimension has size 1
         if actual_dim < len(result.shape) and result.shape[actual_dim] == 1:
-            result = max_ops.squeeze(result, axis=actual_dim)
+            result = F.squeeze(result, axis=actual_dim)
     return result
 
 
@@ -2567,8 +2642,8 @@ def aten_squeeze(input: TensorValue, dim: int | list[int]) -> TensorValue:
 # sub.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
 @map_to(aten.sub)
 def aten_sub(
-    input: TensorValue | int | float, other: TensorValue | Scalar, alpha: Scalar = 1
-) -> TensorValue:
+    input: MaxTensor | int | float, other: MaxTensor | Scalar, alpha: Scalar = 1
+) -> MaxTensor:
     input, other = type_promotion(input, other)
     if alpha != 1:
         other = aten_mul(other, alpha)
@@ -2578,15 +2653,15 @@ def aten_sub(
 # sum.dim_IntList(Tensor self, int[1]? dim, bool keepdim=False, *, ScalarType? dtype=None) -> Tensor
 @map_to(aten.sum)
 def aten_sum(
-    input: TensorValue,
+    input: MaxTensor,
     dim: list[int] | int | None = None,
     keepdim: bool = False,
     *,
     dtype: torch.dtype | None = None,
-) -> TensorValue:
+) -> MaxTensor:
     if dtype is not None:
         max_dtype = DType.from_torch(dtype)
-        input = max_ops.cast(input, dtype=max_dtype)
+        input = F.cast(input, dtype=max_dtype)
 
     result = input
 
@@ -2599,13 +2674,13 @@ def aten_sum(
 
     # Sum over each dimension
     for axis in sorted(dim, reverse=True):
-        result = max_ops.sum(result, axis=axis)
+        result = F.sum(result, axis=axis)
 
     # Handle keepdim=False - squeeze the reduced dimensions
     if not keepdim:
         # MAX's sum keeps dimensions by default, so we need to squeeze
         for axis in sorted(dim, reverse=True):
-            result = max_ops.squeeze(result, axis=axis)
+            result = F.squeeze(result, axis=axis)
 
     return result
 
@@ -2622,8 +2697,8 @@ def aten_sum(
 
 # unsqueeze(Tensor(a) self, int dim) -> Tensor(a)
 @map_to(aten.unsqueeze)
-def aten_unsqueeze(tensor: TensorValue, dim: int) -> TensorValue:
-    return max_ops.unsqueeze(tensor, axis=dim)
+def aten_unsqueeze(tensor: MaxTensor, dim: int) -> MaxTensor:
+    return F.unsqueeze(tensor, axis=dim)
 
 
 # upsample_bilinear2d.vec(Tensor input, SymInt[]? output_size, bool align_corners, float[]? scale_factors) -> Tensor
@@ -2634,31 +2709,29 @@ def aten_unsqueeze(tensor: TensorValue, dim: int) -> TensorValue:
 
 # view(Tensor(a) self, SymInt[] size) -> Tensor(a)
 @map_to(aten.view)
-def aten_view(tensor: TensorValue, *shape) -> TensorValue:
+def aten_view(tensor: MaxTensor, *shape) -> MaxTensor:
     if len(shape) == 1 and isinstance(shape[0], tuple | list):
         target_shape = list(shape[0])
     else:
         target_shape = list(shape)
-    return max_ops.reshape(tensor, target_shape)
+    return F.reshape(tensor, target_shape)
 
 
 # where.self(Tensor condition, Tensor self, Tensor other) -> Tensor
 @map_to(aten.where)
-def aten_where(
-    input: TensorValue, condition: TensorValue, other: TensorValue
-) -> TensorValue:
-    return max_ops.where(input, condition, other)
+def aten_where(input: MaxTensor, condition: MaxTensor, other: MaxTensor) -> MaxTensor:
+    return F.where(input, condition, other)
 
 
 # stack(Tensor[] tensors, int dim=0) -> Tensor
 @map_to(aten.stack)
-def aten_stack(tensors: list[TensorValue], dim: int = 0) -> TensorValue:
-    return max_ops.stack(tensors, axis=dim)
+def aten_stack(tensors: list[MaxTensor], dim: int = 0) -> MaxTensor:
+    return F.stack(tensors, axis=dim)
 
 
 # tril(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.tril)
-def aten_tril(input: TensorValue, diagonal: int = 0) -> TensorValue:
+def aten_tril(input: MaxTensor, diagonal: int = 0) -> MaxTensor:
     # Max doesn't have tril built-in, so we get around this. It should be pretty
     # easy to implement on cpu and gpu though.
     shape = input.shape
@@ -2671,14 +2744,14 @@ def aten_tril(input: TensorValue, diagonal: int = 0) -> TensorValue:
 
     numpy_mask = np.ones(shape_ints, dtype=input.dtype.to_numpy())
     numpy_mask = np.tril(numpy_mask, k=diagonal)
-    mask_in_graph = max_ops.constant(numpy_mask, dtype=input.dtype, device=input.device)
+    mask_in_graph = F.constant(numpy_mask, dtype=input.dtype, device=input.device)
     result = input * mask_in_graph
     return result
 
 
 # triu(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.triu)
-def aten_triu(input: TensorValue, diagonal: int = 0) -> TensorValue:
+def aten_triu(input: MaxTensor, diagonal: int = 0) -> MaxTensor:
     # triu keeps the upper triangular part of the matrix
     # diagonal=0: keep main diagonal and above
     # diagonal>0: exclude k diagonals starting from main (shift cutoff up)
@@ -2702,7 +2775,7 @@ def aten_triu(input: TensorValue, diagonal: int = 0) -> TensorValue:
                 # Dimension is dynamic, don't apply bounds check
                 pass
 
-        return max_ops.band_part(input, num_lower=num_lower, num_upper=None)
+        return F.band_part(input, num_lower=num_lower, num_upper=None)
     else:
         # Exclude diagonal bands by using exclude with the inverse band
         # We want to zero out everything below and including (diagonal-1) diagonals above main
@@ -2735,17 +2808,15 @@ def aten_triu(input: TensorValue, diagonal: int = 0) -> TensorValue:
                 # At least one dimension is dynamic, use original upper_limit
                 pass
 
-        return max_ops.band_part(
-            input, num_lower=None, num_upper=upper_limit, exclude=True
-        )
+        return F.band_part(input, num_lower=None, num_upper=upper_limit, exclude=True)
 
 
 # split.Tensor(Tensor(a -> *) self, SymInt split_size, int dim=0) -> Tensor(a)[]
 # split.sizes(Tensor(a -> *) self, SymInt[] split_size, int dim=0) -> Tensor(a)[]
 @map_to(aten.split)
 def aten_split(
-    input: TensorValue, split_size: int | list[int], dim: int = 0
-) -> list[TensorValue]:
+    input: MaxTensor, split_size: int | list[int], dim: int = 0
+) -> list[MaxTensor]:
     if isinstance(split_size, int):
         shape = int(input.shape[dim])
         new_split_size = [split_size] * (shape // split_size)
@@ -2753,11 +2824,11 @@ def aten_split(
             new_split_size.append(shape % split_size)
     else:
         new_split_size = split_size
-    return max_ops.split(input, new_split_size, dim)
+    return F.split(input, new_split_size, dim)
 
 
 @map_to(aten.unbind)
-def aten_unbind(input: TensorValue, dim: int = 0) -> list[TensorValue]:
+def aten_unbind(input: MaxTensor, dim: int = 0) -> list[MaxTensor]:
     """
     Equivalent to torch.unbind - removes a tensor dimension and returns a tuple of all slices along that dimension.
     """
@@ -2770,12 +2841,12 @@ def aten_unbind(input: TensorValue, dim: int = 0) -> list[TensorValue]:
 
     # Use split with size 1 to get individual slices, then squeeze
     split_sizes = [1] * size
-    split_tensors = max_ops.split(input, split_sizes, dim)
+    split_tensors = F.split(input, split_sizes, dim)
 
     # Squeeze each tensor to remove the dimension we split along
     result = []
     for tensor in split_tensors:
-        squeezed = max_ops.squeeze(tensor, axis=dim)
+        squeezed = F.squeeze(tensor, axis=dim)
         result.append(squeezed)
 
     return result
@@ -2790,7 +2861,7 @@ def aten_unbind(input: TensorValue, dim: int = 0) -> list[TensorValue]:
 
 # t(Tensor(a) self) -> Tensor(a)
 @map_to(aten.t.default)
-def aten_t(input: TensorValue) -> TensorValue:
+def aten_t(input: MaxTensor) -> MaxTensor:
     return torch_transpose_equivalent(input, 0, 1)
 
 
@@ -2822,25 +2893,24 @@ def torch_transpose_equivalent(tensor, dim0, dim1):
     perm = list(range(ndim))
     perm[dim0], perm[dim1] = perm[dim1], perm[dim0]
 
-    return max_ops.permute(tensor, perm)
+    return F.permute(tensor, perm)
 
 
 # _foreach_add.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
 @map_to(aten._foreach_add.Scalar)
 def aten__foreach_add_scalar(
-    self: list[TensorValue],
-    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+    self: list[MaxTensor],
+    other: Scalar | list[MaxTensor] | list[Scalar] | MaxTensor,
     alpha: Scalar = 1,
-) -> list[TensorValue]:
+) -> list[MaxTensor]:
     return [aten_add(x, other, alpha=alpha) for x in self]
 
 
 # _foreach_add.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
 @map_to(aten._foreach_add.ScalarList)
 def aten__foreach_add_scalar_list(
-    self: list[TensorValue],
-    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: Scalar | list[MaxTensor] | list[Scalar] | MaxTensor
+) -> list[MaxTensor]:
     if len(self) != len(other):
         raise ValueError(
             f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
@@ -2851,16 +2921,16 @@ def aten__foreach_add_scalar_list(
 # _foreach_add.Tensor(Tensor[] self, Tensor other, *, Scalar alpha=1) -> Tensor[]
 @map_to(aten._foreach_add.Tensor)
 def aten__foreach_add_tensor(
-    self: list[TensorValue], other: TensorValue, alpha: Scalar = 1
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: MaxTensor, alpha: Scalar = 1
+) -> list[MaxTensor]:
     return [aten_add(x, other, alpha=alpha) for x in self]
 
 
 # _foreach_add.List(Tensor[] self, Tensor[] other, *, Scalar alpha=1) -> Tensor[]
 @map_to(aten._foreach_add.List)
 def aten__foreach_add_list(
-    self: list[TensorValue], other: list[TensorValue], alpha: Scalar = 1
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: list[MaxTensor], alpha: Scalar = 1
+) -> list[MaxTensor]:
     if len(self) != len(other):
         raise ValueError(
             f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
@@ -2871,19 +2941,18 @@ def aten__foreach_add_list(
 # _foreach_sub.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
 @map_to(aten._foreach_sub.Scalar)
 def aten__foreach_sub_scalar(
-    self: list[TensorValue],
-    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
+    self: list[MaxTensor],
+    other: Scalar | list[MaxTensor] | list[Scalar] | MaxTensor,
     alpha: Scalar = 1,
-) -> list[TensorValue]:
+) -> list[MaxTensor]:
     return [aten_sub(x, other, alpha=alpha) for x in self]
 
 
 # _foreach_sub.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
 @map_to(aten._foreach_sub.ScalarList)
 def aten__foreach_sub_scalar_list(
-    self: list[TensorValue],
-    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: Scalar | list[MaxTensor] | list[Scalar] | MaxTensor
+) -> list[MaxTensor]:
     if len(self) != len(other):
         raise ValueError(
             f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
@@ -2894,8 +2963,8 @@ def aten__foreach_sub_scalar_list(
 # _foreach_sub.List(Tensor[] self, Tensor[] other, *, Scalar alpha=1) -> Tensor[]
 @map_to(aten._foreach_sub.List)
 def aten__foreach_sub_list(
-    self: list[TensorValue], other: list[TensorValue], alpha: Scalar = 1
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: list[MaxTensor], alpha: Scalar = 1
+) -> list[MaxTensor]:
     if len(self) != len(other):
         raise ValueError(
             f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
@@ -2906,18 +2975,16 @@ def aten__foreach_sub_list(
 # _foreach_mul.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
 @map_to(aten._foreach_mul.Scalar)
 def aten__foreach_mul_scalar(
-    self: list[TensorValue],
-    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: Scalar | list[MaxTensor] | list[Scalar] | MaxTensor
+) -> list[MaxTensor]:
     return [aten_mul(x, other) for x in self]
 
 
 # _foreach_mul.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
 @map_to(aten._foreach_mul.ScalarList)
 def aten__foreach_mul_scalar_list(
-    self: list[TensorValue],
-    other: Scalar | list[TensorValue] | list[Scalar] | TensorValue,
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: Scalar | list[MaxTensor] | list[Scalar] | MaxTensor
+) -> list[MaxTensor]:
     if len(self) != len(other):
         raise ValueError(
             f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
@@ -2928,16 +2995,16 @@ def aten__foreach_mul_scalar_list(
 # _foreach_mul.Tensor(Tensor[] self, Tensor other) -> Tensor[]
 @map_to(aten._foreach_mul.Tensor)
 def aten__foreach_mul_tensor(
-    self: list[TensorValue], other: TensorValue
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: MaxTensor
+) -> list[MaxTensor]:
     return [aten_mul(x, other) for x in self]
 
 
 # _foreach_mul.List(Tensor[] self, Tensor[] other) -> Tensor[]
 @map_to(aten._foreach_mul.List)
 def aten__foreach_mul_list(
-    self: list[TensorValue], other: list[TensorValue]
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: list[MaxTensor]
+) -> list[MaxTensor]:
     if len(self) != len(other):
         raise ValueError(
             f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
@@ -2947,23 +3014,23 @@ def aten__foreach_mul_list(
 
 # _foreach_neg(Tensor[] self) -> Tensor[]
 @map_to(aten._foreach_neg)
-def aten__foreach_neg(self: list[TensorValue]) -> list[TensorValue]:
+def aten__foreach_neg(self: list[MaxTensor]) -> list[MaxTensor]:
     return [aten_neg(x) for x in self]
 
 
 # _foreach_pow.Scalar(Tensor[] self, Scalar exponent) -> Tensor[]
 @map_to(aten._foreach_pow.Scalar)
 def aten__foreach_pow_scalar(
-    self: list[TensorValue], exponent: Scalar
-) -> list[TensorValue]:
+    self: list[MaxTensor], exponent: Scalar
+) -> list[MaxTensor]:
     return [aten_pow(x, exponent) for x in self]
 
 
 # _foreach_pow.ScalarList(Tensor[] self, Scalar[] exponent) -> Tensor[]
 @map_to(aten._foreach_pow.ScalarList)
 def aten__foreach_pow_scalar_list(
-    self: list[TensorValue], exponent: list[Scalar]
-) -> list[TensorValue]:
+    self: list[MaxTensor], exponent: list[Scalar]
+) -> list[MaxTensor]:
     if len(self) != len(exponent):
         raise ValueError(
             f"Expected len(self) == len(exponent), but got {len(self)} and {len(exponent)}"
@@ -2974,8 +3041,8 @@ def aten__foreach_pow_scalar_list(
 # _foreach_pow.List(Tensor[] self, Tensor[] exponent) -> Tensor[]
 @map_to(aten._foreach_pow.List)
 def aten__foreach_pow_list(
-    self: list[TensorValue], exponent: list[TensorValue]
-) -> list[TensorValue]:
+    self: list[MaxTensor], exponent: list[MaxTensor]
+) -> list[MaxTensor]:
     if len(self) != len(exponent):
         raise ValueError(
             f"Expected len(self) == len(exponent), but got {len(self)} and {len(exponent)}"
@@ -2986,24 +3053,22 @@ def aten__foreach_pow_list(
 # _foreach_pow.ScalarAndTensor(Scalar self, Tensor[] exponent) -> Tensor[]
 @map_to(aten._foreach_pow.ScalarAndTensor)
 def aten__foreach_pow_scalarandtensor(
-    self: Scalar, exponent: list[TensorValue]
-) -> list[TensorValue]:
+    self: Scalar, exponent: list[MaxTensor]
+) -> list[MaxTensor]:
     return [aten_pow(self, exp) for exp in exponent]
 
 
 # _foreach_div.Scalar(Tensor[] self, Scalar scalar) -> Tensor[]
 @map_to(aten._foreach_div.Scalar)
-def aten__foreach_div_scalar(
-    self: list[TensorValue], other: Scalar
-) -> list[TensorValue]:
+def aten__foreach_div_scalar(self: list[MaxTensor], other: Scalar) -> list[MaxTensor]:
     return [aten_div(x, other) for x in self]
 
 
 # _foreach_div.ScalarList(Tensor[] self, Scalar[] scalars) -> Tensor[]
 @map_to(aten._foreach_div.ScalarList)
 def aten__foreach_div_scalar_list(
-    self: list[TensorValue], other: list[Scalar]
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: list[Scalar]
+) -> list[MaxTensor]:
     if len(self) != len(other):
         raise ValueError(
             f"Expected len(self) == len(scalars), but got {len(self)} and {len(other)}"
@@ -3014,16 +3079,16 @@ def aten__foreach_div_scalar_list(
 # _foreach_div.Tensor(Tensor[] self, Tensor other) -> Tensor[]
 @map_to(aten._foreach_div.Tensor)
 def aten__foreach_div_tensor(
-    self: list[TensorValue], other: TensorValue
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: MaxTensor
+) -> list[MaxTensor]:
     return [aten_div(x, other) for x in self]
 
 
 # _foreach_div.List(Tensor[] self, Tensor[] other) -> Tensor[]
 @map_to(aten._foreach_div.List)
 def aten__foreach_div_list(
-    self: list[TensorValue], other: list[TensorValue]
-) -> list[TensorValue]:
+    self: list[MaxTensor], other: list[MaxTensor]
+) -> list[MaxTensor]:
     if len(self) != len(other):
         raise ValueError(
             f"Expected len(self) == len(other), but got {len(self)} and {len(other)}"
@@ -3033,24 +3098,24 @@ def aten__foreach_div_list(
 
 # _foreach_reciprocal(Tensor[] self) -> Tensor[]
 @map_to(aten._foreach_reciprocal)
-def aten__foreach_reciprocal(self: list[TensorValue]) -> list[TensorValue]:
+def aten__foreach_reciprocal(self: list[MaxTensor]) -> list[MaxTensor]:
     return [aten_reciprocal(x) for x in self]
 
 
 # _foreach_sqrt(Tensor[] self) -> Tensor[]
 @map_to(aten._foreach_sqrt)
-def aten__foreach_sqrt(self: list[TensorValue]) -> list[TensorValue]:
+def aten__foreach_sqrt(self: list[MaxTensor]) -> list[MaxTensor]:
     return [aten_sqrt(x) for x in self]
 
 
 # _foreach_addcdiv.Scalar(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar value=1) -> Tensor[]
 @map_to(aten._foreach_addcdiv.Scalar)
 def aten__foreach_addcdiv_scalar(
-    self: list[TensorValue],
-    tensor1: list[TensorValue],
-    tensor2: list[TensorValue],
+    self: list[MaxTensor],
+    tensor1: list[MaxTensor],
+    tensor2: list[MaxTensor],
     value: Scalar = 1,
-) -> list[TensorValue]:
+) -> list[MaxTensor]:
     if len(self) != len(tensor1) or len(self) != len(tensor2):
         raise ValueError(
             f"Expected len(self) == len(tensor1) == len(tensor2), but got {len(self)}, {len(tensor1)}, {len(tensor2)}"
@@ -3064,11 +3129,11 @@ def aten__foreach_addcdiv_scalar(
 # _foreach_addcdiv.ScalarList(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar[] scalars) -> Tensor[]
 @map_to(aten._foreach_addcdiv.ScalarList)
 def aten__foreach_addcdiv_scalarlist(
-    self: list[TensorValue],
-    tensor1: list[TensorValue],
-    tensor2: list[TensorValue],
+    self: list[MaxTensor],
+    tensor1: list[MaxTensor],
+    tensor2: list[MaxTensor],
     scalars: list[Scalar],
-) -> list[TensorValue]:
+) -> list[MaxTensor]:
     if (
         len(self) != len(tensor1)
         or len(self) != len(tensor2)
@@ -3093,11 +3158,11 @@ def aten__foreach_addcdiv_scalarlist(
 # _foreach_addcmul.Scalar(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar value=1) -> Tensor[]
 @map_to(aten._foreach_addcmul.Scalar)
 def aten__foreach_addcmul_scalar(
-    self: list[TensorValue],
-    tensor1: list[TensorValue],
-    tensor2: list[TensorValue],
+    self: list[MaxTensor],
+    tensor1: list[MaxTensor],
+    tensor2: list[MaxTensor],
     value: Scalar = 1,
-) -> list[TensorValue]:
+) -> list[MaxTensor]:
     if len(self) != len(tensor1) or len(self) != len(tensor2):
         raise ValueError(
             f"Expected len(self) == len(tensor1) == len(tensor2), but got {len(self)}, {len(tensor1)}, {len(tensor2)}"
@@ -3111,11 +3176,11 @@ def aten__foreach_addcmul_scalar(
 # _foreach_addcmul.ScalarList(Tensor[] self, Tensor[] tensor1, Tensor[] tensor2, Scalar[] scalars) -> Tensor[]
 @map_to(aten._foreach_addcmul.ScalarList)
 def aten__foreach_addcmul_scalarlist(
-    self: list[TensorValue],
-    tensor1: list[TensorValue],
-    tensor2: list[TensorValue],
+    self: list[MaxTensor],
+    tensor1: list[MaxTensor],
+    tensor2: list[MaxTensor],
     scalars: list[Scalar],
-) -> list[TensorValue]:
+) -> list[MaxTensor]:
     if (
         len(self) != len(tensor1)
         or len(self) != len(tensor2)
@@ -3141,9 +3206,9 @@ def aten__foreach_addcmul_scalarlist(
 # masked_fill.Tensor(Tensor self, Tensor mask, Tensor value) -> Tensor
 @map_to(aten.masked_fill)
 def aten_masked_fill(
-    input: TensorValue, mask: TensorValue, value: Scalar | TensorValue
-) -> TensorValue:
-    return max_ops.where(mask, value, input)
+    input: MaxTensor, mask: MaxTensor, value: Scalar | MaxTensor
+) -> MaxTensor:
+    return F.where(mask, value, input)
 
 
 # _scaled_dot_product_efficient_attention(
@@ -3159,24 +3224,24 @@ def aten_masked_fill(
 #     SymInt max_q, SymInt max_k, Tensor rng_state, Tensor unused, Tensor debug_attn_mask)
 @map_to(aten._scaled_dot_product_efficient_attention)
 def aten__scaled_dot_product_efficient_attention(
-    query: TensorValue,
-    key: TensorValue,
-    value: TensorValue,
+    query: MaxTensor,
+    key: MaxTensor,
+    value: MaxTensor,
     dropout_p: float | None = 0.0,
     is_causal: bool = False,
     return_debug_mask: bool = False,
     *,
     scale: float | None = None,
 ) -> tuple[
-    TensorValue,
-    TensorValue,
-    TensorValue,
-    TensorValue,
+    MaxTensor,
+    MaxTensor,
+    MaxTensor,
+    MaxTensor,
     SymIntType,
     SymIntType,
-    TensorValue,
-    TensorValue,
-    TensorValue,
+    MaxTensor,
+    MaxTensor,
+    MaxTensor,
 ]:
     """
     This function implements the scaled dot-product attention mechanism using MAX's flash_attention_gpu.
@@ -3192,8 +3257,8 @@ def aten__scaled_dot_product_efficient_attention(
 
     # Compute attention scores: Q @ K^T
     # Transpose key to [batch_size, num_heads, head_dim, seq_len_k] for matmul
-    key_transposed = max_ops.transpose(key, 2, 3)
-    scores = max_ops.matmul(query, key_transposed)
+    key_transposed = F.transpose(key, 2, 3)
+    scores = F.matmul(query, key_transposed)
 
     # Scale by sqrt(head_dim)
     # StaticDim objects need special handling for conversion to float
@@ -3204,7 +3269,7 @@ def aten__scaled_dot_product_efficient_attention(
         head_dim_val = float(int(head_dim))
 
     scale_factor = 1.0 / math.sqrt(head_dim_val)
-    scores = max_ops.mul(scores, scale_factor)
+    scores = F.mul(scores, scale_factor)
 
     # Apply causal mask if requested
     if is_causal:
@@ -3216,7 +3281,7 @@ def aten__scaled_dot_product_efficient_attention(
     attention_weights = aten_softmax(scores, dim=-1)
 
     # Apply attention weights to values: attention_weights @ V
-    output = max_ops.matmul(attention_weights, value)
+    output = F.matmul(attention_weights, value)
 
     # Create dummy outputs for the remaining return values
     # PyTorch's flash attention returns 9 values, we need to match this interface
@@ -3225,9 +3290,9 @@ def aten__scaled_dot_product_efficient_attention(
     # Use output tensor properties for device and dtype consistency
 
     # Create a zero scalar and broadcast to different shapes
-    zero_scalar = max_ops.constant(0, dtype=output.dtype, device=output.device)
-    zero_int_scalar = max_ops.constant(0, dtype=DType.int32, device=output.device)
-    zero_int64_scalar = max_ops.constant(0, dtype=DType.int64, device=output.device)
+    zero_scalar = F.constant(0, dtype=output.dtype, device=output.device)
+    zero_int_scalar = F.constant(0, dtype=DType.int32, device=output.device)
+    zero_int64_scalar = F.constant(0, dtype=DType.int64, device=output.device)
 
     # Create appropriately shaped tensors
     # Convert all dimensions to int for indexing
@@ -3242,11 +3307,11 @@ def aten__scaled_dot_product_efficient_attention(
     )
 
     logsumexp_shape = [batch_size_int, num_heads_int, seq_len_q_int]
-    logsumexp = max_ops.broadcast_to(zero_scalar, logsumexp_shape)
+    logsumexp = F.broadcast_to(zero_scalar, logsumexp_shape)
 
     cum_seq_shape = [batch_size_int]
-    cum_seq_q = max_ops.broadcast_to(zero_int_scalar, cum_seq_shape)
-    cum_seq_k = max_ops.broadcast_to(zero_int_scalar, cum_seq_shape)
+    cum_seq_q = F.broadcast_to(zero_int_scalar, cum_seq_shape)
+    cum_seq_k = F.broadcast_to(zero_int_scalar, cum_seq_shape)
 
     # Max sequence lengths (return the actual dimensions)
     max_q = seq_len_q
@@ -3254,16 +3319,16 @@ def aten__scaled_dot_product_efficient_attention(
 
     # RNG state and unused tensors
     rng_state_shape = [8]  # Common RNG state size
-    rng_state = max_ops.broadcast_to(zero_int64_scalar, rng_state_shape)
+    rng_state = F.broadcast_to(zero_int64_scalar, rng_state_shape)
 
     unused_shape = [1]
-    unused = max_ops.broadcast_to(zero_scalar, unused_shape)
+    unused = F.broadcast_to(zero_scalar, unused_shape)
 
     # Convert scores.shape to int list
     scores_shape_int = [
         int(d.value) if hasattr(d, "value") else int(d) for d in scores.shape
     ]
-    debug_attn_mask = max_ops.broadcast_to(zero_scalar, scores_shape_int)
+    debug_attn_mask = F.broadcast_to(zero_scalar, scores_shape_int)
 
     return (
         output,
@@ -3281,8 +3346,23 @@ def aten__scaled_dot_product_efficient_attention(
 # transpose.int(Tensor(a) self, int dim0, int dim1) -> Tensor(a)
 # transpose.Dimname(Tensor(a) self, Dimname dim0, Dimname dim1) -> Tensor(a)
 @map_to(aten.transpose)
-def aten_transpose(input: TensorValue, dim0: int | Dim, dim1: int | Dim) -> TensorValue:
-    return max_ops.transpose(input, dim0, dim1)
+def aten_transpose(input: MaxTensor, dim0: int | Dim, dim1: int | Dim) -> MaxTensor:
+    return F.transpose(input, dim0, dim1)
+
+
+# zeros(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
+def aten_zeros(
+    size: list[SymIntType],
+    *,
+    dtype: torch.dtype | None = None,
+    layout=None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+) -> MaxTensor:
+    dtype = torch.float32 if dtype is None else dtype
+    dtype = DType.from_torch(dtype)
+    device = torch_device_to_max_device(device)
+    return MaxEagerTensor.zeros(size, dtype=dtype, device=device)
 
 
 if verbose_enabled():

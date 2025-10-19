@@ -6,20 +6,24 @@ import torch.nn.functional as F
 from torch._dynamo import mark_dynamic
 
 from torch_max_backend import max_backend
-from torch_max_backend.testing import check_functions_are_equivalent
+from torch_max_backend.testing import (
+    Conf,
+    check_functions_are_equivalent,
+    check_outputs,
+)
 
 
-def test_basic_addition(device: str):
+def test_basic_addition(conf: Conf):
     def fn(x, y):
         return x + y
 
     a = torch.randn(3)
     b = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_iadd(device: str):
+def test_iadd(conf: Conf):
     def fn(x, y):
         x += y
         return x
@@ -27,25 +31,25 @@ def test_iadd(device: str):
     a = torch.randn(3)
     b = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_t_method(device: str):
+def test_t_method(conf: Conf):
     def fn(x):
         return x.t()
 
     a = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_t_function(device: str):
+def test_t_function(conf: Conf):
     def fn(x):
         return torch.t(x)
 
     a = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
 def test_new_ones(device: str):
@@ -165,26 +169,26 @@ def test_modulo(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_abs(device: str, tensor_shapes: tuple):
+def test_abs(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.abs(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_floor(device: str, tensor_shapes: tuple):
+def test_floor(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.floor(x)
 
     # Use a mix of positive and negative values to test floor properly
     a = torch.randn(tensor_shapes) * 10  # Scale to get larger values
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_floor_edge_cases(device: str):
+def test_floor_edge_cases(conf: Conf):
     """Test floor with specific edge cases"""
 
     def fn(x):
@@ -198,47 +202,47 @@ def test_floor_edge_cases(device: str):
     ]
 
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_tensor_floor_method(device: str):
+def test_tensor_floor_method(conf: Conf):
     """Test tensor.floor() method"""
 
     def fn(x):
         return x.floor()
 
     x = torch.randn(3, 4) * 5  # Scale values for better floor testing
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_cos(device: str, tensor_shapes: tuple):
+def test_cos(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.cos(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_sin(device: str, tensor_shapes: tuple):
+def test_sin(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.sin(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_tanh(device: str, tensor_shapes: tuple):
+def test_tanh(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.tanh(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_sign(device: str, tensor_shapes: tuple):
+def test_sign(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.sign(x)
 
@@ -248,7 +252,7 @@ def test_sign(device: str, tensor_shapes: tuple):
     if a.numel() >= 3:
         a.view(-1)[:3] = torch.tensor([-1.0, 0.0, 1.0])
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -261,17 +265,17 @@ def test_sign_different_dtypes(device: str, dtype):
     check_functions_are_equivalent(fn, device, [a])
 
 
-def test_atanh(device: str, tensor_shapes: tuple):
+def test_atanh(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return torch.atanh(x)
 
     # atanh is defined for |x| < 1, so we need to ensure our test values are in this range
     a = torch.rand(tensor_shapes) * 1.8 - 0.9  # Values in range (-0.9, 0.9)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_outer(device: str):
+def test_outer(conf: Conf):
     def fn(x, y):
         return torch.outer(x, y)
 
@@ -279,10 +283,10 @@ def test_outer(device: str):
     a = torch.randn(5)
     b = torch.randn(3)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_log1p_basic(device: str):
+def test_log1p_basic(conf: Conf):
     """Test basic log1p functionality"""
 
     def fn(x):
@@ -290,10 +294,10 @@ def test_log1p_basic(device: str):
 
     # log1p domain is x > -1, use values in range (-0.5, 2.0) for safety
     a = torch.rand(3, 4) * 2.5 - 0.5  # Range (-0.5, 2.0)
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_log1p_small_values(device: str):
+def test_log1p_small_values(conf: Conf):
     """Test log1p with small values where it's most beneficial"""
 
     def fn(x):
@@ -307,10 +311,10 @@ def test_log1p_small_values(device: str):
         torch.rand(2, 3) * 0.2 - 0.1,  # Random small values in (-0.1, 0.1)
     ]
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_log_basic(device: str):
+def test_log_basic(conf: Conf):
     """Test basic log functionality"""
 
     def fn(x):
@@ -318,10 +322,10 @@ def test_log_basic(device: str):
 
     # Use positive values only since log is only defined for positive numbers
     a = torch.rand(3, 4) + 0.1  # Range (0.1, 1.1) to avoid values too close to zero
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_log_various_ranges(device: str):
+def test_log_various_ranges(conf: Conf):
     """Test log with various value ranges"""
 
     def fn(x):
@@ -337,10 +341,10 @@ def test_log_various_ranges(device: str):
     ]
 
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_log1p_various_ranges(device: str):
+def test_log1p_various_ranges(conf: Conf):
     """Test log1p with various value ranges"""
 
     def fn(x):
@@ -353,10 +357,10 @@ def test_log1p_various_ranges(device: str):
         torch.rand(2, 3) * 5 - 0.5,  # Random values in (-0.5, 4.5)
     ]
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_log_edge_cases(device: str):
+def test_log_edge_cases(conf: Conf):
     """Test log with edge cases"""
 
     def fn(x):
@@ -371,10 +375,10 @@ def test_log_edge_cases(device: str):
     ]
 
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_log1p_edge_cases(device: str):
+def test_log1p_edge_cases(conf: Conf):
     """Test log1p with edge cases"""
 
     def fn(x):
@@ -388,10 +392,10 @@ def test_log1p_edge_cases(device: str):
         torch.tensor([100.0, 1000.0]),  # Large positive values
     ]
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_isnan_basic(device: str):
+def test_isnan_basic(conf: Conf):
     """Test basic isnan functionality"""
 
     def fn(x):
@@ -399,10 +403,10 @@ def test_isnan_basic(device: str):
 
     # Create tensor with mix of normal values and NaNs
     a = torch.tensor([1.0, float("nan"), 3.0, float("nan"), 5.0])
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_isnan_no_nan(device: str):
+def test_isnan_no_nan(conf: Conf):
     """Test isnan with tensor containing no NaNs"""
 
     def fn(x):
@@ -410,10 +414,10 @@ def test_isnan_no_nan(device: str):
 
     # Regular tensor with no NaNs
     a = torch.randn(3, 4)
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_isnan_all_nan(device: str):
+def test_isnan_all_nan(conf: Conf):
     """Test isnan with tensor containing all NaNs"""
 
     def fn(x):
@@ -421,10 +425,10 @@ def test_isnan_all_nan(device: str):
 
     # Tensor with all NaNs
     a = torch.full((2, 3), float("nan"))
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_isnan_edge_cases(device: str):
+def test_isnan_edge_cases(conf: Conf):
     """Test isnan with various edge cases"""
 
     def fn(x):
@@ -440,10 +444,10 @@ def test_isnan_edge_cases(device: str):
     ]
 
     for test_tensor in test_cases:
-        check_functions_are_equivalent(fn, device, [test_tensor])
+        check_outputs(fn, conf, [test_tensor])
 
 
-def test_tensor_log1p_method(device: str):
+def test_tensor_log1p_method(conf: Conf):
     """Test tensor.log1p() method"""
 
     def fn(x):
@@ -452,10 +456,10 @@ def test_tensor_log1p_method(device: str):
     # Use range where log1p is well-defined (x > -1)
     x = torch.rand(3, 4) * 3 - 0.5  # Range (-0.5, 2.5)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_log_method(device: str):
+def test_tensor_log_method(conf: Conf):
     """Test tensor.log() method"""
 
     def fn(x):
@@ -464,10 +468,10 @@ def test_tensor_log_method(device: str):
     # Positive values for log domain
     x = torch.rand(3, 4) * 5 + 0.5  # Range (0.5, 5.5)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_isnan_method(device: str):
+def test_tensor_isnan_method(conf: Conf):
     """Test tensor.isnan() method"""
 
     def fn(x):
@@ -475,17 +479,17 @@ def test_tensor_isnan_method(device: str):
 
     # Mix of NaN and regular values
     x = torch.tensor([1.0, float("nan"), -3.5, float("nan"), 0.0])
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_stack_1d(device: str):
+def test_stack_1d(conf: Conf):
     # Test 1D tensors
     def fn_1d(a, b):
         return torch.stack([a, b], dim=0)
 
     a1d = torch.randn(2)
     b1d = torch.randn(2)
-    check_functions_are_equivalent(fn_1d, device, [a1d, b1d])
+    check_outputs(fn_1d, conf, [a1d, b1d])
 
 
 @pytest.mark.parametrize("dim", [0, 1, -1])
@@ -501,14 +505,14 @@ def test_stack_2d(device: str, dim: int):
     check_functions_are_equivalent(fn, device, [a, b, c])
 
 
-def test_stack_3d(device: str):
+def test_stack_3d(conf: Conf):
     # Test 3D tensors
     def fn_3d(a, b):
         return torch.stack([a, b], dim=0)
 
     a3d = torch.randn(2, 3, 4)
     b3d = torch.randn(2, 3, 4)
-    check_functions_are_equivalent(fn_3d, device, [a3d, b3d])
+    check_outputs(fn_3d, conf, [a3d, b3d])
 
 
 @pytest.mark.parametrize("func", [min, max])
@@ -657,26 +661,26 @@ def test_minimum_maximum(device: str, tensor_shapes: tuple, func):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_relu(device: str, tensor_shapes: tuple):
+def test_relu(conf: Conf, tensor_shapes: tuple):
     def fn(x):
         return F.relu(x)
 
     a = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
 
-def test_cat(device: str, tensor_shapes: tuple):
+def test_cat(conf: Conf, tensor_shapes: tuple):
     def fn(x, y):
         return torch.cat([x, y], dim=0)
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_combination_add_mul(device: str, tensor_shapes: tuple):
+def test_combination_add_mul(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return (x + y) * z
 
@@ -684,10 +688,10 @@ def test_combination_add_mul(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_outputs(fn, conf, [a, b, c])
 
 
-def test_combination_sub_div(device: str, tensor_shapes: tuple):
+def test_combination_sub_div(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return (x - y) / z
 
@@ -695,20 +699,20 @@ def test_combination_sub_div(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes) + 1.0  # Avoid division by zero
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_outputs(fn, conf, [a, b, c])
 
 
-def test_combination_trig_arithmetic(device: str, tensor_shapes: tuple):
+def test_combination_trig_arithmetic(conf: Conf, tensor_shapes: tuple):
     def fn(x, y):
         return torch.sin(x) + torch.cos(y)
 
     a = torch.randn(tensor_shapes)
     b = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_combination_abs_mul_add(device: str, tensor_shapes: tuple):
+def test_combination_abs_mul_add(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return torch.abs(x) * y + z
 
@@ -716,7 +720,7 @@ def test_combination_abs_mul_add(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_outputs(fn, conf, [a, b, c])
 
 
 def test_combination_pow_mod(device: str, tensor_shapes: tuple):
@@ -729,7 +733,7 @@ def test_combination_pow_mod(device: str, tensor_shapes: tuple):
     check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_complex_combination(device: str, tensor_shapes: tuple):
+def test_complex_combination(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return torch.abs(torch.sin(x) * y + torch.cos(z))
 
@@ -737,27 +741,27 @@ def test_complex_combination(device: str, tensor_shapes: tuple):
     b = torch.randn(tensor_shapes)
     c = torch.randn(tensor_shapes)
 
-    check_functions_are_equivalent(fn, device, [a, b, c])
+    check_outputs(fn, conf, [a, b, c])
 
 
-def test_scalar_shapes(device: str):
+def test_scalar_shapes(conf: Conf):
     def fn(x, y):
         return x + y * 2
 
     a = torch.randn(())  # Scalar tensor
     b = torch.randn(())
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
-def test_broadcasting_compatible(device: str):
+def test_broadcasting_compatible(conf: Conf):
     def fn(x, y):
         return x + y
 
     a = torch.randn(5, 1)
     b = torch.randn(1, 5)
 
-    check_functions_are_equivalent(fn, device, [a, b])
+    check_outputs(fn, conf, [a, b])
 
 
 def test_conv2d_basic(device: str):
@@ -1120,40 +1124,40 @@ def test_embedding_padding_idx_scalar(device: str):
     check_functions_are_equivalent(fn, device, [indices, weight])
 
 
-def test_tensor_slice_basic(device: str):
+def test_tensor_slice_basic(conf: Conf):
     def fn(x):
         return x[1:3]  # Basic slice along first dimension
 
     x = torch.randn(5, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_slice_2d(device: str):
+def test_tensor_slice_2d(conf: Conf):
     def fn(x):
         return x[1:3, 0:2]  # Slice along both dimensions
 
     x = torch.randn(5, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_slice_negative_index(device: str):
+def test_tensor_slice_negative_index(conf: Conf):
     def fn(x):
         return x[-2:]  # Negative slice
 
     x = torch.randn(5, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_slice_with_step(device: str):
+def test_tensor_slice_with_step(conf: Conf):
     def fn(x):
         return x[1:10:2]  # Negative slice
 
     x = torch.randn(20, 20)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_to_float(device: str):
@@ -1165,7 +1169,7 @@ def test_to_float(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_expand_basic(device: str):
+def test_expand_basic(conf: Conf):
     """Test basic expand operation"""
 
     def fn(x):
@@ -1173,10 +1177,10 @@ def test_expand_basic(device: str):
 
     x = torch.randn(1, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_expand_with_negative_one(device: str):
+def test_expand_with_negative_one(conf: Conf):
     """Test expand with -1 (keep dimension unchanged)"""
 
     def fn(x):
@@ -1184,10 +1188,10 @@ def test_expand_with_negative_one(device: str):
 
     x = torch.randn(3, 1)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_expand_multiple_dims(device: str):
+def test_expand_multiple_dims(conf: Conf):
     """Test expand on tensor with multiple dimensions"""
 
     def fn(x):
@@ -1195,10 +1199,10 @@ def test_expand_multiple_dims(device: str):
 
     x = torch.randn(1, 1, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_expand_same_size(device: str):
+def test_expand_same_size(conf: Conf):
     """Test expand to same size (should be no-op)"""
 
     def fn(x):
@@ -1206,7 +1210,7 @@ def test_expand_same_size(device: str):
 
     x = torch.randn(2, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_expand_add_dimensions(device: str):
@@ -1255,7 +1259,7 @@ def test_expand_complex_pattern(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_transpose_2d(device: str):
+def test_transpose_2d(conf: Conf):
     """Test basic transpose on 2D tensor"""
 
     def fn(x):
@@ -1263,10 +1267,10 @@ def test_transpose_2d(device: str):
 
     x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_transpose_3d_first_last(device: str):
+def test_transpose_3d_first_last(conf: Conf):
     """Test transpose swapping first and last dimensions on 3D tensor"""
 
     def fn(x):
@@ -1274,10 +1278,10 @@ def test_transpose_3d_first_last(device: str):
 
     x = torch.randn(2, 3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_transpose_3d_middle_dims(device: str):
+def test_transpose_3d_middle_dims(conf: Conf):
     """Test transpose swapping middle dimensions on 3D tensor"""
 
     def fn(x):
@@ -1285,10 +1289,10 @@ def test_transpose_3d_middle_dims(device: str):
 
     x = torch.randn(2, 3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_transpose_negative_dims(device: str):
+def test_transpose_negative_dims(conf: Conf):
     """Test transpose with negative dimension indices"""
 
     def fn(x):
@@ -1296,7 +1300,7 @@ def test_transpose_negative_dims(device: str):
 
     x = torch.randn(2, 3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_transpose_same_dim(device: str):
@@ -1383,7 +1387,7 @@ def test_transpose_scalar_like(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_tensor_cos_method(device: str):
+def test_tensor_cos_method(conf: Conf):
     """Test tensor.cos() method"""
 
     def fn(x):
@@ -1391,10 +1395,10 @@ def test_tensor_cos_method(device: str):
 
     x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_sin_method(device: str):
+def test_tensor_sin_method(conf: Conf):
     """Test tensor.sin() method"""
 
     def fn(x):
@@ -1402,10 +1406,10 @@ def test_tensor_sin_method(device: str):
 
     x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_atanh_method(device: str):
+def test_tensor_atanh_method(conf: Conf):
     """Test tensor.atanh() method"""
 
     def fn(x):
@@ -1414,10 +1418,10 @@ def test_tensor_atanh_method(device: str):
     # atanh is defined for |x| < 1, so we need values in this range
     x = torch.rand(3, 4) * 1.8 - 0.9  # Values in range (-0.9, 0.9)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_tensor_cos_sin_combined(device: str):
+def test_tensor_cos_sin_combined(conf: Conf):
     """Test combining tensor.cos() and tensor.sin() methods"""
 
     def fn(x):
@@ -1425,7 +1429,7 @@ def test_tensor_cos_sin_combined(device: str):
 
     x = torch.randn(2, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_tensor_cos_with_arithmetic(device: str):
@@ -1501,7 +1505,7 @@ def test_tensor_pow_method(device: str):
     check_functions_are_equivalent(fn, device, [x, y])
 
 
-def test_tensor_pow_scalar_exponent(device: str):
+def test_tensor_pow_scalar_exponent(conf: Conf):
     """Test tensor.pow() with scalar exponent"""
 
     def fn(x):
@@ -1509,7 +1513,7 @@ def test_tensor_pow_scalar_exponent(device: str):
 
     x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_tensor_pow_negative_exponent(device: str):
@@ -2659,7 +2663,7 @@ def test_tensor_unsqueeze_scalar(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_unary_negation(device: str):
+def test_unary_negation(conf: Conf):
     """Test unary negation operator (-x)"""
 
     def fn(x):
@@ -2667,10 +2671,10 @@ def test_unary_negation(device: str):
 
     x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_negation_with_arithmetic(device: str):
+def test_negation_with_arithmetic(conf: Conf):
     """Test negation combined with arithmetic operations"""
 
     def fn(x, y):
@@ -2679,10 +2683,10 @@ def test_negation_with_arithmetic(device: str):
     x = torch.randn(3, 4)
     y = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x, y])
+    check_outputs(fn, conf, [x, y])
 
 
-def test_double_negation(device: str):
+def test_double_negation(conf: Conf):
     """Test double negation (-(-x))"""
 
     def fn(x):
@@ -2690,7 +2694,7 @@ def test_double_negation(device: str):
 
     x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_negation_different_shapes(device: str, tensor_shapes: tuple):
@@ -3931,14 +3935,14 @@ def test_bmm_single_batch(device: str):
     check_functions_are_equivalent(fn, device, [input, mat2])
 
 
-def test_exp(device: str):
+def test_exp(conf: Conf):
     def fn(input):
         return torch.exp(input)
 
     # Single batch case
     input = torch.randn(1, 2, 4)
 
-    check_functions_are_equivalent(fn, device, [input])
+    check_outputs(fn, conf, [input])
 
 
 def test_group_norm(device: str):

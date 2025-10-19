@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from .utils import get_accelerators
+from ..torch_compile_backend.utils import get_accelerators
 
 accelerators = list(get_accelerators())
 _current_device = 0
