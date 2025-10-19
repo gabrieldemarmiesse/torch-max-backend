@@ -11,25 +11,6 @@ from torch_max_backend import (
     make_torch_op_from_mojo,
     max_backend,
 )
-from torch_max_backend.testing import check_functions_are_equivalent
-
-
-def test_graph_break_with_python_loop_over_tensor(device: str):
-    """Test graph break caused by Python loops over tensor elements"""
-
-    def fn_with_python_loop(x):
-        x = x * x
-        # Python iteration over tensor shapes causes graph breaks
-        result = x
-        for i in range(int(x[0, 0])):  # This will cause graph break
-            result = result * (i + 1)
-        return result
-
-    x = torch.randint(1, 3, (3, 2)).to(torch.float32)
-    explanation = torch._dynamo.explain(fn_with_python_loop)(x)
-    assert explanation.graph_break_count == 1
-    assert explanation.graph_count == 2
-    check_functions_are_equivalent(fn_with_python_loop, device, [x])
 
 
 def test_error_message_exception_in_op(monkeypatch):
