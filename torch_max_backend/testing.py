@@ -51,7 +51,7 @@ class Conf:
 
 
 def to_device(tensors: list[torch.Tensor], device: str) -> list[torch.Tensor]:
-    return [tensor.to(device) for tensor in tensors]
+    return [torch.clone(tensor).to(device) for tensor in tensors]
 
 
 def check_outputs(

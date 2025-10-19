@@ -24,9 +24,6 @@ def test_basic_addition(conf: Conf):
 
 
 def test_iadd(conf: Conf):
-    if conf.device.startswith("max") and not conf.compile:
-        pytest.xfail("This fails for some reason. Segfault. To investigate later.")
-
     def fn(x, y):
         x += y
         return x
