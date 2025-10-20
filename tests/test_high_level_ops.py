@@ -3539,17 +3539,17 @@ def test_cumsum_different_dims(device: str):
     check_functions_are_equivalent(fn_dim2, device, [input_tensor])
 
 
-def test_cumsum_negative_dim(device: str):
+def test_cumsum_negative_dim(conf: Conf):
     """Test cumsum with negative dimension index"""
 
     def fn(x):
         return torch.cumsum(x, dim=-1)
 
     input_tensor = torch.randn(3, 4, 5)
-    check_functions_are_equivalent(fn, device, [input_tensor])
+    check_outputs(fn, conf, [input_tensor])
 
 
-def test_cumsum_with_dtype(device: str):
+def test_cumsum_with_dtype(conf: Conf):
     """Test cumsum with dtype conversion"""
 
     def fn(x):
@@ -3559,62 +3559,62 @@ def test_cumsum_with_dtype(device: str):
     input_tensor = torch.randint(
         0, 10, (4, 6)
     ).float()  # Convert to float for consistency
-    check_functions_are_equivalent(fn, device, [input_tensor])
+    check_outputs(fn, conf, [input_tensor])
 
 
-def test_cumsum_1d_tensor(device: str):
+def test_cumsum_1d_tensor(conf: Conf):
     """Test cumsum on 1D tensor"""
 
     def fn(x):
         return torch.cumsum(x, dim=0)
 
     input_tensor = torch.randn(10)
-    check_functions_are_equivalent(fn, device, [input_tensor])
+    check_outputs(fn, conf, [input_tensor])
 
 
-def test_cumsum_large_tensor(device: str):
+def test_cumsum_large_tensor(conf: Conf):
     """Test cumsum on larger tensor"""
 
     def fn(x):
         return torch.cumsum(x, dim=1)
 
     input_tensor = torch.randn(8, 16, 4)
-    check_functions_are_equivalent(fn, device, [input_tensor])
+    check_outputs(fn, conf, [input_tensor])
 
 
-def test_masked_fill_basic(device: str):
+def test_masked_fill_basic(conf: Conf):
     def fn(x, mask):
         return x.masked_fill(mask, -float("inf"))
 
     input_tensor = torch.randn(5, 10)
     mask = torch.randint(0, 2, (5, 10), dtype=torch.bool)
-    check_functions_are_equivalent(fn, device, [input_tensor, mask])
+    check_outputs(fn, conf, [input_tensor, mask])
 
 
-def test_masked_fill_scalar_value(device: str):
+def test_masked_fill_scalar_value(conf: Conf):
     def fn(x, mask):
         return x.masked_fill(mask, 0.0)
 
     input_tensor = torch.randn(5, 10)
     mask = torch.randint(0, 2, (5, 10), dtype=torch.bool)
-    check_functions_are_equivalent(fn, device, [input_tensor, mask])
+    check_outputs(fn, conf, [input_tensor, mask])
 
 
-def test_masked_fill_broadcast(device: str):
+def test_masked_fill_broadcast(conf: Conf):
     def fn(x, mask):
         return x.masked_fill(mask, 99.0)
 
     input_tensor = torch.randn(3, 4, 5)
     mask = torch.randint(0, 2, (4, 5), dtype=torch.bool)
-    check_functions_are_equivalent(fn, device, [input_tensor, mask])
+    check_outputs(fn, conf, [input_tensor, mask])
 
 
-def test_reshape_basic(device: str):
+def test_reshape_basic(conf: Conf):
     def fn(x):
         return x.reshape(6, 4)
 
     input_tensor = torch.randn(3, 8)
-    check_functions_are_equivalent(fn, device, [input_tensor])
+    check_outputs(fn, conf, [input_tensor])
 
 
 def test_reshape_flatten(device: str):
