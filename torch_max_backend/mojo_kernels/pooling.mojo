@@ -16,7 +16,15 @@ fn _adaptive_avg_pool2d_backward_cpu[
     grad_input: OutputTensor[dtype=dtype, rank=rank],
     grad_output: InputTensor[dtype=dtype, rank=rank],
 ) raises:
-    """CPU implementation of adaptive average pool 2D backward pass."""
+    """CPU implementation of adaptive average pool 2D backward pass.
+
+    Based on PyTorch's non-atomic backward implementation:
+    pytorch/aten/src/ATen/native/cuda/AdaptiveAveragePooling.cu
+    (adaptive_average_gradinput function)
+
+    Iterates over INPUT positions to avoid needing atomic operations,
+    accumulating contributions from all output positions that used this input.
+    """
     var batch_size = grad_input.dim_size(0)
     var channels = grad_input.dim_size(1)
     var input_height = grad_input.dim_size(2)
@@ -88,9 +96,19 @@ fn _adaptive_avg_pool2d_backward_gpu[
 ) raises:
     """GPU implementation of adaptive average pool 2D backward pass.
 
-    This kernel parallelizes over output positions. Each thread processes one or more
+    Based on PyTorch's atomic backward implementation: 
+    aten/src/ATen/native/cuda/AdaptiveAveragePooling.cu
+    (atomic_adaptive_average_gradinput function)
+
+    This kernel parallelizes over OUTPUT positions. Each thread processes one or more
     output positions and uses atomic operations to safely accumulate gradients to
     input positions, handling race conditions when multiple outputs map to the same input.
+
+    Key correspondence with PyTorch:
+    - Iterates over output positions
+    - Uses START_IND/END_IND for input region bounds
+    - Computes grad_delta = gradOutput / (kH * kW)
+    - Uses atomic add for gradient accumulation (gpuAtomicAddNoReturn)
     """
     alias block_dim = 256
 
@@ -124,7 +142,6 @@ fn _adaptive_avg_pool2d_backward_gpu[
         var n = tid_remaining // channels
 
         # Compute input region bounds using adaptive pooling formula
-        # These match PyTorch's adaptive pooling index computation
         var ih_start = (oh * input_height) // output_height
         var ih_end = ((oh + 1) * input_height + output_height - 1) // output_height
         var iw_start = (ow * input_width) // output_width
