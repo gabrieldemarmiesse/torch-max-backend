@@ -4098,7 +4098,7 @@ def test_logical_xor_edge_cases(device: str):
         check_functions_are_equivalent(fn, device, [a, b])
 
 
-def test_any_basic(device: str):
+def test_any_basic(conf: Conf):
     """Test torch.any basic functionality"""
 
     def fn(x):
@@ -4106,11 +4106,11 @@ def test_any_basic(device: str):
 
     # Test with tensor containing non-zero values (should return True)
     a = torch.tensor([0, 0, 1, 0])
-    check_functions_are_equivalent(fn, device, [a])
+    check_outputs(fn, conf, [a])
 
     # Test with tensor containing all zeros (should return False)
     b = torch.tensor([0, 0, 0, 0])
-    check_functions_are_equivalent(fn, device, [b])
+    check_outputs(fn, conf, [b])
 
 
 @pytest.mark.parametrize("dim", [0, 1, -1])
@@ -4453,29 +4453,29 @@ def test_scaled_dot_product_attention_with_scale(device: str):
 
 
 @pytest.mark.parametrize("dims", [(0, 1), (1, 0)])
-def test_permute_2d(device: str, dims: tuple):
+def test_permute_2d(conf: Conf, dims: tuple):
     """Test torch.permute with 2D tensors"""
 
     def fn(x):
         return x.permute(dims)
 
-    x = torch.randn(3, 4, device=device)
+    x = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize(
     "dims", [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
 )
-def test_permute_3d(device: str, dims: tuple):
+def test_permute_3d(conf: Conf, dims: tuple):
     """Test torch.permute with 3D tensors - all permutations"""
 
     def fn(x):
         return x.permute(dims)
 
-    x = torch.randn(2, 3, 4, device=device)
+    x = torch.randn(2, 3, 4)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_permute_4d_nchw_to_nhwc(device: str):
