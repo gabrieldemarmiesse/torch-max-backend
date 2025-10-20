@@ -38,7 +38,7 @@ def make_torch_op_from_mojo(
 
     if torch_max_backend.torch_compile_backend.compiler._global_max_objects is not None:
         # TODO: make more flexible
-        # torch_max_backend.compiler._global_max_objects = None ?
+        torch_max_backend.compiler._global_max_objects = None
         raise ValueError("Must be called before any compilation")
 
     def mojo_custom_op_with_signature(*args, **kwargs):
