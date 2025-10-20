@@ -13,7 +13,6 @@ pytest.register_assert_rewrite("torch_max_backend.testing")
 
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
-accelerators = list(get_accelerators())
 
 
 @pytest.fixture(params=["cpu", "cuda"])
@@ -48,7 +47,7 @@ def conf(request, max_gpu_available: bool, cuda_available: bool):
 
     if conf.device.startswith("max_device"):
         conf.device = conf.device.replace("gpu", "0")
-        conf.device = conf.device.replace("cpu", str(len(accelerators) - 1))
+        conf.device = conf.device.replace("cpu", str(len(list(get_accelerators())) - 1))
         # Make sure the device is initialized
         register_max_devices()
 
@@ -60,7 +59,7 @@ def conf(request, max_gpu_available: bool, cuda_available: bool):
 
 @pytest.fixture
 def gpu_available() -> bool:
-    return len(accelerators) > 1
+    return len(list(get_accelerators())) > 1
 
 
 @pytest.fixture
@@ -70,7 +69,7 @@ def cuda_available() -> bool:
 
 @pytest.fixture
 def max_gpu_available() -> bool:
-    return len(accelerators) > 1
+    return len(list(get_accelerators())) > 1
 
 
 @pytest.fixture(params=[(3,), (2, 3)])
