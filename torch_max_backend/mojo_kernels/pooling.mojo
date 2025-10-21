@@ -7,6 +7,7 @@ from utils.index import IndexList
 from gpu import global_idx
 from gpu.host import DeviceBuffer
 from gpu.host.info import is_cpu
+from layout import Layout, LayoutTensor, RuntimeLayout
 
 
 fn _adaptive_avg_pool2d_backward_cpu[
@@ -96,7 +97,7 @@ fn _adaptive_avg_pool2d_backward_gpu[
 ) raises:
     """GPU implementation of adaptive average pool 2D backward pass.
 
-    Based on PyTorch's atomic backward implementation: 
+    Based on PyTorch's atomic backward implementation:
     aten/src/ATen/native/cuda/AdaptiveAveragePooling.cu
     (atomic_adaptive_average_gradinput function)
 
@@ -110,6 +111,7 @@ fn _adaptive_avg_pool2d_backward_gpu[
     - Computes grad_delta = gradOutput / (kH * kW)
     - Uses atomic add for gradient accumulation (gpuAtomicAddNoReturn)
     """
+
     alias block_dim = 256
 
     @parameter
@@ -171,12 +173,17 @@ fn _adaptive_avg_pool2d_backward_gpu[
 
     var device_ctx = ctx_ptr.get_device_context()
 
-    # Create device buffers from tensor pointers
+    # Convert to LayoutTensor for device buffer creation
+    alias layout = Layout.row_major[rank]()
+    var grad_input_layout = grad_input.to_layout_tensor()
+    var grad_output_layout = grad_output.to_layout_tensor()
+
+    # Create device buffers from LayoutTensor pointers
     var grad_input_device = DeviceBuffer[dtype](
-        device_ctx, grad_input.unsafe_ptr(), grad_input.size(), owning=False
+        device_ctx, grad_input_layout.ptr, grad_input.size(), owning=False
     )
     var grad_output_device = DeviceBuffer[dtype](
-        device_ctx, grad_output.unsafe_ptr(), grad_output.size(), owning=False
+        device_ctx, grad_output_layout.ptr, grad_output.size(), owning=False
     )
 
     # Initialize grad_input to zeros
