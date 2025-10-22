@@ -671,13 +671,6 @@ def allocate_outputs_grayscale(pic: torch.Tensor) -> torch.Tensor:
     return pic.new_empty(pic.shape[:-1], dtype=torch.float32)
 
 
-my_torch_grayscale = make_torch_op_from_mojo(
-    Path(__file__).parent / "dummy_mojo_kernels",
-    "grayscale",
-    allocate_outputs_grayscale,
-)
-
-
 def grayscale_eager(pic: torch.Tensor):
     pic = pic.to(dtype=torch.float32)
     r = pic[:, :, 0]
@@ -688,6 +681,12 @@ def grayscale_eager(pic: torch.Tensor):
 
 def test_mojo_custom_op(device: str):
     img = torch.randn(224, 224, 3, device=device).to(dtype=torch.uint8)
+
+    my_torch_grayscale = make_torch_op_from_mojo(
+        Path(__file__).parent / "dummy_mojo_kernels",
+        "grayscale",
+        allocate_outputs_grayscale,
+    )
 
     x = my_torch_grayscale(img)
     y = grayscale_eager(img)
@@ -733,13 +732,6 @@ def allocate_outputs_grayscale_multi(
     return tuple(pic.new_empty(noise.shape, dtype=torch.float32) for _ in range(2))
 
 
-my_torch_grayscale_multi = make_torch_op_from_mojo(
-    Path(__file__).parent / "dummy_mojo_kernels",
-    "grayscale_multi",
-    allocate_outputs_grayscale_multi,
-)
-
-
 def grayscale_multi_eager(
     pic: torch.Tensor, noise: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -755,6 +747,11 @@ def test_mojo_custom_op_multi(device: str):
     img = torch.randn(224, 224, 3, device=device).to(dtype=torch.uint8)
     noise = torch.randint(0, 2, (224, 224), device=device).to(dtype=torch.uint8)
 
+    my_torch_grayscale_multi = make_torch_op_from_mojo(
+        Path(__file__).parent / "dummy_mojo_kernels",
+        "grayscale_multi",
+        allocate_outputs_grayscale_multi,
+    )
     x1, x2 = my_torch_grayscale_multi(img, noise)
     y1, y2 = grayscale_multi_eager(img, noise)
     torch.testing.assert_close(x1, y1)
@@ -812,6 +809,11 @@ def test_mojo_custom_op_multi_dynamic_dims(device: str):
     noise = torch.randint(0, 2, (224, 224), device=device).to(dtype=torch.uint8)
     mark_dynamic(noise, 0)
     mark_dynamic(noise, 1)
+    my_torch_grayscale_multi = make_torch_op_from_mojo(
+        Path(__file__).parent / "dummy_mojo_kernels",
+        "grayscale_multi",
+        allocate_outputs_grayscale_multi,
+    )
 
     x1, x2 = my_torch_grayscale_multi(img, noise)
     y1, y2 = grayscale_multi_eager(img, noise)

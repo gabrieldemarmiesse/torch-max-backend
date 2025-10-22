@@ -1,19 +1,32 @@
 import os
 
+os.environ["MODULAR_TELEMETRY_ENABLED"] = "0"
+
 import pytest
+
+# must be called before importing torch_max_backend
+pytest.register_assert_rewrite("torch_max_backend.testing")
+
+
 import torch
+from mojo.paths import _build_mojo_source_package
 
 from torch_max_backend import get_accelerators, register_max_devices
 from torch_max_backend.profiler import profile
 from torch_max_backend.testing import Conf
+from torch_max_backend.torch_compile_backend import compiler
+
+# from torch_max_backend.max_device.log_aten_calls import log_aten_calls
 
 # log_aten_calls()
-# Register your helper module for assertion rewriting
-pytest.register_assert_rewrite("torch_max_backend.testing")
-
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
-accelerators = list(get_accelerators())
+
+# TODO: remove this when
+# https://github.com/modular/modular/issues/5495 is fixed
+compiler.paths_to_mojo_kernels[0] = _build_mojo_source_package(
+    compiler.paths_to_mojo_kernels[0]
+)
 
 
 @pytest.fixture(params=["cpu", "cuda"])
@@ -48,7 +61,7 @@ def conf(request, max_gpu_available: bool, cuda_available: bool):
 
     if conf.device.startswith("max_device"):
         conf.device = conf.device.replace("gpu", "0")
-        conf.device = conf.device.replace("cpu", str(len(accelerators) - 1))
+        conf.device = conf.device.replace("cpu", str(len(list(get_accelerators())) - 1))
         # Make sure the device is initialized
         register_max_devices()
 
@@ -60,7 +73,7 @@ def conf(request, max_gpu_available: bool, cuda_available: bool):
 
 @pytest.fixture
 def gpu_available() -> bool:
-    return len(accelerators) > 1
+    return len(list(get_accelerators())) > 1
 
 
 @pytest.fixture
@@ -70,7 +83,7 @@ def cuda_available() -> bool:
 
 @pytest.fixture
 def max_gpu_available() -> bool:
-    return len(accelerators) > 1
+    return len(list(get_accelerators())) > 1
 
 
 @pytest.fixture(params=[(3,), (2, 3)])

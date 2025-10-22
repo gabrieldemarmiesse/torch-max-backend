@@ -73,7 +73,6 @@ def test_factory_rand(max_device):
     assert torch.all(cpu_result <= 1)
 
 
-@pytest.mark.xfail(reason="Fixme")
 def test_factory_empty(max_device):
     """Test torch.empty with max_device"""
     tensor = torch.empty(2, 3, device=max_device)
