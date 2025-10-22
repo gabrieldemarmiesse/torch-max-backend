@@ -1,6 +1,13 @@
 import os
 
+os.environ["MODULAR_TELEMETRY_ENABLED"] = "0"
+
 import pytest
+
+# must be called before importing torch_max_backend
+pytest.register_assert_rewrite("torch_max_backend.testing")
+
+
 import torch
 from mojo.paths import _build_mojo_source_package
 
@@ -10,9 +17,6 @@ from torch_max_backend.testing import Conf
 from torch_max_backend.torch_compile_backend import compiler
 
 # log_aten_calls()
-# Register your helper module for assertion rewriting
-pytest.register_assert_rewrite("torch_max_backend.testing")
-
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 
