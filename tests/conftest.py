@@ -2,10 +2,12 @@ import os
 
 import pytest
 import torch
+from mojo.paths import _build_mojo_source_package
 
 from torch_max_backend import get_accelerators, register_max_devices
 from torch_max_backend.profiler import profile
 from torch_max_backend.testing import Conf
+from torch_max_backend.torch_compile_backend import compiler
 
 # log_aten_calls()
 # Register your helper module for assertion rewriting
@@ -13,6 +15,12 @@ pytest.register_assert_rewrite("torch_max_backend.testing")
 
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+
+# TODO: remove this when
+# https://github.com/modular/modular/issues/5495 is fixed
+compiler.paths_to_mojo_kernels[0] = _build_mojo_source_package(
+    compiler.paths_to_mojo_kernels[0]
+)
 
 
 @pytest.fixture(params=["cpu", "cuda"])
