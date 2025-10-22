@@ -3,12 +3,11 @@ import torch
 
 from ..torch_compile_backend.utils import get_accelerators
 
-accelerators = list(get_accelerators())
 _current_device = 0
 
 
 def cpu():
-    return torch.device(f"max_device:{len(accelerators) - 1}")
+    return torch.device(f"max_device:{len(list(get_accelerators())) - 1}")
 
 
 def _is_in_bad_fork():
@@ -20,7 +19,7 @@ def manual_seed_all(seed):
 
 
 def device_count():
-    return len(accelerators)
+    return len(list(get_accelerators()))
 
 
 def get_rng_state(device=None):
