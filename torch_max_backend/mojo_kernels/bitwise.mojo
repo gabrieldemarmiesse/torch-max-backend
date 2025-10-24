@@ -3,7 +3,7 @@ from gpu.host import DeviceContext
 from gpu.id import block_idx
 from layout import LayoutTensor
 from runtime.asyncrt import DeviceContextPtr
-from tensor_internal import InputTensor, OutputTensor, foreach
+from tensor import InputTensor, OutputTensor, foreach
 
 from utils.index import IndexList
 
