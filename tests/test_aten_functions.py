@@ -1232,6 +1232,87 @@ def test_aten_ceil_basic(device: str, dtype: torch.dtype):
     check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64]
+)
+@pytest.mark.parametrize(
+    "shape,kernel_size,stride,padding",
+    [
+        # Basic cases
+        ((1, 3, 10), 3, 2, 0),  # Basic 3D tensor
+        ((3, 10), 3, 2, 0),  # 2D tensor (no batch)
+        # Different kernel sizes
+        ((1, 3, 20), 2, 2, 0),  # kernel_size=2
+        ((1, 3, 20), 5, 5, 0),  # kernel_size=5
+        # Different strides
+        ((1, 3, 15), 3, 1, 0),  # stride=1 (overlapping)
+        ((1, 3, 15), 3, 3, 0),  # stride=kernel_size (non-overlapping)
+        # With padding
+        ((1, 3, 10), 3, 2, 1),  # padding=1
+        ((1, 3, 10), 3, 2, 2),  # padding=2
+        # Edge cases
+        ((1, 1, 5), 2, 1, 0),  # Small input
+        ((2, 8, 100), 5, 3, 2),  # Larger input with batch
+    ],
+)
+def test_aten_avg_pool1d_basic(
+    device: str,
+    dtype: torch.dtype,
+    shape: tuple,
+    kernel_size: int,
+    stride: int,
+    padding: int,
+):
+    """Test aten::avg_pool1d with various configurations"""
+
+    def fn(x):
+        return aten.avg_pool1d(x, [kernel_size], [stride], [padding], False, True)
+
+    x = torch.randn(shape, dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_aten_avg_pool1d_ceil_mode(device: str, dtype: torch.dtype):
+    """Test aten::avg_pool1d with ceil_mode=True"""
+
+    def fn(x):
+        # ceil_mode=True affects output size computation
+        return aten.avg_pool1d(x, [3], [2], [0], True, True)
+
+    x = torch.randn(1, 3, 10, dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32])
+def test_aten_avg_pool1d_count_include_pad(device: str, dtype: torch.dtype):
+    """Test aten::avg_pool1d with count_include_pad parameter"""
+
+    def fn_include_pad(x):
+        return aten.avg_pool1d(x, [3], [1], [1], False, True)
+
+    def fn_exclude_pad(x):
+        return aten.avg_pool1d(x, [3], [1], [1], False, False)
+
+    x = torch.randn(1, 2, 8, dtype=dtype, device=device)
+
+    # Test both modes
+    check_functions_are_equivalent(fn_include_pad, device, [x])
+    check_functions_are_equivalent(fn_exclude_pad, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32])
+def test_aten_avg_pool1d_default_stride(device: str, dtype: torch.dtype):
+    """Test aten::avg_pool1d with default stride (empty array defaults to kernel_size)"""
+
+    def fn(x):
+        # stride=[] should default to kernel_size
+        return aten.avg_pool1d(x, [3], [], [0], False, True)
+
+    x = torch.randn(1, 3, 12, dtype=dtype, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
 def test_aten_ceil_integer_types(device: str, dtype: torch.dtype):
     """Test aten.ceil with integer types (should return copy)"""

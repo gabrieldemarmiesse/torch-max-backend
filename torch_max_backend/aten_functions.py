@@ -1086,6 +1086,49 @@ def aten_atanh(x: MaxTensor) -> MaxTensor:
 
 
 # avg_pool1d(Tensor self, int[1] kernel_size, int[1] stride=[], int[1] padding=0, bool ceil_mode=False, bool count_include_pad=True) -> Tensor
+@map_to(aten.avg_pool1d)
+def aten_avg_pool1d(
+    self: TensorValue,
+    kernel_size: list[int],
+    stride: list[int],
+    padding: list[int] = [0],
+    ceil_mode: bool = False,
+    count_include_pad: bool = True,
+) -> TensorValue:
+    """
+    Applies a 1D average pooling over an input signal composed of several input planes.
+
+    Maps to avg_pool2d by adding and removing extra dimension.
+
+    Args:
+        self: input tensor (N, C, L) or (C, L)
+        kernel_size: size of the pooling window
+        stride: stride of the pooling window. Default value is kernel_size
+        padding: implicit zero padding to be added on both sides
+        ceil_mode: when True, will use ceil instead of floor to compute output shape
+        count_include_pad: when True, will include the zero-padding in the averaging calculation
+    """
+    # Convert 1D parameters to 2D by prepending 1
+    kernel_size_2d = [1, kernel_size[0]]
+    stride_2d = [1, stride[0]] if stride else []
+    padding_2d = [0, padding[0]]
+
+    # Add extra dimension: (N, C, L) -> (N, C, 1, L) or (C, L) -> (C, 1, L)
+    input_2d = max_ops.unsqueeze(self, dim=-2)
+
+    # Apply 2D pooling
+    output_2d = aten_avg_pool2d(
+        input_2d,
+        kernel_size_2d,
+        stride_2d,
+        padding_2d,
+        ceil_mode,
+        count_include_pad,
+        divisor_override=None,
+    )
+
+    # Remove extra dimension: (N, C, 1, L_out) -> (N, C, L_out) or (C, 1, L_out) -> (C, L_out)
+    return max_ops.squeeze(output_2d, dim=-2)
 
 
 # avg_pool2d(Tensor self, int[2] kernel_size, int[2] stride=[], int[2] padding=0, bool ceil_mode=False, bool count_include_pad=True, int? divisor_override=None) -> Tensor
