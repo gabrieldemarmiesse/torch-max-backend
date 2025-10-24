@@ -13,6 +13,7 @@ wheels/
 pytorch/
 modular/
 .claude/settings.local.json
+.claude/docs/*
 *.lprof
 *.pth
 tokenizer.json
