@@ -101,6 +101,10 @@ register_aten_op("aten::_adaptive_avg_pool2d")(
 
 @register_aten_op("aten::_copy_from")
 def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMaxTensor:
+    if self.device == dest.device and self.device.type == "max_device":
+        dest._max_data = self._max_data
+        return dest
+
     if self.device.type == "max_device" and dest.device.type == "cpu":
         cpu_tensor = self._max_data.to(CPU())
         x = torch.from_dlpack(cpu_tensor)
@@ -119,6 +123,9 @@ def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMa
         )
 
 
+register_aten_op("aten::_log_softmax")(
+    wrap_for_max_device(aten_functions.aten__log_softmax)
+)
 register_aten_op("aten::_native_batch_norm_legit_no_training")(
     wrap_for_max_device(aten_functions.aten__native_batch_norm_legit_no_training)
 )
