@@ -1325,6 +1325,233 @@ def test_aten_ceil_scalar_tensor(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+# NOTE: convolution_backward tests are currently disabled as the operation is not yet fully implemented
+# The implementation requires:
+# 1. Proper understanding of MAX's conv2d_transpose filter layout semantics
+# 2. Custom kernel or operation for grad_weight computation (correlation)
+# 3. Integration testing with various convolution configurations
+#
+# These tests are kept as documentation for future implementation
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16])
+def test_aten_convolution_backward_2d_no_bias(device: str, dtype: torch.dtype):
+    """Test convolution_backward for 2D without bias"""
+
+    def fn(grad_output, input_tensor, weight):
+        return aten.convolution_backward(
+            grad_output,
+            input_tensor,
+            weight,
+            None,  # no bias
+            [1, 1],  # stride
+            [0, 0],  # padding
+            [1, 1],  # dilation
+            False,  # not transposed
+            [0, 0],  # output_padding
+            1,  # groups
+            [True, True, False],  # compute grad_input and grad_weight, not grad_bias
+        )
+
+    # Input: (N, C_in, H, W), Weight: (C_out, C_in, kH, kW)
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_h, kernel_w = 4, 3, 3
+
+    input_tensor = torch.randn(
+        batch_size, in_channels, height, width, dtype=dtype, device=device
+    )
+    weight = torch.randn(
+        out_channels, in_channels, kernel_h, kernel_w, dtype=dtype, device=device
+    )
+
+    # Output size calculation: (H - kH + 2*pad) / stride + 1 = (8 - 3 + 0) / 1 + 1 = 6
+    out_height = out_width = 6
+    grad_output = torch.randn(
+        batch_size, out_channels, out_height, out_width, dtype=dtype, device=device
+    )
+
+    check_functions_are_equivalent(fn, device, [grad_output, input_tensor, weight])
+
+
+@pytest.mark.skip(
+    reason="convolution_backward not yet implemented - requires conv_transpose and correlation ops"
+)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_aten_convolution_backward_2d_with_bias(device: str, dtype: torch.dtype):
+    """Test convolution_backward for 2D with bias"""
+
+    def fn(grad_output, input_tensor, weight):
+        return aten.convolution_backward(
+            grad_output,
+            input_tensor,
+            weight,
+            [4],  # bias_sizes for 4 output channels
+            [1, 1],  # stride
+            [1, 1],  # padding
+            [1, 1],  # dilation
+            False,  # not transposed
+            [0, 0],  # output_padding
+            1,  # groups
+            [True, True, True],  # compute all gradients
+        )
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_h, kernel_w = 4, 3, 3
+
+    input_tensor = torch.randn(
+        batch_size, in_channels, height, width, dtype=dtype, device=device
+    )
+    weight = torch.randn(
+        out_channels, in_channels, kernel_h, kernel_w, dtype=dtype, device=device
+    )
+
+    # With padding=1, output size: (8 - 3 + 2*1) / 1 + 1 = 8
+    out_height = out_width = 8
+    grad_output = torch.randn(
+        batch_size, out_channels, out_height, out_width, dtype=dtype, device=device
+    )
+
+    check_functions_are_equivalent(fn, device, [grad_output, input_tensor, weight])
+
+
+@pytest.mark.skip(
+    reason="convolution_backward not yet implemented - requires conv_transpose and correlation ops"
+)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_aten_convolution_backward_with_stride(device: str, dtype: torch.dtype):
+    """Test convolution_backward with stride > 1"""
+
+    def fn(grad_output, input_tensor, weight):
+        return aten.convolution_backward(
+            grad_output,
+            input_tensor,
+            weight,
+            None,  # no bias
+            [2, 2],  # stride = 2
+            [0, 0],  # padding
+            [1, 1],  # dilation
+            False,  # not transposed
+            [0, 0],  # output_padding
+            1,  # groups
+            [True, True, False],  # compute grad_input and grad_weight
+        )
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_h, kernel_w = 4, 3, 3
+
+    input_tensor = torch.randn(
+        batch_size, in_channels, height, width, dtype=dtype, device=device
+    )
+    weight = torch.randn(
+        out_channels, in_channels, kernel_h, kernel_w, dtype=dtype, device=device
+    )
+
+    # With stride=2, output size: (8 - 3) / 2 + 1 = 3
+    out_height = out_width = 3
+    grad_output = torch.randn(
+        batch_size, out_channels, out_height, out_width, dtype=dtype, device=device
+    )
+
+    check_functions_are_equivalent(fn, device, [grad_output, input_tensor, weight])
+
+
+@pytest.mark.skip(
+    reason="convolution_backward not yet implemented - requires conv_transpose and correlation ops"
+)
+def test_aten_convolution_backward_grouped(device: str):
+    """Test convolution_backward with grouped convolution"""
+
+    def fn(grad_output, input_tensor, weight):
+        return aten.convolution_backward(
+            grad_output,
+            input_tensor,
+            weight,
+            None,  # no bias
+            [1, 1],  # stride
+            [0, 0],  # padding
+            [1, 1],  # dilation
+            False,  # not transposed
+            [0, 0],  # output_padding
+            2,  # groups = 2
+            [True, True, False],  # compute grad_input and grad_weight
+        )
+
+    batch_size, in_channels, height, width = 2, 4, 8, 8
+    out_channels, kernel_h, kernel_w = 4, 3, 3
+    groups = 2
+
+    # For grouped conv: weight shape is (C_out, C_in // groups, kH, kW)
+    input_tensor = torch.randn(
+        batch_size, in_channels, height, width, dtype=torch.float32, device=device
+    )
+    weight = torch.randn(
+        out_channels,
+        in_channels // groups,
+        kernel_h,
+        kernel_w,
+        dtype=torch.float32,
+        device=device,
+    )
+
+    out_height = out_width = 6
+    grad_output = torch.randn(
+        batch_size,
+        out_channels,
+        out_height,
+        out_width,
+        dtype=torch.float32,
+        device=device,
+    )
+
+    check_functions_are_equivalent(fn, device, [grad_output, input_tensor, weight])
+
+
+def test_aten_convolution_backward_only_input_grad(device: str):
+    """Test convolution_backward computing only input gradient"""
+
+    def fn(grad_output, input_tensor, weight):
+        return aten.convolution_backward(
+            grad_output,
+            input_tensor,
+            weight,
+            None,  # no bias
+            [1, 1],  # stride
+            [0, 0],  # padding
+            [1, 1],  # dilation
+            False,  # not transposed
+            [0, 0],  # output_padding
+            1,  # groups
+            [True, False, False],  # only compute grad_input
+        )
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_h, kernel_w = 4, 3, 3
+
+    input_tensor = torch.randn(
+        batch_size, in_channels, height, width, dtype=torch.float32, device=device
+    )
+    weight = torch.randn(
+        out_channels,
+        in_channels,
+        kernel_h,
+        kernel_w,
+        dtype=torch.float32,
+        device=device,
+    )
+
+    out_height = out_width = 6
+    grad_output = torch.randn(
+        batch_size,
+        out_channels,
+        out_height,
+        out_width,
+        dtype=torch.float32,
+        device=device,
+    )
+
+    check_functions_are_equivalent(fn, device, [grad_output, input_tensor, weight])
+
+
 TRIGON_FUNCTIONS = [aten.asinh, aten.cosh, aten.sinh, aten.tanh]
 
 

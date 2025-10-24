@@ -1419,6 +1419,149 @@ def aten_convolution(
 
 
 # convolution_backward(Tensor grad_output, Tensor input, Tensor weight, SymInt[]? bias_sizes, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
+@map_to(aten.convolution_backward)
+def aten_convolution_backward(
+    grad_output: MaxTensor,
+    input: MaxTensor,
+    weight: MaxTensor,
+    bias_sizes: list[SymIntType] | None,
+    stride: list[SymIntType],
+    padding: list[SymIntType],
+    dilation: list[SymIntType],
+    transposed: bool,
+    output_padding: list[SymIntType],
+    groups: SymIntType,
+    output_mask: list[bool],
+) -> tuple[MaxTensor | None, MaxTensor | None, MaxTensor | None]:
+    """
+    Compute gradients for convolution operation.
+
+    Returns: (grad_input, grad_weight, grad_bias)
+    - grad_input: gradient w.r.t. input (if output_mask[0])
+    - grad_weight: gradient w.r.t. weight (if output_mask[1])
+    - grad_bias: gradient w.r.t. bias (if output_mask[2])
+
+    Reference PyTorch implementation:
+    - ../pytorch/aten/src/ATen/native/Convolution.cpp (dispatcher)
+    - ../pytorch/aten/src/ATen/native/ConvolutionMM2d.cpp (CPU)
+    - ../pytorch/aten/src/ATen/native/cudnn/Conv_v7.cpp (GPU)
+    """
+    # Only support standard (non-transposed) 2D convolution for now
+    if transposed:
+        raise NotImplementedError(
+            "Transposed convolution backward is not supported yet"
+        )
+    if any(p != 0 for p in output_padding):
+        raise NotImplementedError("Output padding in backward is not supported yet")
+    if groups != 1:
+        raise NotImplementedError("Grouped convolution backward is not supported yet")
+
+    # Normalize stride, padding, dilation to tuples
+    if isinstance(stride, int):
+        stride = (stride, stride)
+    if isinstance(padding, int):
+        padding = (padding, padding, padding, padding)
+    elif isinstance(padding, tuple | list):
+        if len(padding) == 2:
+            padding = (padding[0], padding[0], padding[1], padding[1])
+        elif len(padding) == 4:
+            padding = tuple(padding)
+        else:
+            raise ValueError(f"Unsupported padding length: {len(padding)}")
+    if isinstance(dilation, int):
+        dilation = (dilation, dilation)
+
+    grad_input = None
+    grad_weight = None
+    grad_bias = None
+
+    # --- Compute grad_bias (simple sum reduction) ---
+    if output_mask[2] and bias_sizes is not None:
+        # grad_output shape: (N, C_out, H_out, W_out) in PyTorch NCHW format
+        # Sum across batch (dim 0), height (dim 2), and width (dim 3)
+        # Keep only channels (dim 1)
+        # MAX sum keeps dimensions, so we sum and then squeeze
+        grad_bias = max_ops.sum(grad_output, axis=0)  # [1, C_out, H, W]
+        grad_bias = max_ops.sum(grad_bias, axis=2)  # [1, C_out, 1, W]
+        grad_bias = max_ops.sum(grad_bias, axis=3)  # [1, C_out, 1, 1]
+        # Reshape to [C_out]
+        grad_bias = grad_bias.reshape([bias_sizes[0]])
+
+    # --- Compute grad_input using conv2d_transpose ---
+    if output_mask[0]:
+        # Convert grad_output from NCHW to NHWC for MAX
+        grad_output_nhwc = grad_output.permute([0, 2, 3, 1])
+
+        # For conv_transpose with RSCF layout: [kernel_h, kernel_w, out_channels, in_channels]
+        # where in_channels matches the input channels and out_channels is what we produce
+        #
+        # PyTorch weight: [C_out_fwd, C_in_fwd, K_h, K_w]
+        # For backward: input to conv_transpose has C_out_fwd channels, output has C_in_fwd channels
+        # So we need: [K_h, K_w, C_in_fwd, C_out_fwd]
+        weight_rscf = weight.permute([2, 3, 1, 0])
+
+        # Compute grad_input using conv2d_transpose
+        # This effectively reverses the forward convolution
+        grad_input_nhwc = F.conv2d_transpose(
+            grad_output_nhwc,
+            weight_rscf,
+            stride=tuple(stride),
+            padding=tuple(padding),
+            dilation=tuple(dilation),
+            output_paddings=tuple(output_padding),
+            input_layout=max_type.ConvInputLayout.NHWC,
+            filter_layout=max_type.FilterLayout.RSCF,
+        )
+
+        # Convert back from NHWC to NCHW
+        grad_input = grad_input_nhwc.permute([0, 3, 1, 2])
+
+    # --- Compute grad_weight (using custom Mojo kernel with shape parameters) ---
+    if output_mask[1]:
+        # grad_weight computation uses custom Mojo kernel
+        # We pass tensor shapes as compile-time parameters since they're known at graph construction
+
+        # Get shapes
+        N, F_out, HO, WO = grad_output.shape
+        _, C, H, W = input.shape
+        F_weight, C_weight, R, S = weight.shape
+
+        # Create grad_weight tensor with correct shape
+        grad_weight = max_ops.custom(
+            "conv2d_backward_weight",
+            values=[grad_output, input],
+            out_types=[
+                TensorType(
+                    dtype=weight.type.dtype,
+                    shape=weight.type.shape,
+                    device=weight.type.device,
+                )
+            ],
+            parameters={
+                # Pass shapes as compile-time parameters
+                "N": int(N),
+                "F": int(F_weight),
+                "C": int(C),
+                "H": int(H),
+                "W": int(W),
+                "HO": int(HO),
+                "WO": int(WO),
+                "R": int(R),
+                "S": int(S),
+                # Pass convolution parameters
+                "stride_h": int(stride[0]),
+                "stride_w": int(stride[1]),
+                "pad_h": int(padding[0]),
+                "pad_w": int(padding[2]),  # padding is (top, bottom, left, right)
+                "dil_h": int(dilation[0]),
+                "dil_w": int(dilation[1]),
+            },
+            device=weight.type.device,
+        )[0].tensor
+
+    return (grad_input, grad_weight, grad_bias)
+
+
 # copy(Tensor self, Tensor src, bool non_blocking=False) -> Tensor
 @map_to(aten.copy)
 def aten_copy(
