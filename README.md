@@ -155,6 +155,10 @@ You can get various information with the following environement variables:
 * `TORCH_MAX_BACKEND_VERBOSE=1` to display the graph(s) made by pytorch and various other information.
 * `TORCH_MAX_BACKEND_BEARTYPE=0` to disable type checking. By default, everything in the package is type-checked at runtime. But it may lead to errors when actually the code is valid (and the type hint is wrong). You can try disabling the type-checking then to see if the bug goes away. Feel free to open a bug report in any case! Type errors should never happen and are a sign of an internal bug.
 
+## Running the unit tests
+
+We use pytest to run the unit tests. If you don't have access to a gpu, you can test your branch with this [collab notebook](https://colab.research.google.com/drive/1tJbwOzflVcs7GtQrIEDrfAmR6v6j6rG9?usp=sharing) that will show you how to clone your project and run the tests. **Do not forget to use T4 in your runtime!**
+
 ## Contributing
 
 We welcome contributions! Please see our detailed [Contributing Guide](docs/CONTRIBUTING.md).

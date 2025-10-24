@@ -3,6 +3,7 @@ from max.tensor import InputTensor, OutputTensor, foreach
 from runtime.asyncrt import DeviceContextPtr
 from utils.index import IndexList
 
+
 @register("grayscale")
 struct Grayscale:
     @staticmethod
@@ -19,7 +20,9 @@ struct Grayscale:
             simd_width: Int
         ](idx: IndexList[img_out.rank]) -> SIMD[DType.float32, simd_width]:
             @parameter
-            fn load(idx: IndexList[img_in.rank]) -> SIMD[DType.float32, simd_width]:
+            fn load(
+                idx: IndexList[img_in.rank],
+            ) -> SIMD[DType.float32, simd_width]:
                 return img_in.load[simd_width](idx).cast[DType.float32]()
 
             row = idx[0]

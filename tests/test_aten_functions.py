@@ -6,7 +6,11 @@ from torch._dynamo import mark_dynamic
 from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
-from torch_max_backend.testing import check_functions_are_equivalent
+from torch_max_backend.testing import (
+    Conf,
+    check_functions_are_equivalent,
+    check_outputs,
+)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -2462,3 +2466,73 @@ def test_max_pool2d_error_message_not_supported_in_graph(device: str):
         match="The implementation of aten.max_pool2d_with_indices doesn't support returning indices yet.",
     ):
         check_functions_are_equivalent(fn, device, [x])
+
+
+# aten._log_softmax(Tensor self, int dim, bool half_to_float) -> Tensor
+def test_log_softmax_basic(conf: Conf):
+    """Test _log_softmax basic functionality."""
+
+    def fn(x):
+        return aten._log_softmax(x, -1, False)
+
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
+
+
+def test_log_softmax_numerical_stability(conf: Conf):
+    """Test _log_softmax with large values to verify numerical stability."""
+
+    def fn(x):
+        return aten._log_softmax(x, -1, False)
+
+    # Create tensor with large values that could cause overflow without max subtraction
+    x = torch.randn(2, 3, dtype=torch.float32) * 100
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dim", [-1, 0, 1])
+def test_log_softmax_half_to_float_true(conf: Conf, dim: int):
+    """Test _log_softmax with half_to_float=True.
+
+    When half_to_float=True:
+    - Input must be float16
+    - Computation is done in float32
+    - Output is float32 (not converted back to float16)
+    """
+    if not torch.cuda.is_available():
+        pytest.skip(
+            "CUDA is required for half_to_float=True tests"
+            " as the cpu does not have a reference implementation."
+        )
+
+    def fn(x):
+        initial_device = x.device
+        if x.device.type == "cpu" and not torch.compiler.is_compiling():
+            # We're in the reference eager cpu execution, which doesn't work on
+            # cpu. We move the computation to cuda for reference.
+            x = x.to("cuda")
+
+        output = aten._log_softmax(x, dim, True)
+        return output.to(initial_device)
+
+    # half_to_float=True requires float16 input
+    x = torch.randn(3, 4, 5, dtype=torch.float16)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+@pytest.mark.parametrize("dim", [-1, 0])
+def test_log_softmax_half_to_float_false(conf: Conf, dtype: torch.dtype, dim: int):
+    """Test _log_softmax with half_to_float=False.
+
+    When half_to_float=False:
+    - Input can be any dtype
+    - Output dtype matches input dtype
+    - For float16 inputs, computation happens in float32 but result is converted back
+    """
+
+    def fn(x):
+        return aten._log_softmax(x, dim, False)
+
+    x = torch.randn(3, 4, 5, dtype=dtype)
+    check_outputs(fn, conf, [x], atol=1e-3, rtol=1e-2)

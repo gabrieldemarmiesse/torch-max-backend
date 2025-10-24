@@ -3,6 +3,7 @@ from max.tensor import InputTensor, OutputTensor, foreach
 from runtime.asyncrt import DeviceContextPtr
 from utils.index import IndexList
 
+
 @register("grayscale")
 struct Grayscale:
     @staticmethod
@@ -19,7 +20,9 @@ struct Grayscale:
             simd_width: Int
         ](idx: IndexList[img_out.rank]) -> SIMD[DType.float32, simd_width]:
             @parameter
-            fn load(idx: IndexList[img_in.rank]) -> SIMD[DType.float32, simd_width]:
+            fn load(
+                idx: IndexList[img_in.rank],
+            ) -> SIMD[DType.float32, simd_width]:
                 return img_in.load[simd_width](idx).cast[DType.float32]()
 
             row = idx[0]
@@ -58,13 +61,30 @@ struct GrayscaleMulti:
             row = idx[0]
             col = idx[1]
 
-            noise = noise_in.load[simd_width](IndexList[2](row, col)).cast[DType.float32]()
+            noise = noise_in.load[simd_width](IndexList[2](row, col)).cast[
+                DType.float32
+            ]()
 
             # Load RGB values
-            r = img_in.load[simd_width](IndexList[3](row, col, 0)).cast[DType.float32]() + noise
-            g = img_in.load[simd_width](IndexList[3](row, col, 1)).cast[DType.float32]() + noise
-            b = img_in.load[simd_width](IndexList[3](row, col, 2)).cast[DType.float32]() + noise
-            
+            r = (
+                img_in.load[simd_width](IndexList[3](row, col, 0)).cast[
+                    DType.float32
+                ]()
+                + noise
+            )
+            g = (
+                img_in.load[simd_width](IndexList[3](row, col, 1)).cast[
+                    DType.float32
+                ]()
+                + noise
+            )
+            b = (
+                img_in.load[simd_width](IndexList[3](row, col, 2)).cast[
+                    DType.float32
+                ]()
+                + noise
+            )
+
             # Apply standard grayscale conversion formula
             gray = 0.21 * r + 0.71 * g + 0.07 * b
             red_out.store(IndexList[2](row, col), r)

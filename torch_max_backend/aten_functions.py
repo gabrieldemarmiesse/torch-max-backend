@@ -576,6 +576,77 @@ def aten_softmax(input, dim=-1, dtype=None):
     return x_exp / x_sum
 
 
+# aten._log_softmax(Tensor self, int dim, bool half_to_float) -> Tensor
+@map_to(aten._log_softmax)
+def aten__log_softmax(input: MaxTensor, dim: int, half_to_float: bool) -> MaxTensor:
+    """Compute log(softmax(x)) in a numerically stable way.
+
+    Formula: log_softmax(x) = x - max(x) - log(sum(exp(x - max(x))))
+
+    This is more numerically stable than computing log(softmax(x)) directly,
+    as it prevents overflow from exp(large_values) and underflow from log(small_values).
+
+    Based on PyTorch's implementation:
+    pytorch/aten/src/ATen/native/SoftMax.cpp (TORCH_META_FUNC(_log_softmax))
+    pytorch/aten/src/ATen/native/cuda/SoftMax.cu (log_softmax_cuda_out)
+    pytorch/torch/_decomp/decompositions.py (_log_softmax decomposition)
+
+    Args:
+        input: Input tensor
+        dim: Dimension along which to compute log_softmax
+        half_to_float: If True, input must be float16 and output will be float32.
+                      If False, output dtype matches input dtype.
+
+    Returns:
+        Log-softmax of input along the specified dimension.
+        Output dtype is float32 if half_to_float=True, otherwise matches input dtype.
+    """
+    # PyTorch checks: half_to_float conversion is only supported for Half type
+    # See: pytorch/aten/src/ATen/native/cuda/SoftMax.cu
+    if half_to_float:
+        if input.dtype != DType.float16:
+            raise ValueError(
+                f"half_to_float conversion is supported for Half (float16) type only, got {input.dtype}"
+            )
+
+    # Store original dtype for potential conversion back
+    original_dtype = input.dtype
+
+    # Convert to float32 for computation if input is float16
+    # PyTorch's type promotion automatically uses float32 for float16 computation
+    if input.dtype == DType.float16:
+        input = F.cast(input, dtype=DType.float32)
+
+    # Handle negative dim
+    if dim < 0:
+        dim = len(input.shape) + dim
+
+    # Compute max along the specified axis for numerical stability, keeping dimensions
+    x_max = aten_amax(input, dim=[dim], keepdim=True)
+
+    # Subtract max for numerical stability: x - max(x)
+    x_shifted = input - x_max
+
+    # Compute exp(x - max(x))
+    x_exp = F.exp(x_shifted)
+
+    # Sum exponentials along the axis, keeping dimensions for broadcasting
+    x_sum = aten_sum(x_exp, dim=[dim], keepdim=True)
+
+    # Compute log(sum(exp(x - max(x))))
+    log_sum = F.log(x_sum)
+
+    # Compute result: (x - max(x)) - log(sum(exp(x - max(x))))
+    result = x_shifted - log_sum
+
+    # Convert back to original dtype if half_to_float=False and we converted from float16
+    # When half_to_float=True with float16 input, output stays in float32
+    if not half_to_float and original_dtype == DType.float16:
+        result = F.cast(result, dtype=original_dtype)
+
+    return result
+
+
 # _to_copy(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, bool non_blocking=False, MemoryFormat? memory_format=None) -> Tensor
 @map_to(aten._to_copy)
 def aten__to_copy(
