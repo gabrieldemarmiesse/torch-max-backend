@@ -8,15 +8,15 @@ from utils.index import IndexList
 from gpu import global_idx
 from gpu.host import DeviceBuffer
 from gpu.host.info import is_cpu
-from layout import Layout, LayoutTensor, RuntimeLayout
+from layout import Layout, LayoutTensor, RuntimeLayout, RuntimeTuple
+from layout.int_tuple import fill_like
 
 
 fn _adaptive_avg_pool2d_backward_cpu[
     dtype: DType,
-    rank: Int,
 ](
-    grad_input: OutputTensor[dtype=dtype, rank=rank],
-    grad_output: InputTensor[dtype=dtype, rank=rank],
+    grad_input: LayoutTensor[mut=True, dtype, **_],
+    grad_output: LayoutTensor[dtype, **_],
 ) raises:
     """CPU implementation of adaptive average pool 2D backward pass.
 
@@ -27,12 +27,12 @@ fn _adaptive_avg_pool2d_backward_cpu[
     Iterates over INPUT positions to avoid needing atomic operations,
     accumulating contributions from all output positions that used this input.
     """
-    var batch_size = grad_input.dim_size(0)
-    var channels = grad_input.dim_size(1)
-    var input_height = grad_input.dim_size(2)
-    var input_width = grad_input.dim_size(3)
-    var output_height = grad_output.dim_size(2)
-    var output_width = grad_output.dim_size(3)
+    var batch_size = grad_input.dim(0)
+    var channels = grad_input.dim(1)
+    var input_height = grad_input.dim(2)
+    var input_width = grad_input.dim(3)
+    var output_height = grad_output.dim(2)
+    var output_width = grad_output.dim(3)
 
     # Initialize grad_input to zeros
     for n, c, ih, iw in product(
@@ -41,8 +41,16 @@ fn _adaptive_avg_pool2d_backward_cpu[
         range(input_height),
         range(input_width),
     ):
-        var indices = IndexList[rank](n, c, ih, iw)
-        grad_input[indices] = Scalar[dtype](0)
+        var indices = IndexList[
+            grad_input.rank, element_type = grad_input.layout_int_type
+        ](n, c, ih, iw)
+        var i = grad_input.runtime_layout(
+            RuntimeTuple[
+                fill_like(grad_input.layout.shape, 1),
+                element_type = grad_input.layout_int_type,
+            ](indices)
+        )
+        grad_input.ptr.store(i, Scalar[dtype](0))
 
     # Iterate over input positions (not output positions)
     # This avoids needing to read from grad_input
@@ -80,23 +88,40 @@ fn _adaptive_avg_pool2d_backward_cpu[
             var region_size = kh * kw
 
             # Get gradient from output using IndexList
-            var grad_output_indices = IndexList[rank](n, c, oh, ow)
-            var grad_val = grad_output[grad_output_indices]
+            var grad_output_indices = IndexList[
+                grad_output.rank, element_type = grad_output.layout_int_type
+            ](n, c, oh, ow)
+            var grad_output_idx = grad_output.runtime_layout(
+                RuntimeTuple[
+                    fill_like(grad_output.layout.shape, 1),
+                    element_type = grad_output.layout_int_type,
+                ](grad_output_indices)
+            )
+            var grad_val = grad_output.ptr.load(grad_output_idx)
 
             # Accumulate weighted gradient
-            accumulated_grad += grad_val / Scalar[dtype](region_size)
+            accumulated_grad += rebind[Scalar[dtype]](grad_val) / Scalar[dtype](
+                region_size
+            )
 
         # Write accumulated gradient to input using IndexList
-        var grad_input_indices = IndexList[rank](n, c, ih, iw)
-        grad_input[grad_input_indices] = accumulated_grad
+        var grad_input_indices = IndexList[
+            grad_input.rank, element_type = grad_input.layout_int_type
+        ](n, c, ih, iw)
+        var grad_input_idx = grad_input.runtime_layout(
+            RuntimeTuple[
+                fill_like(grad_input.layout.shape, 1),
+                element_type = grad_input.layout_int_type,
+            ](grad_input_indices)
+        )
+        grad_input.ptr.store(grad_input_idx, accumulated_grad)
 
 
 fn _adaptive_avg_pool2d_backward_gpu[
     dtype: DType,
-    rank: Int,
 ](
-    grad_input: OutputTensor[dtype=dtype, rank=rank],
-    grad_output: InputTensor[dtype=dtype, rank=rank],
+    grad_input: LayoutTensor[mut=True, dtype, **_],
+    grad_output: LayoutTensor[dtype, **_],
     batch_size: Int,
     channels: Int,
     input_height: Int,
@@ -200,17 +225,18 @@ fn _adaptive_avg_pool2d_backward_gpu[
 
     var device_ctx = ctx_ptr.get_device_context()
 
-    # Convert to LayoutTensor for device buffer creation
-    alias layout = Layout.row_major[rank]()
-    var grad_input_layout = grad_input.to_layout_tensor()
-    var grad_output_layout = grad_output.to_layout_tensor()
-
     # Create device buffers from LayoutTensor pointers
     var grad_input_device = DeviceBuffer[dtype](
-        device_ctx, grad_input_layout.ptr, grad_input.size(), owning=False
+        device_ctx,
+        rebind[UnsafePointer[Scalar[dtype]]](grad_input.ptr),
+        grad_input.size(),
+        owning=False,
     )
     var grad_output_device = DeviceBuffer[dtype](
-        device_ctx, grad_output_layout.ptr, grad_output.size(), owning=False
+        device_ctx,
+        rebind[UnsafePointer[Scalar[dtype]]](grad_output.ptr),
+        grad_output.size(),
+        owning=False,
     )
 
     # Initialize grad_input to zeros
@@ -274,13 +300,13 @@ struct AdaptiveAvgPool2dBackwardKernel:
 
         @parameter
         if is_cpu[target]():
-            _adaptive_avg_pool2d_backward_cpu[dtype, rank](
-                grad_input, grad_output
+            _adaptive_avg_pool2d_backward_cpu[dtype](
+                grad_input.to_layout_tensor(), grad_output.to_layout_tensor()
             )
         else:
-            _adaptive_avg_pool2d_backward_gpu[dtype, rank](
-                grad_input,
-                grad_output,
+            _adaptive_avg_pool2d_backward_gpu[dtype](
+                grad_input.to_layout_tensor(),
+                grad_output.to_layout_tensor(),
                 batch_size,
                 channels,
                 input_height,
