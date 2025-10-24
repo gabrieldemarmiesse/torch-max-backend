@@ -280,6 +280,54 @@ def aten__adaptive_avg_pool2d_backward(
 # _adaptive_avg_pool3d(Tensor self, SymInt[3] output_size) -> Tensor
 # _cdist_forward(Tensor x1, Tensor x2, float p, int? compute_mode) -> Tensor
 # _embedding_bag(Tensor weight, Tensor indices, Tensor offsets, bool scale_grad_by_freq=False, int mode=0, bool sparse=False, Tensor? per_sample_weights=None, bool include_last_offset=False, int padding_idx=-1) -> (Tensor, Tensor, Tensor, Tensor)
+
+
+# _euclidean_dist(Tensor x1, Tensor x2) -> Tensor
+@map_to(aten._euclidean_dist)
+def aten__euclidean_dist(x1: MaxTensor, x2: MaxTensor) -> MaxTensor:
+    """
+    Compute pairwise Euclidean distances between points in x1 and x2.
+
+    This uses the efficient matrix multiplication trick:
+    ||x1[i] - x2[j]||^2 = ||x1[i]||^2 + ||x2[j]||^2 - 2 * <x1[i], x2[j]>
+
+    Args:
+        x1: Tensor of shape (..., P, D) containing P points with D features
+        x2: Tensor of shape (..., R, D) containing R points with D features
+
+    Returns:
+        Tensor of shape (..., P, R) with pairwise Euclidean distances
+    """
+    # Step 1: Compute squared norms along last dimension
+    # F.sum keeps dimensions by default (no need for keepdim=True)
+    x1_norm = F.sum(F.pow(x1, 2), axis=-1)  # (..., P, 1)
+    x2_norm = F.sum(F.pow(x2, 2), axis=-1)  # (..., R, 1)
+
+    # Step 2: Create ones tensors with same shape as norms
+    x1_pad = F.broadcast_to(
+        F.constant(1.0, dtype=x1_norm.dtype, device=x1_norm.device), x1_norm.shape
+    )  # (..., P, 1)
+    x2_pad = F.broadcast_to(
+        F.constant(1.0, dtype=x2_norm.dtype, device=x2_norm.device), x2_norm.shape
+    )  # (..., R, 1)
+
+    # Step 3: Concatenate components along last dimension
+    # x1_: [..., -2*x1, ||x1||^2, 1]
+    # x2_: [..., x2, 1, ||x2||^2]
+    x1_ = F.concat([x1 * -2, x1_norm, x1_pad], axis=-1)  # (..., P, D+2)
+    x2_ = F.concat([x2, x2_pad, x2_norm], axis=-1)  # (..., R, D+2)
+
+    # Step 4: Matrix multiplication
+    # Result = x1_ @ x2_.T = -2*x1@x2.T + ||x1||^2 + ||x2||^2 = ||x1 - x2||^2
+    result = F.matmul(x1_, F.transpose(x2_, -2, -1))  # (..., P, R)
+
+    # Step 5: Clamp to non-negative (handle numerical errors) and take sqrt
+    result = F.max(result, F.constant(0.0, dtype=result.dtype, device=result.device))
+    result = F.sqrt(result)
+
+    return result
+
+
 # _fft_r2c(Tensor self, int[] dim, int normalization, bool onesided) -> Tensor
 # _local_scalar_dense(Tensor self) -> Scalar
 # _log_softmax(Tensor self, int dim, bool half_to_float) -> Tensor
@@ -1419,6 +1467,124 @@ def aten_convolution(
 
 
 # convolution_backward(Tensor grad_output, Tensor input, Tensor weight, SymInt[]? bias_sizes, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
+@map_to(aten.convolution_backward)
+def aten_convolution_backward(
+    grad_output: MaxTensor,
+    input: MaxTensor,
+    weight: MaxTensor,
+    bias_sizes: list[SymIntType] | None,
+    stride: list[SymIntType],
+    padding: list[SymIntType],
+    dilation: list[SymIntType],
+    transposed: bool,
+    output_padding: list[SymIntType],
+    groups: SymIntType,
+    output_mask: list[bool],
+) -> tuple[MaxTensor | None, MaxTensor | None, MaxTensor | None]:
+    """
+    Compute gradients for convolution operation.
+
+    Returns: (grad_input, grad_weight, grad_bias)
+    - grad_input: gradient w.r.t. input (if output_mask[0])
+    - grad_weight: gradient w.r.t. weight (if output_mask[1])
+    - grad_bias: gradient w.r.t. bias (if output_mask[2])
+
+    Reference PyTorch implementation:
+    - ../pytorch/aten/src/ATen/native/Convolution.cpp (dispatcher)
+    - ../pytorch/aten/src/ATen/native/ConvolutionMM2d.cpp (CPU)
+    - ../pytorch/aten/src/ATen/native/cudnn/Conv_v7.cpp (GPU)
+    """
+    # Only support standard (non-transposed) 2D convolution for now
+    if transposed:
+        raise NotImplementedError(
+            "Transposed convolution backward is not supported yet"
+        )
+    if any(p != 0 for p in output_padding):
+        raise NotImplementedError("Output padding in backward is not supported yet")
+    if groups != 1:
+        raise NotImplementedError("Grouped convolution backward is not supported yet")
+
+    # Normalize stride, padding, dilation to tuples
+    if isinstance(stride, int):
+        stride = (stride, stride)
+    if isinstance(padding, int):
+        padding = (padding, padding, padding, padding)
+    elif isinstance(padding, tuple | list):
+        if len(padding) == 2:
+            padding = (padding[0], padding[0], padding[1], padding[1])
+        elif len(padding) == 4:
+            padding = tuple(padding)
+        else:
+            raise ValueError(f"Unsupported padding length: {len(padding)}")
+    if isinstance(dilation, int):
+        dilation = (dilation, dilation)
+
+    grad_input = None
+    grad_weight = None
+    grad_bias = None
+
+    # --- Compute grad_bias (simple sum reduction) ---
+    if output_mask[2] and bias_sizes is not None:
+        # grad_output shape: (N, C_out, H_out, W_out) in PyTorch NCHW format
+        # Sum across batch (dim 0), height (dim 2), and width (dim 3)
+        # Keep only channels (dim 1)
+        # MAX sum keeps dimensions, so we sum and then squeeze
+        grad_bias = max_ops.sum(grad_output, axis=0)  # [1, C_out, H, W]
+        grad_bias = max_ops.sum(grad_bias, axis=2)  # [1, C_out, 1, W]
+        grad_bias = max_ops.sum(grad_bias, axis=3)  # [1, C_out, 1, 1]
+        # Reshape to [C_out]
+        grad_bias = grad_bias.reshape([bias_sizes[0]])
+
+    # --- Compute grad_input using conv2d_transpose ---
+    if output_mask[0]:
+        # Convert grad_output from NCHW to NHWC for MAX
+        grad_output_nhwc = grad_output.permute([0, 2, 3, 1])
+
+        # For conv_transpose with RSCF layout: [kernel_h, kernel_w, out_channels, in_channels]
+        # where in_channels matches the input channels and out_channels is what we produce
+        #
+        # PyTorch weight: [C_out_fwd, C_in_fwd, K_h, K_w]
+        # For backward: input to conv_transpose has C_out_fwd channels, output has C_in_fwd channels
+        # So we need: [K_h, K_w, C_in_fwd, C_out_fwd]
+        weight_rscf = weight.permute([2, 3, 1, 0])
+
+        # Compute grad_input using conv2d_transpose
+        # This effectively reverses the forward convolution
+        grad_input_nhwc = F.conv2d_transpose(
+            grad_output_nhwc,
+            weight_rscf,
+            stride=tuple(stride),
+            padding=tuple(padding),
+            dilation=tuple(dilation),
+            output_paddings=tuple(output_padding),
+            input_layout=max_type.ConvInputLayout.NHWC,
+            filter_layout=max_type.FilterLayout.RSCF,
+        )
+
+        # Convert back from NHWC to NCHW
+        grad_input = grad_input_nhwc.permute([0, 3, 1, 2])
+
+    # --- Compute grad_weight (requires correlation/im2col) ---
+    if output_mask[1]:
+        # grad_weight computation requires correlation between input and grad_output
+        # This needs either:
+        # 1. unfold/im2col operation (not available in MAX yet)
+        # 2. Custom Mojo kernel implementing the correlation
+        # 3. Composed operations using matmul and reshapes
+        #
+        # For now, we raise an error for this specific gradient
+        raise NotImplementedError(
+            "grad_weight computation in convolution_backward is not yet implemented. "
+            "This requires:\n"
+            "  - unfold/im2col operation (not available in MAX)\n"
+            "  - OR custom Mojo kernel implementing correlation\n"
+            "  - OR composed operations using matmul + reshapes\n"
+            "Note: grad_input and grad_bias are supported."
+        )
+
+    return (grad_input, grad_weight, grad_bias)
+
+
 # copy(Tensor self, Tensor src, bool non_blocking=False) -> Tensor
 @map_to(aten.copy)
 def aten_copy(
