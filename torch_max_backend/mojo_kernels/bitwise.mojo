@@ -1,4 +1,3 @@
-
 from compiler import register
 from gpu.host import DeviceContext
 from gpu.id import block_idx
@@ -8,21 +7,20 @@ from tensor_internal import InputTensor, OutputTensor, foreach
 
 from utils.index import IndexList
 
+
 @compiler.register("bitwise_and")
 struct BitwiseAndKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int,
-        //,
+        rank: Int, //,
         target: StaticString,
     ](
-        output: OutputTensor[dtype = dtype, rank = rank],
-        x: InputTensor[dtype = dtype, rank = rank],
-        y: InputTensor[dtype = dtype, rank = rank],
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
+        y: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
-
         @parameter
         @always_inline
         fn elementwise_bitwise_and[
@@ -33,19 +31,14 @@ struct BitwiseAndKernel:
         foreach[elementwise_bitwise_and, target=target](output, ctx)
 
 
-
 @compiler.register("bitwise_and_scalar")
 struct BitwiseAndScalarKernel:
     @staticmethod
     fn execute[
-        dtype: DType,
-        rank: Int,
-        //,
-        target: StaticString,
-        other: Int
+        dtype: DType, rank: Int, //, target: StaticString, other: Int
     ](
-        output: OutputTensor[dtype = dtype, rank = rank],
-        x: InputTensor[dtype = dtype, rank = rank],
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
         alias other_as_scalar = Scalar[dtype](other)
@@ -65,16 +58,14 @@ struct BitwiseOrKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int,
-        //,
+        rank: Int, //,
         target: StaticString,
     ](
-        output: OutputTensor[dtype = dtype, rank = rank],
-        x: InputTensor[dtype = dtype, rank = rank],
-        y: InputTensor[dtype = dtype, rank = rank],
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
+        y: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
-
         @parameter
         @always_inline
         fn elementwise_bitwise_or[
@@ -89,14 +80,10 @@ struct BitwiseOrKernel:
 struct BitwiseOrScalarKernel:
     @staticmethod
     fn execute[
-        dtype: DType,
-        rank: Int,
-        //,
-        target: StaticString,
-        other: Int
+        dtype: DType, rank: Int, //, target: StaticString, other: Int
     ](
-        output: OutputTensor[dtype = dtype, rank = rank],
-        x: InputTensor[dtype = dtype, rank = rank],
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
         alias other_as_scalar = Scalar[dtype](other)
@@ -116,16 +103,14 @@ struct BitwiseXorKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int,
-        //,
+        rank: Int, //,
         target: StaticString,
     ](
-        output: OutputTensor[dtype = dtype, rank = rank],
-        x: InputTensor[dtype = dtype, rank = rank],
-        y: InputTensor[dtype = dtype, rank = rank],
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
+        y: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
-
         @parameter
         @always_inline
         fn elementwise_bitwise_xor[
@@ -140,14 +125,10 @@ struct BitwiseXorKernel:
 struct BitwiseXorScalarKernel:
     @staticmethod
     fn execute[
-        dtype: DType,
-        rank: Int,
-        //,
-        target: StaticString,
-        other: Int
+        dtype: DType, rank: Int, //, target: StaticString, other: Int
     ](
-        output: OutputTensor[dtype = dtype, rank = rank],
-        x: InputTensor[dtype = dtype, rank = rank],
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
         alias other_as_scalar = Scalar[dtype](other)
@@ -162,21 +143,18 @@ struct BitwiseXorScalarKernel:
         foreach[elementwise_bitwise_xor, target=target](output, ctx)
 
 
-
 @compiler.register("bitwise_not")
 struct BitwiseNotKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int,
-        //,
+        rank: Int, //,
         target: StaticString,
     ](
-        output: OutputTensor[dtype = dtype, rank = rank],
-        x: InputTensor[dtype = dtype, rank = rank],
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
-
         @parameter
         @always_inline
         fn elementwise_bitwise_not[

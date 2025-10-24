@@ -11,3 +11,11 @@ repos:
   rev: 0.8.22
   hooks:
     - id: uv-lock
+- repo: local
+  hooks:
+    - id: mojo-format
+      name: Format Mojo files
+      entry: uv run mojo format
+      language: system
+      types: [file]
+      files: \.mojo$
