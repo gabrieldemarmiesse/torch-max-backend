@@ -1,6 +1,6 @@
 from compiler import register
 from math import ceil
-from tensor_internal import ElementwiseUnaryOp
+from tensor import ElementwiseUnaryOp
 
 
 @compiler.register("ceil")
