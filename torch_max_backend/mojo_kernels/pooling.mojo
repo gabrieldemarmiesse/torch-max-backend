@@ -3,7 +3,7 @@ from itertools import product
 from math import ceildiv
 from os import Atomic
 from runtime.asyncrt import DeviceContextPtr
-from tensor_internal import InputTensor, OutputTensor, ManagedTensorSlice
+from tensor import InputTensor, OutputTensor, ManagedTensorSlice
 from utils.index import IndexList
 from gpu import global_idx
 from gpu.host import DeviceBuffer
