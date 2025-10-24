@@ -46,9 +46,13 @@ fn _adaptive_avg_pool2d_backward_cpu[
         for ih, iw in product(range(input_height), range(input_width)):
             # Find which output positions contribute to this input position
             var ostartH = (ih * output_height) // input_height
-            var oendH = ((ih + 1) * output_height + input_height - 1) // input_height
+            var oendH = (
+                (ih + 1) * output_height + input_height - 1
+            ) // input_height
             var ostartW = (iw * output_width) // input_width
-            var oendW = ((iw + 1) * output_width + input_width - 1) // input_width
+            var oendW = (
+                (iw + 1) * output_width + input_width - 1
+            ) // input_width
 
             var accumulated_grad = Scalar[dtype](0.0)
 
@@ -56,9 +60,13 @@ fn _adaptive_avg_pool2d_backward_cpu[
             for oh, ow in product(range(ostartH, oendH), range(ostartW, oendW)):
                 # Compute the input region for this output position
                 var ih_start = (oh * input_height) // output_height
-                var ih_end = ((oh + 1) * input_height + output_height - 1) // output_height
+                var ih_end = (
+                    (oh + 1) * input_height + output_height - 1
+                ) // output_height
                 var iw_start = (ow * input_width) // output_width
-                var iw_end = ((ow + 1) * input_width + output_width - 1) // output_width
+                var iw_end = (
+                    (ow + 1) * input_width + output_width - 1
+                ) // output_width
 
                 # Compute region size
                 var kh = ih_end - ih_start
@@ -111,7 +119,9 @@ fn _adaptive_avg_pool2d_backward_gpu[
     alias block_dim = 256
 
     @parameter
-    fn kernel[dtype: DType](
+    fn kernel[
+        dtype: DType
+    ](
         grad_input_ptr: UnsafePointer[Scalar[dtype]],
         grad_output_ptr: UnsafePointer[Scalar[dtype]],
         batch_size: Int,
@@ -125,7 +135,9 @@ fn _adaptive_avg_pool2d_backward_gpu[
         var tid = global_idx.x
 
         # Total number of output elements across all batches and channels
-        var total_output_elements = batch_size * channels * output_height * output_width
+        var total_output_elements = (
+            batch_size * channels * output_height * output_width
+        )
 
         if tid >= UInt(total_output_elements):
             return
@@ -141,7 +153,9 @@ fn _adaptive_avg_pool2d_backward_gpu[
 
         # Compute input region bounds using adaptive pooling formula
         var ih_start = (oh * input_height) // output_height
-        var ih_end = ((oh + 1) * input_height + output_height - 1) // output_height
+        var ih_end = (
+            (oh + 1) * input_height + output_height - 1
+        ) // output_height
         var iw_start = (ow * input_width) // output_width
         var iw_end = ((ow + 1) * input_width + output_width - 1) // output_width
 
@@ -151,7 +165,12 @@ fn _adaptive_avg_pool2d_backward_gpu[
         var region_size = kh * kw
 
         # Get gradient value at this output position
-        var grad_output_idx = n * (channels * output_height * output_width) + c * (output_height * output_width) + oh * output_width + ow
+        var grad_output_idx = (
+            n * (channels * output_height * output_width)
+            + c * (output_height * output_width)
+            + oh * output_width
+            + ow
+        )
         var grad_val = grad_output_ptr[grad_output_idx]
 
         # Compute gradient delta (divided by region size for averaging)
@@ -161,10 +180,19 @@ fn _adaptive_avg_pool2d_backward_gpu[
         # Use atomic add to handle race conditions (multiple threads may write to same input position)
         for ih in range(ih_start, ih_end):
             for iw in range(iw_start, iw_end):
-                var grad_input_idx = n * (channels * input_height * input_width) + c * (input_height * input_width) + ih * input_width + iw
-                _ = Atomic.fetch_add(grad_input_ptr + grad_input_idx, grad_delta)
+                var grad_input_idx = (
+                    n * (channels * input_height * input_width)
+                    + c * (input_height * input_width)
+                    + ih * input_width
+                    + iw
+                )
+                _ = Atomic.fetch_add(
+                    grad_input_ptr + grad_input_idx, grad_delta
+                )
 
-    var total_output_elements = batch_size * channels * output_height * output_width
+    var total_output_elements = (
+        batch_size * channels * output_height * output_width
+    )
     var grid_dim = ceildiv(total_output_elements, block_dim)
 
     var device_ctx = ctx_ptr.get_device_context()
@@ -217,8 +245,7 @@ struct AdaptiveAvgPool2dBackwardKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int,  # Should be 4 for [N, C, H, W]
-        //,
+        rank: Int, //,  # Should be 4 for [N, C, H, W]
         target: StaticString,
     ](
         grad_input: OutputTensor[dtype=dtype, rank=rank],
@@ -244,7 +271,9 @@ struct AdaptiveAvgPool2dBackwardKernel:
 
         @parameter
         if is_cpu[target]():
-            _adaptive_avg_pool2d_backward_cpu[dtype, rank](grad_input, grad_output)
+            _adaptive_avg_pool2d_backward_cpu[dtype, rank](
+                grad_input, grad_output
+            )
         else:
             _adaptive_avg_pool2d_backward_gpu[dtype, rank](
                 grad_input,
