@@ -35,54 +35,60 @@ fn _adaptive_avg_pool2d_backward_cpu[
     var output_width = grad_output.dim_size(3)
 
     # Initialize grad_input to zeros
-    for n, c in product(range(batch_size), range(channels)):
-        for ih, iw in product(range(input_height), range(input_width)):
-            var indices = IndexList[rank](n, c, ih, iw)
-            grad_input[indices] = Scalar[dtype](0)
+    for n, c, ih, iw in product(
+        range(batch_size),
+        range(channels),
+        range(input_height),
+        range(input_width),
+    ):
+        var indices = IndexList[rank](n, c, ih, iw)
+        grad_input[indices] = Scalar[dtype](0)
 
     # Iterate over input positions (not output positions)
     # This avoids needing to read from grad_input
-    for n, c in product(range(batch_size), range(channels)):
-        for ih, iw in product(range(input_height), range(input_width)):
-            # Find which output positions contribute to this input position
-            var ostartH = (ih * output_height) // input_height
-            var oendH = (
-                (ih + 1) * output_height + input_height - 1
-            ) // input_height
-            var ostartW = (iw * output_width) // input_width
-            var oendW = (
-                (iw + 1) * output_width + input_width - 1
-            ) // input_width
+    for n, c, ih, iw in product(
+        range(batch_size),
+        range(channels),
+        range(input_height),
+        range(input_width),
+    ):
+        # Find which output positions contribute to this input position
+        var ostartH = (ih * output_height) // input_height
+        var oendH = (
+            (ih + 1) * output_height + input_height - 1
+        ) // input_height
+        var ostartW = (iw * output_width) // input_width
+        var oendW = ((iw + 1) * output_width + input_width - 1) // input_width
 
-            var accumulated_grad = Scalar[dtype](0.0)
+        var accumulated_grad = Scalar[dtype](0.0)
 
-            # Accumulate gradients from all contributing output positions
-            for oh, ow in product(range(ostartH, oendH), range(ostartW, oendW)):
-                # Compute the input region for this output position
-                var ih_start = (oh * input_height) // output_height
-                var ih_end = (
-                    (oh + 1) * input_height + output_height - 1
-                ) // output_height
-                var iw_start = (ow * input_width) // output_width
-                var iw_end = (
-                    (ow + 1) * input_width + output_width - 1
-                ) // output_width
+        # Accumulate gradients from all contributing output positions
+        for oh, ow in product(range(ostartH, oendH), range(ostartW, oendW)):
+            # Compute the input region for this output position
+            var ih_start = (oh * input_height) // output_height
+            var ih_end = (
+                (oh + 1) * input_height + output_height - 1
+            ) // output_height
+            var iw_start = (ow * input_width) // output_width
+            var iw_end = (
+                (ow + 1) * input_width + output_width - 1
+            ) // output_width
 
-                # Compute region size
-                var kh = ih_end - ih_start
-                var kw = iw_end - iw_start
-                var region_size = kh * kw
+            # Compute region size
+            var kh = ih_end - ih_start
+            var kw = iw_end - iw_start
+            var region_size = kh * kw
 
-                # Get gradient from output using IndexList
-                var grad_output_indices = IndexList[rank](n, c, oh, ow)
-                var grad_val = grad_output[grad_output_indices]
+            # Get gradient from output using IndexList
+            var grad_output_indices = IndexList[rank](n, c, oh, ow)
+            var grad_val = grad_output[grad_output_indices]
 
-                # Accumulate weighted gradient
-                accumulated_grad += grad_val / Scalar[dtype](region_size)
+            # Accumulate weighted gradient
+            accumulated_grad += grad_val / Scalar[dtype](region_size)
 
-            # Write accumulated gradient to input using IndexList
-            var grad_input_indices = IndexList[rank](n, c, ih, iw)
-            grad_input[grad_input_indices] = accumulated_grad
+        # Write accumulated gradient to input using IndexList
+        var grad_input_indices = IndexList[rank](n, c, ih, iw)
+        grad_input[grad_input_indices] = accumulated_grad
 
 
 fn _adaptive_avg_pool2d_backward_gpu[
@@ -178,17 +184,14 @@ fn _adaptive_avg_pool2d_backward_gpu[
 
         # Distribute gradient to all input positions in this region
         # Use atomic add to handle race conditions (multiple threads may write to same input position)
-        for ih in range(ih_start, ih_end):
-            for iw in range(iw_start, iw_end):
-                var grad_input_idx = (
-                    n * (channels * input_height * input_width)
-                    + c * (input_height * input_width)
-                    + ih * input_width
-                    + iw
-                )
-                _ = Atomic.fetch_add(
-                    grad_input_ptr + grad_input_idx, grad_delta
-                )
+        for ih, iw in product(range(ih_start, ih_end), range(iw_start, iw_end)):
+            var grad_input_idx = (
+                n * (channels * input_height * input_width)
+                + c * (input_height * input_width)
+                + ih * input_width
+                + iw
+            )
+            _ = Atomic.fetch_add(grad_input_ptr + grad_input_idx, grad_delta)
 
     var total_output_elements = (
         batch_size * channels * output_height * output_width
