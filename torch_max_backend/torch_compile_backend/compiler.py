@@ -372,13 +372,13 @@ class BaseMaxCompiler:
     def fast_from_dlpack(self, t: torch.Tensor) -> max.driver.Tensor:
         t_ptr = t.data_ptr()
         try:
-            return self.views_cache[t_ptr]
+            return self.views_cache[(t_ptr, t._version)]
         except KeyError:
             view = max.driver.Tensor.from_dlpack(t)
             # If it's not a view, we don't cache it, otherwise we'll have the memory
             # issues because we keep references alive
             if t_ptr == view._data_ptr():
-                self.views_cache[t_ptr] = view
+                self.views_cache[(t_ptr, t._version)] = view
             return view
 
 
