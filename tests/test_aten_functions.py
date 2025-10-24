@@ -14,7 +14,7 @@ from torch_max_backend.testing import (
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_adaptive_avg_pool2d_backward_basic(device: str, dtype: torch.dtype):
+def test_adaptive_avg_pool2d_backward_basic(conf: Conf, dtype: torch.dtype):
     """Test _adaptive_avg_pool2d_backward basic functionality"""
 
     def fn(grad_output, input_tensor):
@@ -24,14 +24,12 @@ def test_adaptive_avg_pool2d_backward_basic(device: str, dtype: torch.dtype):
     batch_size, channels, height, width = 2, 3, 8, 8
     output_height, output_width = 4, 4
 
-    input_tensor = torch.randn(
-        batch_size, channels, height, width, device=device, dtype=dtype
-    )
+    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
     grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, device=device, dtype=dtype
+        batch_size, channels, output_height, output_width, dtype=dtype
     )
 
-    check_functions_are_equivalent(fn, device, [grad_output, input_tensor])
+    check_outputs(fn, conf, [grad_output, input_tensor])
 
 
 @pytest.mark.parametrize(
@@ -39,7 +37,7 @@ def test_adaptive_avg_pool2d_backward_basic(device: str, dtype: torch.dtype):
     [((8, 8), (4, 4)), ((10, 10), (5, 5)), ((7, 7), (3, 3)), ((16, 16), (8, 8))],
 )
 def test_adaptive_avg_pool2d_backward_different_sizes(
-    device: str, input_size: tuple, output_size: tuple
+    conf: Conf, input_size: tuple, output_size: tuple
 ):
     """Test _adaptive_avg_pool2d_backward with different input and output sizes"""
 
@@ -50,17 +48,13 @@ def test_adaptive_avg_pool2d_backward_different_sizes(
     input_height, input_width = input_size
     output_height, output_width = output_size
 
-    input_tensor = torch.randn(
-        batch_size, channels, input_height, input_width, device=device
-    )
-    grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, device=device
-    )
+    input_tensor = torch.randn(batch_size, channels, input_height, input_width)
+    grad_output = torch.randn(batch_size, channels, output_height, output_width)
 
-    check_functions_are_equivalent(fn, device, [grad_output, input_tensor])
+    check_outputs(fn, conf, [grad_output, input_tensor])
 
 
-def test_adaptive_avg_pool2d_backward_3d_input(device: str):
+def test_adaptive_avg_pool2d_backward_3d_input(conf: Conf):
     """Test _adaptive_avg_pool2d_backward with 3D input (no batch dimension)"""
 
     def fn(grad_output, input_tensor):
@@ -69,14 +63,14 @@ def test_adaptive_avg_pool2d_backward_3d_input(device: str):
     channels, height, width = 3, 8, 8
     output_height, output_width = 4, 4
 
-    input_tensor = torch.randn(channels, height, width, device=device)
-    grad_output = torch.randn(channels, output_height, output_width, device=device)
+    input_tensor = torch.randn(channels, height, width)
+    grad_output = torch.randn(channels, output_height, output_width)
 
-    check_functions_are_equivalent(fn, device, [grad_output, input_tensor])
+    check_outputs(fn, conf, [grad_output, input_tensor])
 
 
 @pytest.mark.parametrize("channels", [1, 3, 16, 64])
-def test_adaptive_avg_pool2d_backward_different_channels(device: str, channels: int):
+def test_adaptive_avg_pool2d_backward_different_channels(conf: Conf, channels: int):
     """Test _adaptive_avg_pool2d_backward with different numbers of channels"""
 
     def fn(grad_output, input_tensor):
@@ -85,15 +79,13 @@ def test_adaptive_avg_pool2d_backward_different_channels(device: str, channels: 
     batch_size, height, width = 2, 8, 8
     output_height, output_width = 4, 4
 
-    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
-    grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, device=device
-    )
+    input_tensor = torch.randn(batch_size, channels, height, width)
+    grad_output = torch.randn(batch_size, channels, output_height, output_width)
 
-    check_functions_are_equivalent(fn, device, [grad_output, input_tensor])
+    check_outputs(fn, conf, [grad_output, input_tensor])
 
 
-def test_adaptive_avg_pool2d_backward_non_uniform_pooling(device: str):
+def test_adaptive_avg_pool2d_backward_non_uniform_pooling(conf: Conf):
     """Test _adaptive_avg_pool2d_backward with non-uniform pooling regions"""
 
     def fn(grad_output, input_tensor):
@@ -101,13 +93,13 @@ def test_adaptive_avg_pool2d_backward_non_uniform_pooling(device: str):
 
     # Input size 9x9 to output size 4x4 creates non-uniform pooling regions
     batch_size, channels = 2, 3
-    input_tensor = torch.randn(batch_size, channels, 9, 9, device=device)
-    grad_output = torch.randn(batch_size, channels, 4, 4, device=device)
+    input_tensor = torch.randn(batch_size, channels, 9, 9)
+    grad_output = torch.randn(batch_size, channels, 4, 4)
 
-    check_functions_are_equivalent(fn, device, [grad_output, input_tensor])
+    check_outputs(fn, conf, [grad_output, input_tensor])
 
 
-def test_adaptive_avg_pool2d_backward_output_size_one(device: str):
+def test_adaptive_avg_pool2d_backward_output_size_one(conf: Conf):
     """Test _adaptive_avg_pool2d_backward with output size (1, 1)"""
 
     def fn(grad_output, input_tensor):
@@ -115,14 +107,14 @@ def test_adaptive_avg_pool2d_backward_output_size_one(device: str):
 
     batch_size, channels, height, width = 2, 3, 8, 8
 
-    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
-    grad_output = torch.randn(batch_size, channels, 1, 1, device=device)
+    input_tensor = torch.randn(batch_size, channels, height, width)
+    grad_output = torch.randn(batch_size, channels, 1, 1)
 
-    check_functions_are_equivalent(fn, device, [grad_output, input_tensor])
+    check_outputs(fn, conf, [grad_output, input_tensor])
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_adaptive_avg_pool2d_backward_half_precision(device: str, dtype: torch.dtype):
+def test_adaptive_avg_pool2d_backward_half_precision(conf: Conf, dtype: torch.dtype):
     """Test _adaptive_avg_pool2d_backward with half precision types"""
 
     def fn(grad_output, input_tensor):
@@ -131,17 +123,13 @@ def test_adaptive_avg_pool2d_backward_half_precision(device: str, dtype: torch.d
     batch_size, channels, height, width = 2, 3, 8, 8
     output_height, output_width = 4, 4
 
-    input_tensor = torch.randn(
-        batch_size, channels, height, width, device=device, dtype=dtype
-    )
+    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
     grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, device=device, dtype=dtype
+        batch_size, channels, output_height, output_width, dtype=dtype
     )
 
     # Half precision may have lower accuracy
-    check_functions_are_equivalent(
-        fn, device, [grad_output, input_tensor], atol=1e-2, rtol=1e-2
-    )
+    check_outputs(fn, conf, [grad_output, input_tensor], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])

@@ -233,8 +233,8 @@ def aten__adaptive_avg_pool2d(
 # _adaptive_avg_pool2d_backward(Tensor grad_output, Tensor self) -> Tensor
 @map_to(aten._adaptive_avg_pool2d_backward)
 def aten__adaptive_avg_pool2d_backward(
-    grad_output: TensorValue, input_tensor: TensorValue
-) -> TensorValue:
+    grad_output: MaxTensor, input_tensor: MaxTensor
+) -> MaxTensor:
     """Compute gradient for adaptive average pooling 2d backward pass.
 
     Args:
@@ -258,7 +258,7 @@ def aten__adaptive_avg_pool2d_backward(
         input_tensor_reshaped = input_tensor
         remove_batch = False
 
-    grad_input = max_ops.custom(
+    grad_input = F.custom(
         name="adaptive_avg_pool2d_backward",
         device=input_tensor_reshaped.device,
         values=[grad_output, input_tensor_reshaped],

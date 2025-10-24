@@ -123,6 +123,9 @@ def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMa
         )
 
 
+register_aten_op("aten::_adaptive_avg_pool2d_backward")(
+    wrap_for_max_device(aten_functions.aten__adaptive_avg_pool2d_backward)
+)
 register_aten_op("aten::_log_softmax")(
     wrap_for_max_device(aten_functions.aten__log_softmax)
 )
