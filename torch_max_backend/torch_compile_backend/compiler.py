@@ -372,6 +372,12 @@ class BaseMaxCompiler:
     def fast_from_dlpack(self, t: torch.Tensor) -> max.driver.Tensor:
         t_ptr = t.data_ptr()
         try:
+            # if the pointer is the same and the pointer has
+            # not changed version (meaning no mutation happened)
+            # then we can safely reuse the view we had.
+            # In case of mutation, we need a new view to force stream syncs
+            # since we don't know if the operation that mutated the tensor
+            # has completed yet.
             return self.views_cache[(t_ptr, t._version)]
         except KeyError:
             view = max.driver.Tensor.from_dlpack(t)
