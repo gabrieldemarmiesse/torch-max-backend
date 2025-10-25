@@ -1,7 +1,7 @@
 from max.experimental import functional as F
 from max.graph import TensorType
 
-from torch_max_backend.types import MaxTensor
+from torch_max_backend.types import MaxTensor, Scalar
 
 
 def _register_kernels() -> None:
@@ -15,7 +15,23 @@ def _register_kernels() -> None:
     )
 
 
-def bitwise_and_scalar(input: MaxTensor, other: MaxTensor) -> MaxTensor:
+def bitwise_and(input: MaxTensor, other: MaxTensor) -> MaxTensor:
+    """
+    Custom Mojo kernel for bitwise_and operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="bitwise_and",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
+def bitwise_and_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_and_scalar operation.
     """

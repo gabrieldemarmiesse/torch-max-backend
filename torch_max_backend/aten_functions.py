@@ -28,7 +28,7 @@ from torch.ops import aten
 from torch_max_backend import custom_mojo_ops
 from torch_max_backend.flags import verbose_enabled
 from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerators
-from torch_max_backend.types import MaxTensor
+from torch_max_backend.types import MaxTensor, Scalar, SymIntType
 
 
 def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
@@ -70,9 +70,6 @@ def torch_device_to_max_device(x: torch.device) -> DeviceRef:
     else:
         return max_device_ref(x)
 
-
-Scalar = int | float | Dim
-SymIntType = int | Dim
 
 # Ops that need to be decomposed.
 DECOMPOSITION_TABLE = core_aten_decompositions()
@@ -1153,15 +1150,7 @@ def aten_avg_pool2d(
 # bitwise_and.Scalar(Tensor self, Scalar other) -> Tensor
 @map_to(aten.bitwise_and.Scalar)
 def aten_bitwise_and_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
-    return F.custom(
-        name="bitwise_and_scalar",
-        device=input.device,
-        values=[input],
-        parameters=dict(other=other),
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    return custom_mojo_ops.bitwise_and_scalar(input, other)
 
 
 # bitwise_and.Tensor(Tensor self, Tensor other) -> Tensor
@@ -1173,14 +1162,7 @@ def aten_bitwise_and(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     input = F.broadcast_to(input, final_shape)
     other = F.broadcast_to(other, final_shape)
 
-    return F.custom(
-        name="bitwise_and",
-        device=input.device,
-        values=[input, other],
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    return custom_mojo_ops.bitwise_and(input, other)
 
 
 # bitwise_not(Tensor self) -> Tensor
