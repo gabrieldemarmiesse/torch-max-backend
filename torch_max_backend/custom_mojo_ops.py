@@ -1,8 +1,7 @@
 from max.experimental import functional as F
-from max.experimental.tensor import Tensor as MaxEagerTensor
-from max.graph import TensorType, TensorValue
+from max.graph import TensorType
 
-MaxTensor = TensorValue | MaxEagerTensor
+from torch_max_backend.types import MaxTensor
 
 
 def _register_kernels() -> None:

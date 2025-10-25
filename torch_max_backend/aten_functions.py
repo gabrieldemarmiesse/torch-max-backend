@@ -17,7 +17,7 @@ import torch
 from max.dtype import DType
 from max.experimental import functional as F
 from max.experimental.tensor import Tensor as MaxEagerTensor
-from max.graph import Dim, StaticDim, TensorType, TensorValue
+from max.graph import Dim, StaticDim, TensorType
 from max.graph import ops as max_ops
 from max.graph.type import DeviceRef
 from max.torch.torch import max_device_ref
@@ -28,8 +28,7 @@ from torch.ops import aten
 from torch_max_backend import custom_mojo_ops
 from torch_max_backend.flags import verbose_enabled
 from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerators
-
-MaxTensor = TensorValue | MaxEagerTensor
+from torch_max_backend.types import MaxTensor
 
 
 def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
