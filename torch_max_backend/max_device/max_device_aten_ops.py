@@ -97,6 +97,9 @@ def wrap_for_max_device(func: Callable) -> Callable:
 register_aten_op("aten::_adaptive_avg_pool2d")(
     wrap_for_max_device(aten_functions.aten__adaptive_avg_pool2d)
 )
+register_aten_op("aten::_adaptive_avg_pool2d_backward")(
+    wrap_for_max_device(aten_functions.aten__adaptive_avg_pool2d_backward)
+)
 
 
 @register_aten_op("aten::_copy_from")

@@ -14,7 +14,7 @@ from torch_max_backend.testing import (
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_adaptive_avg_pool2d_backward_basic(device: str, dtype: torch.dtype):
+def test_adaptive_avg_pool2d_backward_basic(conf: Conf, dtype: torch.dtype):
     """Test _adaptive_avg_pool2d_backward basic functionality"""
 
     def fn(grad_output, input_tensor):
@@ -24,14 +24,12 @@ def test_adaptive_avg_pool2d_backward_basic(device: str, dtype: torch.dtype):
     batch_size, channels, height, width = 2, 3, 8, 8
     output_height, output_width = 4, 4
 
-    input_tensor = torch.randn(
-        batch_size, channels, height, width, device=device, dtype=dtype
-    )
+    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
     grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, device=device, dtype=dtype
+        batch_size, channels, output_height, output_width, dtype=dtype
     )
 
-    check_functions_are_equivalent(fn, device, [grad_output, input_tensor])
+    check_outputs(fn, conf, [grad_output, input_tensor])
 
 
 @pytest.mark.parametrize(
