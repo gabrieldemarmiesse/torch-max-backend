@@ -1168,28 +1168,13 @@ def aten_bitwise_and(input: MaxTensor, other: MaxTensor) -> MaxTensor:
 # bitwise_not(Tensor self) -> Tensor
 @map_to(aten.bitwise_not)
 def aten_bitwise_not(input: MaxTensor) -> MaxTensor:
-    return F.custom(
-        name="bitwise_not",
-        device=input.device,
-        values=[input],
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    return custom_mojo_ops.bitwise_not(input)
 
 
 # bitwise_or.Scalar(Tensor self, Scalar other) -> Tensor
 @map_to(aten.bitwise_or.Scalar)
 def aten_bitwise_or_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
-    return F.custom(
-        name="bitwise_or_scalar",
-        device=input.device,
-        values=[input],
-        parameters=dict(other=other),
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    return custom_mojo_ops.bitwise_or_scalar(input, other)
 
 
 # bitwise_or.Tensor(Tensor self, Tensor other) -> Tensor
@@ -1201,28 +1186,13 @@ def aten_bitwise_or(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     input = F.broadcast_to(input, final_shape)
     other = F.broadcast_to(other, final_shape)
 
-    return F.custom(
-        name="bitwise_or",
-        device=input.device,
-        values=[input, other],
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    return custom_mojo_ops.bitwise_or(input, other)
 
 
 # bitwise_xor.Scalar(Tensor self, Scalar other) -> Tensor
 @map_to(aten.bitwise_xor.Scalar)
 def aten_bitwise_xor_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
-    return F.custom(
-        name="bitwise_xor_scalar",
-        device=input.device,
-        values=[input],
-        parameters=dict(other=other),
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    return custom_mojo_ops.bitwise_xor_scalar(input, other)
 
 
 # bitwise_xor.Tensor(Tensor self, Tensor other) -> Tensor
@@ -1234,14 +1204,7 @@ def aten_bitwise_xor(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     input = F.broadcast_to(input, final_shape)
     other = F.broadcast_to(other, final_shape)
 
-    return F.custom(
-        name="bitwise_xor",
-        device=input.device,
-        values=[input, other],
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    return custom_mojo_ops.bitwise_xor(input, other)
 
 
 # bmm(Tensor self, Tensor mat2) -> Tensor
@@ -1279,14 +1242,7 @@ def aten_ceil(input: MaxTensor) -> MaxTensor:
     if input.type.dtype.is_integral():
         return input
     else:
-        return F.custom(
-            name="ceil",
-            device=input.device,
-            values=[input],
-            out_types=[
-                TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-            ],
-        )[0]
+        return custom_mojo_ops.ceil(input)
 
 
 # clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor

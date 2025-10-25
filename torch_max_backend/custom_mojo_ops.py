@@ -66,3 +66,101 @@ def adaptive_avg_pool2d_backward(
             )
         ],
     )[0]
+
+
+def bitwise_not(input: MaxTensor) -> MaxTensor:
+    """
+    Custom Mojo kernel for bitwise_not operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="bitwise_not",
+        device=input.device,
+        values=[input],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
+def bitwise_or(input: MaxTensor, other: MaxTensor) -> MaxTensor:
+    """
+    Custom Mojo kernel for bitwise_or operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="bitwise_or",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
+def bitwise_or_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
+    """
+    Custom Mojo kernel for bitwise_or_scalar operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="bitwise_or_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
+def bitwise_xor(input: MaxTensor, other: MaxTensor) -> MaxTensor:
+    """
+    Custom Mojo kernel for bitwise_xor operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="bitwise_xor",
+        device=input.device,
+        values=[input, other],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
+def bitwise_xor_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
+    """
+    Custom Mojo kernel for bitwise_xor_scalar operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="bitwise_xor_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
+def ceil(input: MaxTensor) -> MaxTensor:
+    """
+    Custom Mojo kernel for ceil operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="ceil",
+        device=input.device,
+        values=[input],
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
