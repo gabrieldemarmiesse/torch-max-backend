@@ -375,6 +375,7 @@ register_aten_op("aten::stack")(wrap_for_max_device(aten_functions.aten_stack))
 register_aten_op("aten::sub.Tensor")(wrap_for_max_device(aten_functions.aten_sub))
 register_aten_op("aten::sum.dim_IntList")(wrap_for_max_device(aten_functions.aten_sum))
 register_aten_op("aten::t")(wrap_for_max_device(aten_functions.aten_t))
+register_aten_op("aten::tan")(wrap_for_max_device(aten_functions.aten_tan))
 register_aten_op("aten::tanh")(wrap_for_max_device(aten_functions.aten_tanh))
 
 register_aten_op("aten::transpose.int")(
