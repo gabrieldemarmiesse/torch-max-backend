@@ -25,6 +25,7 @@ from torch._decomp import core_aten_decompositions
 from torch._ops import OpOverload, OpOverloadPacket
 from torch.ops import aten
 
+from torch_max_backend import custom_mojo_ops
 from torch_max_backend.flags import verbose_enabled
 from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerators
 
@@ -258,27 +259,9 @@ def aten__adaptive_avg_pool2d_backward(
         input_tensor_reshaped = input_tensor
         remove_batch = False
 
-    import max.experimental.tensor
-
-    import torch_max_backend.torch_compile_backend.compiler
-
-    # Register our custom kernels in the global graph
-    max.experimental.tensor.GRAPH.graph._import_kernels(
-        torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels
+    grad_input = custom_mojo_ops.adaptive_avg_pool2d_backward(
+        grad_output, input_tensor_reshaped
     )
-
-    grad_input = F.custom(
-        name="adaptive_avg_pool2d_backward",
-        device=input_tensor_reshaped.device,
-        values=[grad_output, input_tensor_reshaped],
-        out_types=[
-            TensorType(
-                dtype=input_tensor_reshaped.dtype,
-                shape=input_tensor_reshaped.shape,
-                device=input_tensor_reshaped.device,
-            )
-        ],
-    )[0]
 
     if remove_batch:
         grad_input = grad_input.reshape(input_shape)
