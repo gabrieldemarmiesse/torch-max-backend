@@ -15,6 +15,23 @@ def _register_kernels() -> None:
     )
 
 
+def bitwise_and_scalar(input: MaxTensor, other: MaxTensor) -> MaxTensor:
+    """
+    Custom Mojo kernel for bitwise_and_scalar operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="bitwise_and_scalar",
+        device=input.device,
+        values=[input],
+        parameters=dict(other=other),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
+
+
 def adaptive_avg_pool2d_backward(
     grad_output: MaxTensor, input_tensor_reshaped: MaxTensor
 ) -> MaxTensor:
