@@ -1323,7 +1323,7 @@ def test_aten_ceil_scalar_tensor(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-TRIGON_FUNCTIONS = [aten.asinh, aten.cosh, aten.sinh, aten.tanh]
+TRIGON_FUNCTIONS = [aten.asinh, aten.cosh, aten.sinh, aten.tan, aten.tanh]
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16])
@@ -1816,6 +1816,58 @@ def test_aten_split_with_sizes_exact_split(device: str):
         return aten.split_with_sizes(x, [2, 2, 2, 2, 2], dim=1)
 
     x = torch.randn(3, 10, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_aten_square_basic(device: str, dtype: torch.dtype):
+    """Test aten.square basic functionality with different dtypes"""
+
+    def fn(x):
+        return aten.square(x)
+
+    x = torch.randn(3, 4, device=device, dtype=dtype)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+@pytest.mark.parametrize("shape", [(5,), (3, 4), (2, 3, 4), (2, 3, 4, 5)])
+def test_aten_square_different_shapes(device: str, shape: tuple):
+    """Test aten.square with different tensor shapes"""
+
+    def fn(x):
+        return aten.square(x)
+
+    x = torch.randn(shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_square_scalar(device: str):
+    """Test aten.square with scalar (0D tensor)"""
+
+    def fn(x):
+        return aten.square(x)
+
+    x = torch.tensor(3.5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_square_negative_values(device: str):
+    """Test aten.square with negative values"""
+
+    def fn(x):
+        return aten.square(x)
+
+    x = torch.tensor([-2.0, -1.5, -1.0, 0.0, 1.0, 1.5, 2.0], device=device)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_aten_square_zero_tensor(device: str):
+    """Test aten.square with tensor of zeros"""
+
+    def fn(x):
+        return aten.square(x)
+
+    x = torch.zeros(3, 4, device=device)
     check_functions_are_equivalent(fn, device, [x])
 
 

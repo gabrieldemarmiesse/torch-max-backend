@@ -2558,6 +2558,12 @@ def aten_sin(x: MaxTensor) -> MaxTensor:
     return F.sin(x)
 
 
+# tan(Tensor self) -> Tensor
+@map_to(aten.tan)
+def aten_tan(x: MaxTensor) -> MaxTensor:
+    return F.sin(x) / F.cos(x)
+
+
 # tanh(Tensor self) -> Tensor
 @map_to(aten.tanh)
 def aten_tanh(x: MaxTensor) -> MaxTensor:
