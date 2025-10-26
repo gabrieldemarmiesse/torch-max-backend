@@ -1837,123 +1837,123 @@ def test_aten_square_zero_tensor(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_single_dim(conf: Conf):
+def test_aten_squeeze_single_dim(device: str):
     """Test aten.squeeze with single dimension"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
-    x = torch.randn(3, 1, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
-def test_aten_squeeze_different_dims(conf: Conf, dim: int):
+def test_aten_squeeze_different_dims(device: str, dim: int):
     """Test aten.squeeze on different dimensions"""
 
     def fn(x):
         return aten.squeeze(x, dim)
 
-    x = torch.randn(1, 3, 1, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_negative_dim(conf: Conf):
+def test_aten_squeeze_negative_dim(device: str):
     """Test aten.squeeze with negative dimension"""
 
     def fn(x):
         return aten.squeeze(x, -2)
 
-    x = torch.randn(3, 1, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_multiple_dims(conf: Conf):
+def test_aten_squeeze_multiple_dims(device: str):
     """Test aten.squeeze with multiple dimensions"""
 
     def fn(x):
         return aten.squeeze(x, [0, 2])
 
-    x = torch.randn(1, 3, 1, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_no_change(conf: Conf):
+def test_aten_squeeze_no_change(device: str):
     """Test aten.squeeze when dimension is not size 1"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
-    x = torch.randn(3, 4, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(3, 4, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
-def test_aten_squeeze_different_dtypes(conf: Conf, dtype: torch.dtype):
+def test_aten_squeeze_different_dtypes(device: str, dtype: torch.dtype):
     """Test aten.squeeze with different data types"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
     if dtype == torch.bool:
-        x = torch.randint(0, 2, (3, 1, 5), dtype=dtype)
+        x = torch.randint(0, 2, (3, 1, 5), dtype=dtype, device=device)
     elif dtype == torch.int32:
-        x = torch.randint(0, 10, (3, 1, 5), dtype=dtype)
+        x = torch.randint(0, 10, (3, 1, 5), dtype=dtype, device=device)
     else:
-        x = torch.randn(3, 1, 5, dtype=dtype)
+        x = torch.randn(3, 1, 5, dtype=dtype, device=device)
 
-    check_outputs(fn, conf, [x])
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_all_ones(conf: Conf):
+def test_aten_squeeze_all_ones(device: str):
     """Test aten.squeeze with tensor of all size-1 dimensions"""
 
     def fn(x):
         return aten.squeeze(x, [0, 1, 2, 3])
 
-    x = torch.randn(1, 1, 1, 1)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(1, 1, 1, 1, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_2d(conf: Conf):
+def test_aten_squeeze_2d(device: str):
     """Test aten.squeeze with 2D tensor"""
 
     def fn(x):
         return aten.squeeze(x, 0)
 
-    x = torch.randn(1, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_5d(conf: Conf):
+def test_aten_squeeze_5d(device: str):
     """Test aten.squeeze with 5D tensor"""
 
     def fn(x):
         return aten.squeeze(x, [1, 3])
 
-    x = torch.randn(2, 1, 3, 1, 4)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(2, 1, 3, 1, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_empty_dims(conf: Conf):
+def test_aten_squeeze_empty_dims(device: str):
     """Test aten.squeeze with empty dimensions list"""
 
     def fn(x):
         return aten.squeeze(x, [])
 
-    x = torch.randn(1, 3, 1, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("shape", [(1,), (1, 1), (1, 1, 1)])
-def test_aten_squeeze_edge_cases(conf: Conf, shape: tuple):
+def test_aten_squeeze_edge_cases(device: str, shape: tuple):
     """Test aten.squeeze with edge case shapes"""
 
     def fn(x):
         return aten.squeeze(x, list(range(len(shape))))
 
-    x = torch.randn(*shape)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_aten_triu_basic(conf: Conf):
