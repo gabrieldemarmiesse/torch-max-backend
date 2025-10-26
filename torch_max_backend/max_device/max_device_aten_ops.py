@@ -72,7 +72,15 @@ def convert_all_lazy_to_torch_max_tensors(x: Any) -> Any:
             for key, value in x.items()
         }
     elif isinstance(
-        x, int | float | str | bool | type(None) | torch.dtype | torch.device
+        x,
+        int
+        | float
+        | str
+        | bool
+        | type(None)
+        | torch.dtype
+        | torch.device
+        | NotImplementedError,
     ):
         return x
     else:
