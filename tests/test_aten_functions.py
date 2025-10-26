@@ -37,7 +37,7 @@ def test_adaptive_avg_pool2d_backward_basic(conf: Conf, dtype: torch.dtype):
     [((8, 8), (4, 4)), ((10, 10), (5, 5)), ((7, 7), (3, 3)), ((16, 16), (8, 8))],
 )
 def test_adaptive_avg_pool2d_backward_different_sizes(
-    device: str, input_size: tuple, output_size: tuple
+    conf: Conf, input_size: tuple, output_size: tuple
 ):
     """Test _adaptive_avg_pool2d_backward with different input and output sizes"""
 
@@ -48,14 +48,10 @@ def test_adaptive_avg_pool2d_backward_different_sizes(
     input_height, input_width = input_size
     output_height, output_width = output_size
 
-    input_tensor = torch.randn(
-        batch_size, channels, input_height, input_width, device=device
-    )
-    grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, device=device
-    )
+    input_tensor = torch.randn(batch_size, channels, input_height, input_width)
+    grad_output = torch.randn(batch_size, channels, output_height, output_width)
 
-    check_functions_are_equivalent(fn, device, [grad_output, input_tensor])
+    check_outputs(fn, conf, [grad_output, input_tensor])
 
 
 def test_adaptive_avg_pool2d_backward_3d_input(device: str):
