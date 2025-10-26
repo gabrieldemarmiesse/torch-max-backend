@@ -2069,17 +2069,17 @@ def test_aten_triu_single_element(conf: Conf):
 
 
 @pytest.mark.parametrize("diagonal", [10, -10])
-def test_aten_triu_dynamic_dimensions_large_diagonal(conf: Conf, diagonal: int):
+def test_aten_triu_dynamic_dimensions_large_diagonal(device: str, diagonal: int):
     """Test aten.triu with dynamic dimensions and large diagonal"""
 
     def fn(x):
         return aten.triu(x, diagonal=diagonal)
 
-    x = torch.randn(5, 7)
+    x = torch.randn(5, 7, device=device)
     # Mark both dimensions as dynamic
     mark_dynamic(x, 0)
     mark_dynamic(x, 1)
-    check_outputs(fn, conf, [x])
+    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_aten_triu_dynamic_batch_dimension(conf: Conf):
