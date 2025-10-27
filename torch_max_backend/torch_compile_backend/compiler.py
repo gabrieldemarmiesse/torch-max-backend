@@ -10,7 +10,8 @@ import torch
 from functorch.compile import make_boxed_func
 from max import engine, mlir
 from max.dtype import DType
-from max.graph import Graph, KernelLibrary
+from max.graph import DeviceRef, Graph, KernelLibrary
+from max.graph import ops as max_ops
 from max.torch.torch import max_device_ref
 from torch._dynamo.backends.common import aot_autograd
 
@@ -159,7 +160,23 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
 
 
 class _GraphFactory:
-    def __init__(self):
+    def __init__(
+        self,
+        replace_inputs: dict[str, torch.Tensor] = {},
+        force_device: DeviceRef | None = None,
+    ):
+        """Creates the MAX graph according to the input fx graph.
+
+        Create a new instance for each new graph to be created.
+        Args:
+            replace_inputs (dict): A mapping from placeholder op to an actual tensor.
+                With this information, we can remove graph inputs and use a constant instead.
+                This is mainly useful to "freeze" the parameters of the model, because pytorch
+                very often assumes that parameters are graph inputs. Max prefers constants. It's
+                also a nicer UX for inference.
+            force_device (DeviceRef | None): If provided, forces all graph inputs and constants
+                to be on this device.
+        """
         self.names_to_input_idx: dict[str, int] = {}
         self.shape_names_to_input_dim: dict[str, tuple[str, int]] = {}
         self.graph_inputs: list[max.graph.value.TensorType] = []
@@ -167,6 +184,8 @@ class _GraphFactory:
         self.tensor_book = TensorsBook()
         # Link the shape expressions (names) to the node names
         self.expression_to_node_name: dict[str, str] = {}
+        self.replace_inputs = replace_inputs
+        self.force_device = force_device
 
     def initialize_graph(self):
         if self.graph is not None:
@@ -185,8 +204,28 @@ class _GraphFactory:
             self.tensor_book[shape_name] = self.tensor_book.tensors[tensor_name].shape[
                 dim_idx
             ]
+        for input_name, tensor in self.replace_inputs.items():
+            self.tensor_book[input_name] = max_ops.constant(
+                tensor,
+                dtype=DType.from_torch(tensor.dtype),
+                device=self.get_max_device(tensor),
+            )
+
+    def get_max_device(self, tensor: torch.Tensor) -> DeviceRef:
+        if self.force_device is not None:
+            return self.force_device
+        return max_device_ref(tensor.device)
 
     def handle_placeholder(self, node: torch.fx.Node):
+        if node.name in self.replace_inputs:
+            # We short-circuit this input and use a constant instead.
+            # We still have to place it in the graph inputs list because
+            # at this point we don't have an active graph yet.
+            # We'll register all the constants when initializing the graph.
+            # TODO: add some validation in case the names in self.replace_inputs are not
+            # in the graph.
+            return
+
         if "example_value" in node.meta:
             example_value = node.meta["example_value"]
         elif "val" in node.meta:
@@ -211,7 +250,7 @@ class _GraphFactory:
                 max.graph.value.TensorType(
                     dtype=DType.from_torch(example_value.dtype),
                     shape=shape,
-                    device=max_device_ref(example_value.device),
+                    device=self.get_max_device(example_value),
                 )
             )
             self.names_to_input_idx[node.name] = len(self.graph_inputs) - 1
@@ -279,6 +318,7 @@ class _GraphFactory:
         output_blueprint: list[int | None] = []
 
         for x in node.args[0]:
+            print("handling output:", x)
             converted = self.tensor_book.convert_to_max(x)
             if converted is None:
                 output_blueprint.append(None)
@@ -286,15 +326,17 @@ class _GraphFactory:
                 # position of the output tensor
                 output_blueprint.append(len(output_tensors))
                 output_tensors.append(converted)
-
+        print("done handling outputs")
         # Store the none indices for runtime handling
         self.graph.output(*output_tensors)
         self.graph.__exit__(None, None, None)
+        print("exited graph context")
         return output_blueprint
 
-    def create_graph(self, gm: torch.fx.GraphModule) -> tuple[Graph, list[int | None]]:
+    def create_graph(self, graph: torch.fx.Graph) -> tuple[Graph, list[int | None]]:
         output_blueprint = None
-        for node_idx, node in enumerate(gm.graph.nodes):
+        for node_idx, node in enumerate(graph.nodes):
+            print("handling node:", node.name)
             if node.op == "placeholder":
                 self.handle_placeholder(node)
                 continue
@@ -314,6 +356,7 @@ class _GraphFactory:
             raise ValueError(
                 "No output node found in the graph, this should never happen."
             )
+        print("returning graph")
         return self.graph, output_blueprint
 
 
@@ -327,7 +370,7 @@ class BaseMaxCompiler:
             gather_stats_on_graph(gm)
             gm.graph.print_tabular()
 
-        graph, self.output_blueprint = _GraphFactory().create_graph(gm)
+        graph, self.output_blueprint = _GraphFactory().create_graph(gm.graph)
         if verbose_enabled():
             print(graph)
         if profiling_enabled():
