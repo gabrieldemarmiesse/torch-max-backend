@@ -1,28 +1,25 @@
-import os
 from io import BytesIO
 
+import numpy as np
 import requests
 import torch
 from PIL import Image
 from torchvision import models, transforms
 
-from torch_max_backend import register_max_devices
 from torch_max_backend.torch_compile_backend.exporter import export_to_max_graph
 
-register_max_devices()
-
-os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
-
 model = models.vgg11(pretrained=True)
-
 model.eval()
 
 dummy_input = torch.randn(1, 3, 224, 224)
-
 max_model = export_to_max_graph(model, (dummy_input,), force_device=None)
 
-# model = torch.compile(model, backend=max_backend, fullgraph=True)
+print(max_model(np.random.randn(1, 3, 224, 224).astype(np.float32)))
+
+
+# usage:
+# max_model(np.random.randn(1,3,224,224))
+
 
 preprocess = transforms.Compose(
     [
