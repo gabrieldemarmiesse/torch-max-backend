@@ -6,11 +6,7 @@ from torch._dynamo import mark_dynamic
 from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
-from torch_max_backend.testing import (
-    Conf,
-    check_functions_are_equivalent,
-    check_outputs,
-)
+from torch_max_backend.testing import Conf, check_outputs
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -133,8 +129,11 @@ def test_adaptive_avg_pool2d_backward_half_precision(conf: Conf, dtype: torch.dt
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_basic(cuda_device: str, dtype: torch.dtype):
+def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype):
     """Test _scaled_dot_product_flash_attention basic functionality"""
+    # Flash attention only works on CUDA
+    if conf.device != "cuda:0":
+        pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
@@ -147,12 +146,15 @@ def test_scaled_dot_product_flash_attention_basic(cuda_device: str, dtype: torch
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
     # TensorFloat-32 tensor cores are used by default, lowering precision
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
+    check_outputs(fn, conf, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_with_causal(cuda_device: str, dtype: str):
+def test_scaled_dot_product_flash_attention_with_causal(conf: Conf, dtype: str):
     """Test _scaled_dot_product_flash_attention with causal masking"""
+    # Flash attention only works on CUDA
+    if conf.device != "cuda:0":
+        pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
@@ -165,12 +167,15 @@ def test_scaled_dot_product_flash_attention_with_causal(cuda_device: str, dtype:
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
     # TensorFloat-32 tensor cores are used by default, lowering precision
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
+    check_outputs(fn, conf, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_with_scale(cuda_device: str, dtype):
+def test_scaled_dot_product_flash_attention_with_scale(conf: Conf, dtype):
     """Test _scaled_dot_product_flash_attention with custom scale"""
+    # Flash attention only works on CUDA
+    if conf.device != "cuda:0":
+        pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
@@ -189,11 +194,11 @@ def test_scaled_dot_product_flash_attention_with_scale(cuda_device: str, dtype):
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
     # TensorFloat-32 tensor cores are used by default, lowering precision
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
+    check_outputs(fn, conf, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dtype):
+def test_native_batch_norm_legit_no_training_basic(conf: Conf, dtype: torch.dtype):
     """Test basic batch normalization inference with different dtypes"""
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
@@ -207,22 +212,18 @@ def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dty
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
-    input_tensor = torch.randn(
-        batch_size, channels, height, width, dtype=dtype, device=device
-    )
-    weight = torch.randn(channels, dtype=dtype, device=device)
-    bias = torch.randn(channels, dtype=dtype, device=device)
-    running_mean = torch.randn(channels, dtype=dtype, device=device)
-    running_var = torch.abs(torch.randn(channels, dtype=dtype, device=device)) + 1e-5
+    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
+    weight = torch.randn(channels, dtype=dtype)
+    bias = torch.randn(channels, dtype=dtype)
+    running_mean = torch.randn(channels, dtype=dtype)
+    running_var = torch.abs(torch.randn(channels, dtype=dtype)) + 1e-5
 
-    check_functions_are_equivalent(
-        fn, device, [input_tensor, weight, bias, running_mean, running_var]
-    )
+    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
 
 
 @pytest.mark.parametrize("channels", [1, 4, 16])
 def test_native_batch_norm_legit_no_training_different_channels(
-    device: str, channels: int
+    conf: Conf, channels: int
 ):
     """Test batch norm with different numbers of channels"""
 
@@ -237,19 +238,17 @@ def test_native_batch_norm_legit_no_training_different_channels(
 
     # Create test tensors with varying channel dimensions
     batch_size, height, width = 2, 8, 8
-    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
-    weight = torch.randn(channels, device=device)
-    bias = torch.randn(channels, device=device)
-    running_mean = torch.randn(channels, device=device)
-    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
+    input_tensor = torch.randn(batch_size, channels, height, width)
+    weight = torch.randn(channels)
+    bias = torch.randn(channels)
+    running_mean = torch.randn(channels)
+    running_var = torch.abs(torch.randn(channels)) + 1e-5
 
     # Test that compilation works and outputs match
-    check_functions_are_equivalent(
-        fn, device, [input_tensor, weight, bias, running_mean, running_var]
-    )
+    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
 
 
-def test_native_batch_norm_legit_no_training_none_weight_bias(device: str):
+def test_native_batch_norm_legit_no_training_none_weight_bias(conf: Conf):
     """Test batch norm with None weight and bias"""
 
     def fn(input_tensor, running_mean, running_var):
@@ -263,18 +262,16 @@ def test_native_batch_norm_legit_no_training_none_weight_bias(device: str):
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
-    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
-    running_mean = torch.randn(channels, device=device)
-    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
+    input_tensor = torch.randn(batch_size, channels, height, width)
+    running_mean = torch.randn(channels)
+    running_var = torch.abs(torch.randn(channels)) + 1e-5
 
     # Test that compilation works and outputs match
-    check_functions_are_equivalent(
-        fn, device, [input_tensor, running_mean, running_var]
-    )
+    check_outputs(fn, conf, [input_tensor, running_mean, running_var])
 
 
 @pytest.mark.parametrize("eps", [1e-5, 1e-3])
-def test_native_batch_norm_legit_no_training_different_eps(device: str, eps: float):
+def test_native_batch_norm_legit_no_training_different_eps(conf: Conf, eps: float):
     """Test batch norm with different epsilon values"""
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
@@ -288,19 +285,17 @@ def test_native_batch_norm_legit_no_training_different_eps(device: str, eps: flo
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
-    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
-    weight = torch.randn(channels, device=device)
-    bias = torch.randn(channels, device=device)
-    running_mean = torch.randn(channels, device=device)
-    running_var = torch.abs(torch.randn(channels, device=device)) + eps * 10
+    input_tensor = torch.randn(batch_size, channels, height, width)
+    weight = torch.randn(channels)
+    bias = torch.randn(channels)
+    running_mean = torch.randn(channels)
+    running_var = torch.abs(torch.randn(channels)) + eps * 10
 
     # Test that compilation works and outputs match
-    check_functions_are_equivalent(
-        fn, device, [input_tensor, weight, bias, running_mean, running_var]
-    )
+    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
 
 
-def test_native_batch_norm_legit_no_training_2d_input(device: str):
+def test_native_batch_norm_legit_no_training_2d_input(conf: Conf):
     """Test batch norm with 2D input (N, C)"""
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
@@ -314,16 +309,14 @@ def test_native_batch_norm_legit_no_training_2d_input(device: str):
 
     # Create 2D test tensors (batch_size, channels)
     batch_size, channels = 10, 5
-    input_tensor = torch.randn(batch_size, channels, device=device)
-    weight = torch.randn(channels, device=device)
-    bias = torch.randn(channels, device=device)
-    running_mean = torch.randn(channels, device=device)
-    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
+    input_tensor = torch.randn(batch_size, channels)
+    weight = torch.randn(channels)
+    bias = torch.randn(channels)
+    running_mean = torch.randn(channels)
+    running_var = torch.abs(torch.randn(channels)) + 1e-5
 
     # Test that compilation works and outputs match
-    check_functions_are_equivalent(
-        fn, device, [input_tensor, weight, bias, running_mean, running_var]
-    )
+    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -342,9 +335,9 @@ def test_aten_acos_basic(conf: Conf, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_aten_acos_special_values(device: str, dtype: torch.dtype):
+def test_aten_acos_special_values(conf: Conf, dtype: torch.dtype):
     """Test aten.acos with special mathematical values"""
-    if device == "cuda" and dtype == torch.float64:
+    if conf.device == "cuda:0" and dtype == torch.float64:
         pytest.xfail("Bug: could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d'")
 
     def fn(x):
@@ -355,7 +348,7 @@ def test_aten_acos_special_values(device: str, dtype: torch.dtype):
     # acos(0.0) = π/2 ≈ 1.5708
     # acos(-1.0) = π ≈ 3.1416
     x = torch.tensor([1.0, 0.0, -1.0], dtype=dtype)
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_aten_acos_2d_tensor(conf: Conf):
@@ -675,7 +668,7 @@ def test_aten_bitwise_xor_broadcasting(conf: Conf):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_add_scalar(device: str, dtype: torch.dtype):
+def test_foreach_add_scalar(conf: Conf, dtype: torch.dtype):
     """Test _foreach_add.Scalar - adds scalar to each tensor in list"""
 
     def fn(x, y, z):
@@ -686,11 +679,11 @@ def test_foreach_add_scalar(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_add_list(device: str, dtype: torch.dtype):
+def test_foreach_add_list(conf: Conf, dtype: torch.dtype):
     """Test _foreach_add.List - adds corresponding tensors with alpha scaling"""
 
     def fn(x1, y1, z1, x2, y2, z2):
@@ -705,11 +698,11 @@ def test_foreach_add_list(device: str, dtype: torch.dtype):
     y2 = torch.randn(2, 5, dtype=dtype)
     z2 = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2])
 
 
 @pytest.mark.parametrize("alpha", [1.0, 2.0, -0.5])
-def test_foreach_add_list_alpha(device: str, alpha: float):
+def test_foreach_add_list_alpha(conf: Conf, alpha: float):
     """Test _foreach_add.List with different alpha values"""
 
     def fn(x1, y1, x2, y2):
@@ -722,11 +715,11 @@ def test_foreach_add_list_alpha(device: str, alpha: float):
     x2 = torch.randn(3, 4)
     y2 = torch.randn(2, 5)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, x2, y2])
+    check_outputs(fn, conf, [x1, y1, x2, y2])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_add_scalarlist(device: str, dtype: torch.dtype):
+def test_foreach_add_scalarlist(conf: Conf, dtype: torch.dtype):
     """Test _foreach_add.ScalarList - adds corresponding scalar to each tensor"""
 
     def fn(x, y, z):
@@ -738,11 +731,11 @@ def test_foreach_add_scalarlist(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_add_tensor(device: str, dtype: torch.dtype):
+def test_foreach_add_tensor(conf: Conf, dtype: torch.dtype):
     """Test _foreach_add.Tensor - broadcasts single 0-d tensor to all tensors in list"""
 
     def fn(x, y, z, other):
@@ -754,11 +747,11 @@ def test_foreach_add_tensor(device: str, dtype: torch.dtype):
     z = torch.randn(4, dtype=dtype)
     other = torch.tensor(2.5, dtype=dtype)  # 0-d tensor
 
-    check_functions_are_equivalent(fn, device, [x, y, z, other])
+    check_outputs(fn, conf, [x, y, z, other])
 
 
 @pytest.mark.parametrize("alpha", [1.0, 2.0, -0.5])
-def test_foreach_add_tensor_alpha(device: str, alpha: float):
+def test_foreach_add_tensor_alpha(conf: Conf, alpha: float):
     """Test _foreach_add.Tensor with different alpha values"""
 
     def fn(x, y, other):
@@ -769,11 +762,11 @@ def test_foreach_add_tensor_alpha(device: str, alpha: float):
     y = torch.randn(2, 5)
     other = torch.tensor(1.5)  # 0-d tensor
 
-    check_functions_are_equivalent(fn, device, [x, y, other])
+    check_outputs(fn, conf, [x, y, other])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_sub_scalar(device: str, dtype: torch.dtype):
+def test_foreach_sub_scalar(conf: Conf, dtype: torch.dtype):
     """Test _foreach_sub.Scalar - subtracts scalar from each tensor in list"""
 
     def fn(x, y, z):
@@ -784,11 +777,11 @@ def test_foreach_sub_scalar(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_sub_list(device: str, dtype: torch.dtype):
+def test_foreach_sub_list(conf: Conf, dtype: torch.dtype):
     """Test _foreach_sub.List - subtracts corresponding tensors with alpha scaling"""
 
     def fn(x1, y1, z1, x2, y2, z2):
@@ -803,11 +796,11 @@ def test_foreach_sub_list(device: str, dtype: torch.dtype):
     y2 = torch.randn(2, 5, dtype=dtype)
     z2 = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2])
 
 
 @pytest.mark.parametrize("alpha", [1.0, 2.0, -0.5])
-def test_foreach_sub_list_alpha(device: str, alpha: float):
+def test_foreach_sub_list_alpha(conf: Conf, alpha: float):
     """Test _foreach_sub.List with different alpha values"""
 
     def fn(x1, y1, x2, y2):
@@ -820,11 +813,11 @@ def test_foreach_sub_list_alpha(device: str, alpha: float):
     x2 = torch.randn(3, 4)
     y2 = torch.randn(2, 5)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, x2, y2])
+    check_outputs(fn, conf, [x1, y1, x2, y2])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_sub_scalarlist(device: str, dtype: torch.dtype):
+def test_foreach_sub_scalarlist(conf: Conf, dtype: torch.dtype):
     """Test _foreach_sub.ScalarList - subtracts corresponding scalar from each tensor"""
 
     def fn(x, y, z):
@@ -836,11 +829,11 @@ def test_foreach_sub_scalarlist(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_mul_scalar(device: str, dtype: torch.dtype):
+def test_foreach_mul_scalar(conf: Conf, dtype: torch.dtype):
     """Test _foreach_mul.Scalar - multiplies each tensor in list by scalar"""
 
     def fn(x, y, z):
@@ -851,11 +844,11 @@ def test_foreach_mul_scalar(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_mul_list(device: str, dtype: torch.dtype):
+def test_foreach_mul_list(conf: Conf, dtype: torch.dtype):
     """Test _foreach_mul.List - multiplies corresponding tensors"""
 
     def fn(x1, y1, z1, x2, y2, z2):
@@ -870,11 +863,11 @@ def test_foreach_mul_list(device: str, dtype: torch.dtype):
     y2 = torch.randn(2, 5, dtype=dtype)
     z2 = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_mul_scalarlist(device: str, dtype: torch.dtype):
+def test_foreach_mul_scalarlist(conf: Conf, dtype: torch.dtype):
     """Test _foreach_mul.ScalarList - multiplies each tensor by corresponding scalar"""
 
     def fn(x, y, z):
@@ -886,11 +879,11 @@ def test_foreach_mul_scalarlist(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_mul_tensor(device: str, dtype: torch.dtype):
+def test_foreach_mul_tensor(conf: Conf, dtype: torch.dtype):
     """Test _foreach_mul.Tensor - broadcasts single 0-d tensor to all tensors in list"""
 
     def fn(x, y, z, other):
@@ -902,11 +895,11 @@ def test_foreach_mul_tensor(device: str, dtype: torch.dtype):
     z = torch.randn(4, dtype=dtype)
     other = torch.tensor(2.5, dtype=dtype)  # 0-d tensor
 
-    check_functions_are_equivalent(fn, device, [x, y, z, other])
+    check_outputs(fn, conf, [x, y, z, other])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_pow_scalar(device: str, dtype: torch.dtype):
+def test_foreach_pow_scalar(conf: Conf, dtype: torch.dtype):
     """Test _foreach_pow.Scalar - raises each tensor in list to scalar power"""
 
     def fn(x, y, z):
@@ -917,11 +910,11 @@ def test_foreach_pow_scalar(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype).abs() + 0.1
     z = torch.randn(4, dtype=dtype).abs() + 0.1
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_pow_list(device: str, dtype: torch.dtype):
+def test_foreach_pow_list(conf: Conf, dtype: torch.dtype):
     """Test _foreach_pow.List - raises corresponding tensors to powers"""
 
     def fn(x1, y1, z1, x2, y2, z2):
@@ -936,11 +929,11 @@ def test_foreach_pow_list(device: str, dtype: torch.dtype):
     y2 = torch.randn(2, 5, dtype=dtype)
     z2 = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_pow_scalarlist(device: str, dtype: torch.dtype):
+def test_foreach_pow_scalarlist(conf: Conf, dtype: torch.dtype):
     """Test _foreach_pow.ScalarList - raises each tensor to corresponding scalar power"""
 
     def fn(x, y, z):
@@ -952,11 +945,11 @@ def test_foreach_pow_scalarlist(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype).abs() + 0.1
     z = torch.randn(4, dtype=dtype).abs() + 0.1
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_pow_scalarandtensor(device: str, dtype: torch.dtype):
+def test_foreach_pow_scalarandtensor(conf: Conf, dtype: torch.dtype):
     """Test _foreach_pow.ScalarAndTensor - raises scalar to tensor powers"""
 
     def fn(x, y, z):
@@ -967,11 +960,11 @@ def test_foreach_pow_scalarandtensor(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_div_scalar(device: str, dtype: torch.dtype):
+def test_foreach_div_scalar(conf: Conf, dtype: torch.dtype):
     """Test _foreach_div.Scalar - divides each tensor in list by scalar"""
 
     def fn(x, y, z):
@@ -982,11 +975,11 @@ def test_foreach_div_scalar(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_div_list(device: str, dtype: torch.dtype):
+def test_foreach_div_list(conf: Conf, dtype: torch.dtype):
     """Test _foreach_div.List - divides corresponding tensors"""
 
     def fn(x1, y1, z1, x2, y2, z2):
@@ -1001,11 +994,11 @@ def test_foreach_div_list(device: str, dtype: torch.dtype):
     y2 = torch.randn(2, 5, dtype=dtype) + 0.1
     z2 = torch.randn(4, dtype=dtype) + 0.1
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_div_scalarlist(device: str, dtype: torch.dtype):
+def test_foreach_div_scalarlist(conf: Conf, dtype: torch.dtype):
     """Test _foreach_div.ScalarList - divides each tensor by corresponding scalar"""
 
     def fn(x, y, z):
@@ -1017,11 +1010,11 @@ def test_foreach_div_scalarlist(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_div_tensor(device: str, dtype: torch.dtype):
+def test_foreach_div_tensor(conf: Conf, dtype: torch.dtype):
     """Test _foreach_div.Tensor - broadcasts single 0-d tensor to all tensors in list"""
 
     def fn(x, y, z, other):
@@ -1033,14 +1026,14 @@ def test_foreach_div_tensor(device: str, dtype: torch.dtype):
     z = torch.randn(4, dtype=dtype)
     other = torch.tensor(2.5, dtype=dtype)  # 0-d tensor
 
-    check_functions_are_equivalent(fn, device, [x, y, z, other])
+    check_outputs(fn, conf, [x, y, z, other])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_sqrt(device: str, dtype: torch.dtype):
+def test_foreach_sqrt(conf: Conf, dtype: torch.dtype):
     """Test _foreach_sqrt - computes square root of each tensor in list"""
     # xfail for float64 on CUDA due to current MAX limitation with sqrt intrinsic
-    if device == "cuda" and dtype == torch.float64:
+    if conf.device == "cuda:0" and dtype == torch.float64:
         pytest.xfail(
             "float64 sqrt on CUDA currently fails in MAX (llvm.nvvm.sqrt.approx.d intrinsic issue)"
         )
@@ -1053,11 +1046,11 @@ def test_foreach_sqrt(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype).abs() + 0.1
     z = torch.randn(4, dtype=dtype).abs() + 0.1
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_neg(device: str, dtype: torch.dtype):
+def test_foreach_neg(conf: Conf, dtype: torch.dtype):
     """Test _foreach_neg - computes negation of each tensor in list"""
 
     def fn(x, y, z):
@@ -1068,11 +1061,11 @@ def test_foreach_neg(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_reciprocal(device: str, dtype: torch.dtype):
+def test_foreach_reciprocal(conf: Conf, dtype: torch.dtype):
     """Test _foreach_reciprocal - computes reciprocal (1/x) of each tensor in list"""
 
     def fn(x, y, z):
@@ -1084,11 +1077,11 @@ def test_foreach_reciprocal(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype) + 0.5
     z = torch.randn(4, dtype=dtype) + 0.5
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_addcmul_scalar(device: str, dtype: torch.dtype):
+def test_foreach_addcmul_scalar(conf: Conf, dtype: torch.dtype):
     """Test _foreach_addcmul.Scalar - adds element-wise product scaled by scalar"""
 
     def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
@@ -1109,11 +1102,11 @@ def test_foreach_addcmul_scalar(device: str, dtype: torch.dtype):
     y3 = torch.randn(2, 5, dtype=dtype)
     z3 = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_addcmul_scalarlist(device: str, dtype: torch.dtype):
+def test_foreach_addcmul_scalarlist(conf: Conf, dtype: torch.dtype):
     """Test _foreach_addcmul.ScalarList - adds element-wise products scaled by corresponding scalars"""
 
     def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
@@ -1135,7 +1128,7 @@ def test_foreach_addcmul_scalarlist(device: str, dtype: torch.dtype):
     y3 = torch.randn(2, 5, dtype=dtype)
     z3 = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
 
 
 # NOTE: _foreach_addcmul.Tensor is NOT tested
@@ -1145,7 +1138,7 @@ def test_foreach_addcmul_scalarlist(device: str, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_addcdiv_scalar(device: str, dtype: torch.dtype):
+def test_foreach_addcdiv_scalar(conf: Conf, dtype: torch.dtype):
     """Test _foreach_addcdiv.Scalar - adds element-wise quotient scaled by scalar"""
 
     def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
@@ -1166,11 +1159,11 @@ def test_foreach_addcdiv_scalar(device: str, dtype: torch.dtype):
     y3 = torch.randn(2, 5, dtype=dtype) + 0.5
     z3 = torch.randn(4, dtype=dtype) + 0.5
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_addcdiv_scalarlist(device: str, dtype: torch.dtype):
+def test_foreach_addcdiv_scalarlist(conf: Conf, dtype: torch.dtype):
     """Test _foreach_addcdiv.ScalarList - adds element-wise quotient scaled by scalar list"""
 
     def fn(x1, y1, z1, x2, y2, z2, x3, y3, z3):
@@ -1192,7 +1185,7 @@ def test_foreach_addcdiv_scalarlist(device: str, dtype: torch.dtype):
     y3 = torch.randn(2, 5, dtype=dtype) + 0.5
     z3 = torch.randn(4, dtype=dtype) + 0.5
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2, x3, y3, z3])
 
 
 # NOTE: _foreach_addcdiv.Tensor is NOT tested
@@ -1425,17 +1418,17 @@ def test_aten_select_scatter_negative_dim(conf: Conf):
     check_outputs(fn, conf, [self, src])
 
 
-def test_aten_select_scatter_negative_index(device: str):
+def test_aten_select_scatter_negative_index(conf: Conf):
     """Test aten.select_scatter with negative index"""
 
     def fn(self, src):
         return aten.select_scatter(self, src, dim=0, index=-1)
 
     # Negative index (index=-1 is last index)
-    self = torch.zeros(3, 4, dtype=torch.float32, device=device)
-    src = torch.ones(4, dtype=torch.float32, device=device) * 3
+    self = torch.zeros(3, 4, dtype=torch.float32)
+    src = torch.ones(4, dtype=torch.float32) * 3
 
-    check_functions_are_equivalent(fn, device, [self, src])
+    check_outputs(fn, conf, [self, src])
 
 
 def test_aten_select_scatter_scalar_src(conf: Conf):
@@ -1453,72 +1446,72 @@ def test_aten_select_scatter_scalar_src(conf: Conf):
 
 @pytest.mark.parametrize("repeats", [1, 2, 3, 5])
 @pytest.mark.parametrize("dim", [0, 1, -1])
-def test_aten_repeat_interleave_basic(device: str, repeats: int, dim: int):
+def test_aten_repeat_interleave_basic(conf: Conf, repeats: int, dim: int):
     """Test aten.repeat_interleave with basic parameters"""
 
     def fn(x):
         return aten.repeat_interleave(x, repeats, dim)
 
-    x = torch.randn(3, 4, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
-def test_aten_repeat_interleave_different_dtypes(device: str, dtype: torch.dtype):
+def test_aten_repeat_interleave_different_dtypes(conf: Conf, dtype: torch.dtype):
     """Test aten.repeat_interleave with different data types"""
 
     def fn(x):
         return aten.repeat_interleave(x, 2, 0)
 
     if dtype == torch.bool:
-        x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
+        x = torch.randint(0, 2, (3, 4), dtype=dtype)
     elif dtype == torch.int32:
-        x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
+        x = torch.randint(0, 10, (3, 4), dtype=dtype)
     else:
-        x = torch.randn(3, 4, dtype=dtype, device=device)
+        x = torch.randn(3, 4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_repeat_interleave_1d(device: str):
+def test_aten_repeat_interleave_1d(conf: Conf):
     """Test aten.repeat_interleave with 1D tensor"""
 
     def fn(x):
         return aten.repeat_interleave(x, 3, 0)
 
-    x = torch.randn(5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(5)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_repeat_interleave_3d(device: str):
+def test_aten_repeat_interleave_3d(conf: Conf):
     """Test aten.repeat_interleave with 3D tensor"""
 
     def fn(x):
         return aten.repeat_interleave(x, 2, 1)
 
-    x = torch.randn(2, 3, 4, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(2, 3, 4)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("shape", [(1, 5), (5, 1), (1, 1)])
-def test_aten_repeat_interleave_edge_cases(device: str, shape: tuple):
+def test_aten_repeat_interleave_edge_cases(conf: Conf, shape: tuple):
     """Test aten.repeat_interleave with edge case shapes"""
 
     def fn(x):
         return aten.repeat_interleave(x, 2, 0)
 
-    x = torch.randn(*shape, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(*shape)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_repeat_interleave_large_repeats(device: str):
+def test_aten_repeat_interleave_large_repeats(conf: Conf):
     """Test aten.repeat_interleave with large repeat count"""
 
     def fn(x):
         return aten.repeat_interleave(x, 10, 0)
 
-    x = torch.randn(2, 3, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(2, 3)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -1837,123 +1830,123 @@ def test_aten_square_zero_tensor(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_single_dim(device: str):
+def test_aten_squeeze_single_dim(conf: Conf):
     """Test aten.squeeze with single dimension"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
-    x = torch.randn(3, 1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 1, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
-def test_aten_squeeze_different_dims(device: str, dim: int):
+def test_aten_squeeze_different_dims(conf: Conf, dim: int):
     """Test aten.squeeze on different dimensions"""
 
     def fn(x):
         return aten.squeeze(x, dim)
 
-    x = torch.randn(1, 3, 1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(1, 3, 1, 5)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_negative_dim(device: str):
+def test_aten_squeeze_negative_dim(conf: Conf):
     """Test aten.squeeze with negative dimension"""
 
     def fn(x):
         return aten.squeeze(x, -2)
 
-    x = torch.randn(3, 1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 1, 5)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_multiple_dims(device: str):
+def test_aten_squeeze_multiple_dims(conf: Conf):
     """Test aten.squeeze with multiple dimensions"""
 
     def fn(x):
         return aten.squeeze(x, [0, 2])
 
-    x = torch.randn(1, 3, 1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(1, 3, 1, 5)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_no_change(device: str):
+def test_aten_squeeze_no_change(conf: Conf):
     """Test aten.squeeze when dimension is not size 1"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
-def test_aten_squeeze_different_dtypes(device: str, dtype: torch.dtype):
+def test_aten_squeeze_different_dtypes(conf: Conf, dtype: torch.dtype):
     """Test aten.squeeze with different data types"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
     if dtype == torch.bool:
-        x = torch.randint(0, 2, (3, 1, 5), dtype=dtype, device=device)
+        x = torch.randint(0, 2, (3, 1, 5), dtype=dtype)
     elif dtype == torch.int32:
-        x = torch.randint(0, 10, (3, 1, 5), dtype=dtype, device=device)
+        x = torch.randint(0, 10, (3, 1, 5), dtype=dtype)
     else:
-        x = torch.randn(3, 1, 5, dtype=dtype, device=device)
+        x = torch.randn(3, 1, 5, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_all_ones(device: str):
+def test_aten_squeeze_all_ones(conf: Conf):
     """Test aten.squeeze with tensor of all size-1 dimensions"""
 
     def fn(x):
         return aten.squeeze(x, [0, 1, 2, 3])
 
-    x = torch.randn(1, 1, 1, 1, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(1, 1, 1, 1)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_2d(device: str):
+def test_aten_squeeze_2d(conf: Conf):
     """Test aten.squeeze with 2D tensor"""
 
     def fn(x):
         return aten.squeeze(x, 0)
 
-    x = torch.randn(1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(1, 5)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_5d(device: str):
+def test_aten_squeeze_5d(conf: Conf):
     """Test aten.squeeze with 5D tensor"""
 
     def fn(x):
         return aten.squeeze(x, [1, 3])
 
-    x = torch.randn(2, 1, 3, 1, 4, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(2, 1, 3, 1, 4)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_empty_dims(device: str):
+def test_aten_squeeze_empty_dims(conf: Conf):
     """Test aten.squeeze with empty dimensions list"""
 
     def fn(x):
         return aten.squeeze(x, [])
 
-    x = torch.randn(1, 3, 1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(1, 3, 1, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("shape", [(1,), (1, 1), (1, 1, 1)])
-def test_aten_squeeze_edge_cases(device: str, shape: tuple):
+def test_aten_squeeze_edge_cases(conf: Conf, shape: tuple):
     """Test aten.squeeze with edge case shapes"""
 
     def fn(x):
         return aten.squeeze(x, list(range(len(shape))))
 
-    x = torch.randn(*shape, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(*shape)
+    check_outputs(fn, conf, [x])
 
 
 def test_aten_triu_basic(conf: Conf):
@@ -2069,17 +2062,17 @@ def test_aten_triu_single_element(conf: Conf):
 
 
 @pytest.mark.parametrize("diagonal", [10, -10])
-def test_aten_triu_dynamic_dimensions_large_diagonal(device: str, diagonal: int):
+def test_aten_triu_dynamic_dimensions_large_diagonal(conf: Conf, diagonal: int):
     """Test aten.triu with dynamic dimensions and large diagonal"""
 
     def fn(x):
         return aten.triu(x, diagonal=diagonal)
 
-    x = torch.randn(5, 7, device=device)
+    x = torch.randn(5, 7)
     # Mark both dimensions as dynamic
     mark_dynamic(x, 0)
     mark_dynamic(x, 1)
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_aten_triu_dynamic_batch_dimension(conf: Conf):
@@ -2268,41 +2261,41 @@ def test_aten_amax_multiple_dims(conf: Conf, dims: list[int], keepdim: bool):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_max_no_dim(device: str):
+def test_aten_max_no_dim(conf: Conf):
     """Test aten_max without dimension (returns single value)"""
 
     def fn(x):
         return aten.max(x)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_aten_max_with_dim(device: str, dim: int, keepdim: bool):
+def test_aten_max_with_dim(conf: Conf, dim: int, keepdim: bool):
     """Test aten_max with dimension (returns values and indices tuple)"""
 
     def fn(x):
         return aten.max(x, dim=dim, keepdim=keepdim)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
-def test_aten_max_different_dtypes(device: str, dtype: torch.dtype):
+def test_aten_max_different_dtypes(conf: Conf, dtype: torch.dtype):
     """Test aten_max with different data types"""
 
     def fn(x):
         return aten.max(x, dim=1, keepdim=False)
 
     if dtype.is_floating_point:
-        x = torch.randn(3, 4, dtype=dtype, device=device)
+        x = torch.randn(3, 4, dtype=dtype)
     else:
-        x = torch.randint(-10, 10, (3, 4), dtype=dtype, device=device)
+        x = torch.randint(-10, 10, (3, 4), dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -2348,41 +2341,41 @@ def test_aten_amin_multiple_dims(conf: Conf, dims: list[int], keepdim: bool):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_min_no_dim(device: str):
+def test_aten_min_no_dim(conf: Conf):
     """Test aten_min without dimension (returns single value)"""
 
     def fn(x):
         return aten.min(x)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_aten_min_with_dim(device: str, dim: int, keepdim: bool):
+def test_aten_min_with_dim(conf: Conf, dim: int, keepdim: bool):
     """Test aten_min with dimension (returns values and indices tuple)"""
 
     def fn(x):
         return aten.min(x, dim=dim, keepdim=keepdim)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
-def test_aten_min_different_dtypes(device: str, dtype: torch.dtype):
+def test_aten_min_different_dtypes(conf: Conf, dtype: torch.dtype):
     """Test aten_min with different data types"""
 
     def fn(x):
         return aten.min(x, dim=1, keepdim=False)
 
     if dtype.is_floating_point:
-        x = torch.randn(3, 4, dtype=dtype, device=device)
+        x = torch.randn(3, 4, dtype=dtype)
     else:
-        x = torch.randint(-10, 10, (3, 4), dtype=dtype, device=device)
+        x = torch.randint(-10, 10, (3, 4), dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
