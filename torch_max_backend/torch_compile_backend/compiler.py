@@ -15,10 +15,7 @@ from max.graph import ops as max_ops
 from max.torch.torch import max_device_ref
 from torch._dynamo.backends.common import aot_autograd
 
-from torch_max_backend.aten_functions import (
-    DECOMPOSITION_TABLE,
-    torch_device_to_max_device,
-)
+from torch_max_backend.aten_functions import DECOMPOSITION_TABLE
 from torch_max_backend.flags import profiling_enabled, verbose_enabled
 from torch_max_backend.torch_compile_backend import debug
 from torch_max_backend.torch_compile_backend.utils import (
@@ -381,6 +378,7 @@ class BaseMaxCompiler:
                 microseconds=(compiling_done_time - graph_defined_time) / 1000
             )
             print(f"Compiling the Max graph in {compiling}")
+        self.views_cache = {}
 
     def __call__(self, *args) -> list[torch.Tensor | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
@@ -388,7 +386,7 @@ class BaseMaxCompiler:
             start_inference_time = time.time_ns()
         input_tensors = keep_only_tensors(args, detach=True)
         # convert to max tensors
-        input_tensors = [fast_from_dlpack(x) for x in input_tensors]
+        input_tensors = [self.fast_from_dlpack(x) for x in input_tensors]
         outputs = self.model.execute(*input_tensors)
         tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
@@ -409,6 +407,24 @@ class BaseMaxCompiler:
             print(f"Running the Max graph in {inference_duration}")
         return result
 
+    def fast_from_dlpack(self, t: torch.Tensor) -> max.driver.Tensor:
+        t_ptr = t.data_ptr()
+        try:
+            # if the pointer is the same and the pointer has
+            # not changed version (meaning no mutation happened)
+            # then we can safely reuse the view we had.
+            # In case of mutation, we need a new view to force stream syncs
+            # since we don't know if the operation that mutated the tensor
+            # has completed yet.
+            return self.views_cache[(t_ptr, t._version)]
+        except KeyError:
+            view = max.driver.Tensor.from_dlpack(t)
+            # If it's not a view, we don't cache it, otherwise we'll have the memory
+            # issues because we keep references alive
+            if t_ptr == view._data_ptr():
+                self.views_cache[(t_ptr, t._version)] = view
+            return view
+
 
 class max_backend:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list):
@@ -424,26 +440,3 @@ class max_backend:
         if isinstance(result, tuple):
             return list(result)
         return result
-
-
-# Taken from torch.py in max.
-# Torch `__dlpack__(stream=...)` has substantial overhead.
-# - Manually retrieving and syncing the stream drops dlpack marshalling
-#   from ~60us per tensor to ~15us per tensor.
-# - Further optimizations are possible. Moving more of this behavior
-#   into a single C++ ffi call can drop overhead to ~2us.
-# - Generally users shouldn't be putting this marshalling into their
-#   inner loop. Gains are much more substantial for larger graphs
-#   which can take advantage of MAX's automatic kernel fusion.
-def fast_from_dlpack(t: torch.Tensor) -> max.driver.Tensor:
-    if t.device.type == "cuda":
-        stream = torch.cuda.current_stream(t.device).cuda_stream
-        device = torch_device_to_max_device(t.device)
-        data = t.__dlpack__()
-        try:
-            return max.driver.Tensor._from_dlpack(data, device, stream)
-        except Exception:
-            # This approach fails when passing the tensor across threads.
-            # Fall back to letting torch slowly sync streams.
-            return max.driver.Tensor.from_dlpack(t)
-    return max.driver.Tensor.from_dlpack(t)
