@@ -1,8 +1,11 @@
 from io import BytesIO
 
+import max.driver
 import numpy as np
 import requests
 import torch
+from max.driver import Accelerator
+from max.graph import DeviceRef
 from PIL import Image
 from torchvision import models, transforms
 
@@ -12,9 +15,12 @@ model = models.vgg11(pretrained=True)
 model.eval()
 
 dummy_input = torch.randn(1, 3, 224, 224)
-max_model = export_to_max_graph(model, (dummy_input,), force_device=None)
+max_model = export_to_max_graph(model, (dummy_input,), force_device=DeviceRef.GPU(0))
 
-print(max_model(np.random.randn(1, 3, 224, 224).astype(np.float32)))
+dummy_input_max_gpu = max.driver.Tensor.from_numpy(
+    np.random.randn(1, 3, 224, 224).astype(np.float32)
+).to(Accelerator(0))
+print(max_model(dummy_input_max_gpu))
 
 
 # usage:
@@ -56,7 +62,7 @@ def predict_image(image_path_or_url, top_k=5):
 
     input_tensor = preprocess(image)
     input_batch = input_tensor.unsqueeze(0)  # Add batch dimension
-
+    input_batch = max.driver.Tensor.from_dlpack(input_batch).to(Accelerator(0))
     output = max_model(input_batch)
 
     output = torch.tensor(output[0].to_numpy())

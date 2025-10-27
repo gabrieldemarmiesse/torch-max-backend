@@ -1,5 +1,6 @@
 """We use torch.export to generate a MAX graph"""
 
+import max.engine
 import torch
 import torch.export
 from torch.export.graph_signature import InputKind
@@ -13,13 +14,12 @@ from torch_max_backend.torch_compile_backend.compiler import (
 
 def export_to_max_graph(
     model: torch.nn.Module, example_inputs: tuple[torch.Tensor, ...], force_device=None
-):
+) -> max.engine.Model:
     exported_program = torch.export.export(model, example_inputs, strict=True)
     with torch.no_grad():
         exported_program = exported_program.run_decompositions(
             decomp_table=DECOMPOSITION_TABLE
         )
-    exported_program.graph.print_tabular()
     state_dict = model.state_dict()
     # embed weights into the graph
     replace_inputs = {}
@@ -29,13 +29,7 @@ def export_to_max_graph(
         replace_inputs[input_spec.arg.name] = state_dict[input_spec.target]
 
     factory = _GraphFactory(replace_inputs, force_device=force_device)
-    graph, output_blueprint = factory.create_graph(exported_program.graph)
-    print("created graph")
+    graph, _ = factory.create_graph(exported_program.graph)
 
     model = global_max_objects().session.load(graph)
-
-    print("created model")
-    print(model)
     return model
-
-    print("hello")

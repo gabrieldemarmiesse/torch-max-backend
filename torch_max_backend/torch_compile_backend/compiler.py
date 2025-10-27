@@ -318,7 +318,6 @@ class _GraphFactory:
         output_blueprint: list[int | None] = []
 
         for x in node.args[0]:
-            print("handling output:", x)
             converted = self.tensor_book.convert_to_max(x)
             if converted is None:
                 output_blueprint.append(None)
@@ -326,17 +325,14 @@ class _GraphFactory:
                 # position of the output tensor
                 output_blueprint.append(len(output_tensors))
                 output_tensors.append(converted)
-        print("done handling outputs")
         # Store the none indices for runtime handling
         self.graph.output(*output_tensors)
         self.graph.__exit__(None, None, None)
-        print("exited graph context")
         return output_blueprint
 
     def create_graph(self, graph: torch.fx.Graph) -> tuple[Graph, list[int | None]]:
         output_blueprint = None
         for node_idx, node in enumerate(graph.nodes):
-            print("handling node:", node.name)
             if node.op == "placeholder":
                 self.handle_placeholder(node)
                 continue
@@ -356,7 +352,6 @@ class _GraphFactory:
             raise ValueError(
                 "No output node found in the graph, this should never happen."
             )
-        print("returning graph")
         return self.graph, output_blueprint
 
 
