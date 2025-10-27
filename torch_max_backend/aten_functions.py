@@ -1539,6 +1539,9 @@ def aten_eq(x: MaxTensor, y: MaxTensor | Scalar) -> MaxTensor:
 
 
 # erf(Tensor self) -> Tensor
+@map_to(aten.erf)
+def aten_erf(input: MaxTensor) -> MaxTensor:
+    return F.erf(input)
 
 
 # exp(Tensor self) -> Tensor

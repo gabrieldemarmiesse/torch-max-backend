@@ -259,6 +259,7 @@ def empty_strided(
 
 
 register_aten_op("aten::eq")(wrap_for_max_device(aten_functions.aten_eq))
+register_aten_op("aten::erf")(wrap_for_max_device(aten_functions.aten_erf))
 register_aten_op("aten::exp")(wrap_for_max_device(aten_functions.aten_exp))
 register_aten_op("aten::expand")(wrap_for_max_device(aten_functions.aten_expand))
 

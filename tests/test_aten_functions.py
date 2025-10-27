@@ -2552,3 +2552,14 @@ def test_log_softmax_half_to_float_false(conf: Conf, dtype: torch.dtype, dim: in
 
     x = torch.randn(3, 4, 5, dtype=dtype)
     check_outputs(fn, conf, [x], atol=1e-3, rtol=1e-2)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_aten_erf_basic(conf: Conf, dtype: torch.dtype):
+    """Test aten.erf basic functionality with different dtypes"""
+
+    def fn(x):
+        return aten.erf(x)
+
+    x = torch.randn(3, 4, dtype=dtype)
+    check_outputs(fn, conf, [x])
