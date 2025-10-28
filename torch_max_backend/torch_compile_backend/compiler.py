@@ -293,7 +293,6 @@ class _GraphFactory:
             key = key.overloadpacket
 
         if key not in MAPPING_TORCH_ATEN_TO_MAX:
-            breakpoint()
             raise MaxCompilerError(
                 "The aten function is not supported by the Max backend yet. "
                 + get_error_message(node, node_idx, func_args, func_kwargs)
@@ -382,14 +381,14 @@ class _GraphFactory:
             raise ValueError(
                 "No output node found in the graph, this should never happen."
             )
-        print("output blueprint:", output_blueprint)
+
         return self.graph, output_blueprint
 
 
 class BaseMaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         self.gm = gm
-        self.example_inputs = example_inputs
+
         if profiling_enabled():
             compiler_start = time.time_ns()
         if verbose_enabled():
@@ -441,35 +440,7 @@ class BaseMaxCompiler:
                 microseconds=(end_inference_time - start_inference_time) / 1000
             )
             print(f"Running the Max graph in {inference_duration}")
-        print(
-            "returning",
-            len(result),
-            "tensors, blueprint is ",
-            self.output_blueprint,
-            [type(x) for x in result],
-        )
-
-        perfect_outputs = self.gm.forward(*args)
-        if out_print(result) != out_print(perfect_outputs):
-            print("Mismatch in number of outputs!", len(result), len(perfect_outputs))
-            print("Max     outputs:", out_print(result))
-            print("Perfect outputs:", out_print(perfect_outputs))
-            print(self.gm.graph.print_tabular())
-            raise ValueError("Mismatch between Max outputs and perfect outputs!")
         return result
-
-
-def out_print(obj):
-    return str([pp(x) for x in obj])
-
-
-def pp(obj):
-    if obj is None:
-        return "None"
-    elif isinstance(obj, int):
-        return f"|type: {type(obj)},{str(obj)}|"
-    else:
-        return f"|type:{type(obj)}, {obj.shape} , {obj.dtype}, {obj.device}|"
 
 
 def boxed_func(*args, **kwargs):
@@ -489,11 +460,12 @@ class max_backend:
         return result
 
 
-def my_compiler(gm, example_inputs):
+def dummy_compiler(gm, example_inputs):
     return make_boxed_func(gm.forward)
 
 
-dummy_backend = aot_autograd(fw_compiler=my_compiler)
+# Can be used to check if it's the fault of the max backend or not.
+dummy_backend = aot_autograd(fw_compiler=dummy_compiler)
 
 
 # Taken from torch.py in max.
