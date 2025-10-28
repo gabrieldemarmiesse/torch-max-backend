@@ -381,14 +381,12 @@ class _GraphFactory:
             raise ValueError(
                 "No output node found in the graph, this should never happen."
             )
-
         return self.graph, output_blueprint
 
 
 class BaseMaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         self.gm = gm
-
         if profiling_enabled():
             compiler_start = time.time_ns()
         if verbose_enabled():
