@@ -51,7 +51,13 @@ class Conf:
 
 
 def to_device(tensors: list[torch.Tensor], device: str) -> list[torch.Tensor]:
-    return [torch.clone(tensor).to(device) for tensor in tensors]
+    output = []
+    for tensor in tensors:
+        if isinstance(tensor, int):
+            output.append(tensor)
+        else:
+            output.append(torch.clone(tensor).to(device))
+    return output
 
 
 def check_outputs(
@@ -78,13 +84,18 @@ def check_outputs(
         outputs_conf = fn_to_run(*inputs_on_device)
 
     # Now we compare outputs
-    if isinstance(outputs_eager_cpu, torch.Tensor):
+    if not isinstance(outputs_eager_cpu, list | tuple):
         outputs_eager_cpu = [outputs_eager_cpu]
         outputs_conf = [outputs_conf]
 
     for i, (output_eager_cpu, output_conf) in enumerate(
         zip(outputs_eager_cpu, outputs_conf)
     ):
+        if isinstance(output_eager_cpu, int):
+            assert output_eager_cpu == output_conf, (
+                f"output {i} should be int ({output_eager_cpu} vs {output_conf})"
+            )
+            continue
         expected_device = torch.device(conf.device)
         if not (output_conf.device == expected_device):
             raise AssertionError(
@@ -97,3 +108,4 @@ def check_outputs(
         torch.testing.assert_close(
             output_eager_cpu, output_conf_cpu, rtol=rtol, atol=atol
         )
+    raise ValueError

@@ -13,6 +13,17 @@ from torch_max_backend.testing import (
 )
 
 
+def test_integers_as_inputs(conf: Conf):
+    def fn(x, y):
+        return x.shape[0]
+
+    a = torch.randn(3)
+    mark_dynamic(a, 0)
+    b = 8
+
+    check_outputs(fn, conf, [a, b])
+
+
 def test_basic_addition(conf: Conf):
     def fn(x, y):
         return x + y

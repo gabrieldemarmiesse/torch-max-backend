@@ -4,6 +4,8 @@ os.environ["MODULAR_TELEMETRY_ENABLED"] = "0"
 
 import pytest
 
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+
 # must be called before importing torch_max_backend
 pytest.register_assert_rewrite("torch_max_backend.testing")
 
@@ -20,7 +22,6 @@ from torch_max_backend.torch_compile_backend import compiler
 
 # log_aten_calls()
 
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 
 # TODO: remove this when
 # https://github.com/modular/modular/issues/5495 is fixed

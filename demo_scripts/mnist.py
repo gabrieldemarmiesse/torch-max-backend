@@ -14,10 +14,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+
 from torch_max_backend import max_backend
 
 os.environ["TORCH_MAX_BACKEND_PROFILE"] = "0"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
+os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
 
 
 class SimpleNet(nn.Module):
@@ -55,11 +56,15 @@ def train_epoch(model, device, train_loader, optimizer, criterion, epoch):
 
         # Forward pass
         optimizer.zero_grad()
+        # print(data.shape)
+        print("forward pass of batch", batch_idx, "in epoch", epoch)
         output = model(data)
         loss = criterion(output, target)
 
         # Backward pass and optimization
+        print("calling backward")
         loss.backward()
+        print("calling step")
         optimizer.step()
 
         # Track metrics
@@ -91,7 +96,9 @@ def evaluate(model, device, test_loader, criterion):
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
+            print("calling model eval")
             output = model(data)
+            print("done forward eval")
             test_loss += criterion(output, target).item()
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
@@ -138,6 +145,7 @@ def main():
 
     # Model, loss, and optimizer
     model = SimpleNet().to(device)
+    print()
 
     # Compile the model with max_backend
     model = torch.compile(model, backend=max_backend, fullgraph=True)
