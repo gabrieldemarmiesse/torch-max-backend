@@ -336,7 +336,7 @@ class _GraphFactory:
         # None outputs can be required. So we remember here if
         # we want an output tensor (and we reccord the tensor position)
         # or if we want None.
-        output_blueprint: list[int | None] = []
+        output_blueprint: list[tuple[OutputBlueprintKind, int | None]] = []
 
         for x in node.args[0]:
             converted = self.tensor_book.convert_to_max(x)
@@ -411,6 +411,19 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
+    def reconstruct_from_blueprint(
+        self, max_ouptputs: list[torch.Tensor]
+    ) -> list[torch.Tensor | int | float | None]:
+        result = []
+        for kind, index in self.output_blueprint:
+            if kind is OutputBlueprintKind.NONE:
+                result.append(None)
+            elif kind is OutputBlueprintKind.TENSOR:
+                result.append(max_ouptputs[index])
+            elif kind is OutputBlueprintKind.DIM:
+                result.append(max_ouptputs[index].item())
+        return result
+
     def __call__(self, *args) -> list[torch.Tensor | int | float | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
@@ -423,15 +436,8 @@ class BaseMaxCompiler:
 
         debug.debug_graph_if_required(self.gm, args)
 
-        # Reconstruct the original output structure with None values
-        result = []
-        for kind, index in self.output_blueprint:
-            if kind is OutputBlueprintKind.NONE:
-                result.append(None)
-            elif kind is OutputBlueprintKind.TENSOR:
-                result.append(tensor_outputs[index])
-            elif kind is OutputBlueprintKind.DIM:
-                result.append(tensor_outputs[index].item())
+        result = self.reconstruct_from_blueprint(tensor_outputs)
+
         if profiling_enabled():
             end_inference_time = time.time_ns()
             inference_duration = dt.timedelta(
@@ -458,7 +464,7 @@ class max_backend:
         return result
 
 
-def dummy_compiler(gm, example_inputs):
+def dummy_compiler(gm: torch.fx.GraphModule, example_inputs: list):
     return make_boxed_func(gm.forward)
 
 
