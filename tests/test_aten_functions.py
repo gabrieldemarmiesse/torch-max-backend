@@ -675,7 +675,7 @@ def test_aten_bitwise_xor_broadcasting(conf: Conf):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_add_scalar(device: str, dtype: torch.dtype):
+def test_foreach_add_scalar(conf: Conf, dtype: torch.dtype):
     """Test _foreach_add.Scalar - adds scalar to each tensor in list"""
 
     def fn(x, y, z):
@@ -686,11 +686,11 @@ def test_foreach_add_scalar(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_add_list(device: str, dtype: torch.dtype):
+def test_foreach_add_list(conf: Conf, dtype: torch.dtype):
     """Test _foreach_add.List - adds corresponding tensors with alpha scaling"""
 
     def fn(x1, y1, z1, x2, y2, z2):
@@ -705,11 +705,11 @@ def test_foreach_add_list(device: str, dtype: torch.dtype):
     y2 = torch.randn(2, 5, dtype=dtype)
     z2 = torch.randn(4, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
+    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2])
 
 
 @pytest.mark.parametrize("alpha", [1.0, 2.0, -0.5])
-def test_foreach_add_list_alpha(device: str, alpha: float):
+def test_foreach_add_list_alpha(conf: Conf, alpha: float):
     """Test _foreach_add.List with different alpha values"""
 
     def fn(x1, y1, x2, y2):
@@ -722,7 +722,7 @@ def test_foreach_add_list_alpha(device: str, alpha: float):
     x2 = torch.randn(3, 4)
     y2 = torch.randn(2, 5)
 
-    check_functions_are_equivalent(fn, device, [x1, y1, x2, y2])
+    check_outputs(fn, conf, [x1, y1, x2, y2])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
