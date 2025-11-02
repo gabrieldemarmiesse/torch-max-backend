@@ -921,7 +921,7 @@ def test_foreach_pow_scalar(conf: Conf, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_pow_list(conf: Conf, dtype: torch.dtype):
+def test_foreach_pow_list(device: str, dtype: torch.dtype):
     """Test _foreach_pow.List - raises corresponding tensors to powers"""
 
     def fn(x1, y1, z1, x2, y2, z2):
@@ -936,7 +936,7 @@ def test_foreach_pow_list(conf: Conf, dtype: torch.dtype):
     y2 = torch.randn(2, 5, dtype=dtype)
     z2 = torch.randn(4, dtype=dtype)
 
-    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2])
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -956,7 +956,7 @@ def test_foreach_pow_scalarlist(conf: Conf, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_pow_scalarandtensor(conf: Conf, dtype: torch.dtype):
+def test_foreach_pow_scalarandtensor(device: str, dtype: torch.dtype):
     """Test _foreach_pow.ScalarAndTensor - raises scalar to tensor powers"""
 
     def fn(x, y, z):
@@ -967,7 +967,7 @@ def test_foreach_pow_scalarandtensor(conf: Conf, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype)
     z = torch.randn(4, dtype=dtype)
 
-    check_outputs(fn, conf, [x, y, z])
+    check_functions_are_equivalent(fn, device, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -1037,10 +1037,10 @@ def test_foreach_div_tensor(conf: Conf, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_sqrt(conf: Conf, dtype: torch.dtype):
+def test_foreach_sqrt(device: str, dtype: torch.dtype):
     """Test _foreach_sqrt - computes square root of each tensor in list"""
     # xfail for float64 on CUDA due to current MAX limitation with sqrt intrinsic
-    if conf.device == "cuda" and dtype == torch.float64:
+    if device == "cuda" and dtype == torch.float64:
         pytest.xfail(
             "float64 sqrt on CUDA currently fails in MAX (llvm.nvvm.sqrt.approx.d intrinsic issue)"
         )
@@ -1053,7 +1053,7 @@ def test_foreach_sqrt(conf: Conf, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype).abs() + 0.1
     z = torch.randn(4, dtype=dtype).abs() + 0.1
 
-    check_outputs(fn, conf, [x, y, z])
+    check_functions_are_equivalent(fn, device, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
