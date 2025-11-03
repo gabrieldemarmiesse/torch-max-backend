@@ -1461,72 +1461,72 @@ def test_aten_select_scatter_scalar_src(conf: Conf):
 
 @pytest.mark.parametrize("repeats", [1, 2, 3, 5])
 @pytest.mark.parametrize("dim", [0, 1, -1])
-def test_aten_repeat_interleave_basic(conf: Conf, repeats: int, dim: int):
+def test_aten_repeat_interleave_basic(device: str, repeats: int, dim: int):
     """Test aten.repeat_interleave with basic parameters"""
 
     def fn(x):
         return aten.repeat_interleave(x, repeats, dim)
 
-    x = torch.randn(3, 4)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(3, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
-def test_aten_repeat_interleave_different_dtypes(conf: Conf, dtype: torch.dtype):
+def test_aten_repeat_interleave_different_dtypes(device: str, dtype: torch.dtype):
     """Test aten.repeat_interleave with different data types"""
 
     def fn(x):
         return aten.repeat_interleave(x, 2, 0)
 
     if dtype == torch.bool:
-        x = torch.randint(0, 2, (3, 4), dtype=dtype)
+        x = torch.randint(0, 2, (3, 4), dtype=dtype, device=device)
     elif dtype == torch.int32:
-        x = torch.randint(0, 10, (3, 4), dtype=dtype)
+        x = torch.randint(0, 10, (3, 4), dtype=dtype, device=device)
     else:
-        x = torch.randn(3, 4, dtype=dtype)
+        x = torch.randn(3, 4, dtype=dtype, device=device)
 
-    check_outputs(fn, conf, [x])
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_repeat_interleave_1d(conf: Conf):
+def test_aten_repeat_interleave_1d(device: str):
     """Test aten.repeat_interleave with 1D tensor"""
 
     def fn(x):
         return aten.repeat_interleave(x, 3, 0)
 
-    x = torch.randn(5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_repeat_interleave_3d(conf: Conf):
+def test_aten_repeat_interleave_3d(device: str):
     """Test aten.repeat_interleave with 3D tensor"""
 
     def fn(x):
         return aten.repeat_interleave(x, 2, 1)
 
-    x = torch.randn(2, 3, 4)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(2, 3, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("shape", [(1, 5), (5, 1), (1, 1)])
-def test_aten_repeat_interleave_edge_cases(conf: Conf, shape: tuple):
+def test_aten_repeat_interleave_edge_cases(device: str, shape: tuple):
     """Test aten.repeat_interleave with edge case shapes"""
 
     def fn(x):
         return aten.repeat_interleave(x, 2, 0)
 
-    x = torch.randn(*shape)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_repeat_interleave_large_repeats(conf: Conf):
+def test_aten_repeat_interleave_large_repeats(device: str):
     """Test aten.repeat_interleave with large repeat count"""
 
     def fn(x):
         return aten.repeat_interleave(x, 10, 0)
 
-    x = torch.randn(2, 3)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(2, 3, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
