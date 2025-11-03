@@ -964,18 +964,18 @@ def test_foreach_pow_scalarlist(conf: Conf, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_pow_scalarandtensor(conf: Conf, dtype: torch.dtype):
+def test_foreach_pow_scalarandtensor(device: str, dtype: torch.dtype):
     """Test _foreach_pow.ScalarAndTensor - raises scalar to tensor powers"""
 
     def fn(x, y, z):
         exponent_tensors = [x, y, z]
         return aten._foreach_pow.ScalarAndTensor(2.0, exponent_tensors)
 
-    x = torch.randn(3, 4, dtype=dtype)
-    y = torch.randn(2, 5, dtype=dtype)
-    z = torch.randn(4, dtype=dtype)
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
 
-    check_outputs(fn, conf, [x, y, z])
+    check_functions_are_equivalent(fn, device, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
