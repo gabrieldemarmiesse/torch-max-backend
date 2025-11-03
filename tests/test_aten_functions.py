@@ -1943,14 +1943,14 @@ def test_aten_squeeze_5d(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_empty_dims(conf: Conf):
+def test_aten_squeeze_empty_dims(device: str):
     """Test aten.squeeze with empty dimensions list"""
 
     def fn(x):
         return aten.squeeze(x, [])
 
-    x = torch.randn(1, 3, 1, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("shape", [(1,), (1, 1), (1, 1, 1)])
