@@ -6,7 +6,11 @@ from torch._dynamo import mark_dynamic
 from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
-from torch_max_backend.testing import Conf, check_outputs
+from torch_max_backend.testing import (
+    Conf,
+    check_functions_are_equivalent,
+    check_outputs,
+)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -198,7 +202,7 @@ def test_scaled_dot_product_flash_attention_with_scale(conf: Conf, dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_native_batch_norm_legit_no_training_basic(conf: Conf, dtype: torch.dtype):
+def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dtype):
     """Test basic batch normalization inference with different dtypes"""
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
@@ -212,18 +216,21 @@ def test_native_batch_norm_legit_no_training_basic(conf: Conf, dtype: torch.dtyp
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
-    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
-    weight = torch.randn(channels, dtype=dtype)
-    bias = torch.randn(channels, dtype=dtype)
-    running_mean = torch.randn(channels, dtype=dtype)
-    running_var = torch.abs(torch.randn(channels, dtype=dtype)) + 1e-5
-
-    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
+    input_tensor = torch.randn(
+        batch_size, channels, height, width, dtype=dtype, device=device
+    )
+    weight = torch.randn(channels, dtype=dtype, device=device)
+    bias = torch.randn(channels, dtype=dtype, device=device)
+    running_mean = torch.randn(channels, dtype=dtype, device=device)
+    running_var = torch.abs(torch.randn(channels, dtype=dtype, device=device)) + 1e-5
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, weight, bias, running_mean, running_var]
+    )
 
 
 @pytest.mark.parametrize("channels", [1, 4, 16])
 def test_native_batch_norm_legit_no_training_different_channels(
-    conf: Conf, channels: int
+    device: str, channels: int
 ):
     """Test batch norm with different numbers of channels"""
 
@@ -238,17 +245,19 @@ def test_native_batch_norm_legit_no_training_different_channels(
 
     # Create test tensors with varying channel dimensions
     batch_size, height, width = 2, 8, 8
-    input_tensor = torch.randn(batch_size, channels, height, width)
-    weight = torch.randn(channels)
-    bias = torch.randn(channels)
-    running_mean = torch.randn(channels)
-    running_var = torch.abs(torch.randn(channels)) + 1e-5
+    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
+    weight = torch.randn(channels, device=device)
+    bias = torch.randn(channels, device=device)
+    running_mean = torch.randn(channels, device=device)
+    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
 
     # Test that compilation works and outputs match
-    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, weight, bias, running_mean, running_var]
+    )
 
 
-def test_native_batch_norm_legit_no_training_none_weight_bias(conf: Conf):
+def test_native_batch_norm_legit_no_training_none_weight_bias(device: str):
     """Test batch norm with None weight and bias"""
 
     def fn(input_tensor, running_mean, running_var):
@@ -262,16 +271,18 @@ def test_native_batch_norm_legit_no_training_none_weight_bias(conf: Conf):
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
-    input_tensor = torch.randn(batch_size, channels, height, width)
-    running_mean = torch.randn(channels)
-    running_var = torch.abs(torch.randn(channels)) + 1e-5
+    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
+    running_mean = torch.randn(channels, device=device)
+    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
 
     # Test that compilation works and outputs match
-    check_outputs(fn, conf, [input_tensor, running_mean, running_var])
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, running_mean, running_var]
+    )
 
 
 @pytest.mark.parametrize("eps", [1e-5, 1e-3])
-def test_native_batch_norm_legit_no_training_different_eps(conf: Conf, eps: float):
+def test_native_batch_norm_legit_no_training_different_eps(device: str, eps: float):
     """Test batch norm with different epsilon values"""
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
@@ -285,17 +296,19 @@ def test_native_batch_norm_legit_no_training_different_eps(conf: Conf, eps: floa
 
     # Create test tensors
     batch_size, channels, height, width = 2, 3, 4, 4
-    input_tensor = torch.randn(batch_size, channels, height, width)
-    weight = torch.randn(channels)
-    bias = torch.randn(channels)
-    running_mean = torch.randn(channels)
-    running_var = torch.abs(torch.randn(channels)) + eps * 10
+    input_tensor = torch.randn(batch_size, channels, height, width, device=device)
+    weight = torch.randn(channels, device=device)
+    bias = torch.randn(channels, device=device)
+    running_mean = torch.randn(channels, device=device)
+    running_var = torch.abs(torch.randn(channels, device=device)) + eps * 10
 
     # Test that compilation works and outputs match
-    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, weight, bias, running_mean, running_var]
+    )
 
 
-def test_native_batch_norm_legit_no_training_2d_input(conf: Conf):
+def test_native_batch_norm_legit_no_training_2d_input(device: str):
     """Test batch norm with 2D input (N, C)"""
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
@@ -309,14 +322,16 @@ def test_native_batch_norm_legit_no_training_2d_input(conf: Conf):
 
     # Create 2D test tensors (batch_size, channels)
     batch_size, channels = 10, 5
-    input_tensor = torch.randn(batch_size, channels)
-    weight = torch.randn(channels)
-    bias = torch.randn(channels)
-    running_mean = torch.randn(channels)
-    running_var = torch.abs(torch.randn(channels)) + 1e-5
+    input_tensor = torch.randn(batch_size, channels, device=device)
+    weight = torch.randn(channels, device=device)
+    bias = torch.randn(channels, device=device)
+    running_mean = torch.randn(channels, device=device)
+    running_var = torch.abs(torch.randn(channels, device=device)) + 1e-5
 
     # Test that compilation works and outputs match
-    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
+    check_functions_are_equivalent(
+        fn, device, [input_tensor, weight, bias, running_mean, running_var]
+    )
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
