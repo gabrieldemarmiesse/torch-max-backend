@@ -1425,17 +1425,17 @@ def test_aten_select_scatter_negative_dim(conf: Conf):
     check_outputs(fn, conf, [self, src])
 
 
-def test_aten_select_scatter_negative_index(device: str):
+def test_aten_select_scatter_negative_index(conf: Conf):
     """Test aten.select_scatter with negative index"""
 
     def fn(self, src):
         return aten.select_scatter(self, src, dim=0, index=-1)
 
     # Negative index (index=-1 is last index)
-    self = torch.zeros(3, 4, dtype=torch.float32, device=device)
-    src = torch.ones(4, dtype=torch.float32, device=device) * 3
+    self = torch.zeros(3, 4, dtype=torch.float32)
+    src = torch.ones(4, dtype=torch.float32) * 3
 
-    check_functions_are_equivalent(fn, device, [self, src])
+    check_outputs(fn, conf, [self, src])
 
 
 def test_aten_select_scatter_scalar_src(conf: Conf):
