@@ -1,6 +1,7 @@
 import time
 import traceback
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,12 @@ def fetch_attr(gm: torch.fx.GraphModule, target: str):
     return attr_itr
 
 
+class OutputBlueprintKind(Enum):
+    NONE = 1
+    TENSOR = 2
+    DIM = 3
+
+
 class _GraphFactory:
     def __init__(
         self,
@@ -309,28 +316,50 @@ class _GraphFactory:
         attr_value = fetch_attr(self.graph, node.target)
         self.tensor_book[node.name] = attr_value
 
-    def handle_output(self, node: torch.fx.Node):
+    def handle_output(
+        self, node: torch.fx.Node
+    ) -> list[tuple[OutputBlueprintKind, int | None]]:
+        """Handles the output node and returns the output blueprint.
+
+        The blueprint indicates what the final output should look like, as
+        opposed to what the MAX graph will return.
+        The blueprint is the same size as the final output and
+        NONE means that the output is None,
+        TENSOR means that the output is a tensor (and the index in the MAX output list),
+        DIM means that the output is a dimension (int) of a tensor (and the index in the MAX output list).
+        Note that for DIM outputs, we'll need to convert the MAX tensor to an int at runtime,
+        because MAX assumes that if your ouput is a Dim(), then you want a max tensor
+        as output, not a simple python int.
+        """
         output_tensors = []
 
         # None outputs can be required. So we remember here if
         # we want an output tensor (and we reccord the tensor position)
         # or if we want None.
-        output_blueprint: list[int | None] = []
+        output_blueprint: list[tuple[OutputBlueprintKind, int | None]] = []
 
         for x in node.args[0]:
             converted = self.tensor_book.convert_to_max(x)
             if converted is None:
-                output_blueprint.append(None)
+                output_blueprint.append((OutputBlueprintKind.NONE, None))
+            elif isinstance(converted, max.graph.Dim):
+                # position of the output tensor
+                output_blueprint.append((OutputBlueprintKind.DIM, len(output_tensors)))
+                output_tensors.append(converted)
             else:
                 # position of the output tensor
-                output_blueprint.append(len(output_tensors))
+                output_blueprint.append(
+                    (OutputBlueprintKind.TENSOR, len(output_tensors))
+                )
                 output_tensors.append(converted)
         # Store the none indices for runtime handling
         self.graph.output(*output_tensors)
         self.graph.__exit__(None, None, None)
         return output_blueprint
 
-    def create_graph(self, graph: torch.fx.Graph) -> tuple[Graph, list[int | None]]:
+    def create_graph(
+        self, graph: torch.fx.Graph
+    ) -> tuple[Graph, list[tuple[OutputBlueprintKind, int | None]]]:
         output_blueprint = None
         for node_idx, node in enumerate(graph.nodes):
             if node.op == "placeholder":
@@ -382,7 +411,20 @@ class BaseMaxCompiler:
             )
             print(f"Compiling the Max graph in {compiling}")
 
-    def __call__(self, *args) -> list[torch.Tensor | None]:
+    def reconstruct_from_blueprint(
+        self, max_ouptputs: list[torch.Tensor]
+    ) -> list[torch.Tensor | int | float | None]:
+        result = []
+        for kind, index in self.output_blueprint:
+            if kind is OutputBlueprintKind.NONE:
+                result.append(None)
+            elif kind is OutputBlueprintKind.TENSOR:
+                result.append(max_ouptputs[index])
+            elif kind is OutputBlueprintKind.DIM:
+                result.append(max_ouptputs[index].item())
+        return result
+
+    def __call__(self, *args) -> list[torch.Tensor | int | float | None]:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
             start_inference_time = time.time_ns()
@@ -394,13 +436,8 @@ class BaseMaxCompiler:
 
         debug.debug_graph_if_required(self.gm, args)
 
-        # Reconstruct the original output structure with None values
-        result = []
-        for i in self.output_blueprint:
-            if i is None:
-                result.append(None)
-            else:
-                result.append(tensor_outputs[i])
+        result = self.reconstruct_from_blueprint(tensor_outputs)
+
         if profiling_enabled():
             end_inference_time = time.time_ns()
             inference_duration = dt.timedelta(
@@ -410,20 +447,29 @@ class BaseMaxCompiler:
         return result
 
 
+def boxed_func(*args, **kwargs):
+    return make_boxed_func(BaseMaxCompiler(*args, **kwargs).__call__)
+
+
 class max_backend:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list):
-        def boxed_func(*args, **kwargs):
-            return make_boxed_func(BaseMaxCompiler(*args, **kwargs).__call__)
-
         self.func_to_execute = aot_autograd(
             fw_compiler=boxed_func, decompositions=DECOMPOSITION_TABLE
         )(gm, example_inputs)
 
-    def __call__(self, *args) -> list[torch.Tensor | None]:
+    def __call__(self, *args) -> list[torch.Tensor | int | float | None]:
         result = self.func_to_execute(*args)
         if isinstance(result, tuple):
             return list(result)
         return result
+
+
+def dummy_compiler(gm: torch.fx.GraphModule, example_inputs: list):
+    return make_boxed_func(gm.forward)
+
+
+# Can be used to check if it's the fault of the max backend or not.
+dummy_backend = aot_autograd(fw_compiler=dummy_compiler)
 
 
 # Taken from torch.py in max.
