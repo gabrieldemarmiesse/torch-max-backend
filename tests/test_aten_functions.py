@@ -1954,14 +1954,14 @@ def test_aten_squeeze_empty_dims(device: str):
 
 
 @pytest.mark.parametrize("shape", [(1,), (1, 1), (1, 1, 1)])
-def test_aten_squeeze_edge_cases(conf: Conf, shape: tuple):
+def test_aten_squeeze_edge_cases(device: str, shape: tuple):
     """Test aten.squeeze with edge case shapes"""
 
     def fn(x):
         return aten.squeeze(x, list(range(len(shape))))
 
-    x = torch.randn(*shape)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(*shape, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_aten_triu_basic(conf: Conf):
