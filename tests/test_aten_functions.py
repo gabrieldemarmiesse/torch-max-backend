@@ -133,8 +133,11 @@ def test_adaptive_avg_pool2d_backward_half_precision(conf: Conf, dtype: torch.dt
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_basic(cuda_device: str, dtype: torch.dtype):
+def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype):
     """Test _scaled_dot_product_flash_attention basic functionality"""
+    # Flash attention only works on CUDA
+    if conf.device != "cuda:0":
+        pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
@@ -147,12 +150,15 @@ def test_scaled_dot_product_flash_attention_basic(cuda_device: str, dtype: torch
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
     # TensorFloat-32 tensor cores are used by default, lowering precision
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
+    check_outputs(fn, conf, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_with_causal(cuda_device: str, dtype: str):
+def test_scaled_dot_product_flash_attention_with_causal(conf: Conf, dtype: str):
     """Test _scaled_dot_product_flash_attention with causal masking"""
+    # Flash attention only works on CUDA
+    if conf.device != "cuda:0":
+        pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
@@ -165,12 +171,15 @@ def test_scaled_dot_product_flash_attention_with_causal(cuda_device: str, dtype:
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
     # TensorFloat-32 tensor cores are used by default, lowering precision
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
+    check_outputs(fn, conf, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_with_scale(cuda_device: str, dtype):
+def test_scaled_dot_product_flash_attention_with_scale(conf: Conf, dtype):
     """Test _scaled_dot_product_flash_attention with custom scale"""
+    # Flash attention only works on CUDA
+    if conf.device != "cuda:0":
+        pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
@@ -189,7 +198,7 @@ def test_scaled_dot_product_flash_attention_with_scale(cuda_device: str, dtype):
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
     # TensorFloat-32 tensor cores are used by default, lowering precision
-    check_functions_are_equivalent(fn, cuda_device, [q, k, v], atol=1e-2, rtol=1e-2)
+    check_outputs(fn, conf, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -214,7 +223,6 @@ def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dty
     bias = torch.randn(channels, dtype=dtype, device=device)
     running_mean = torch.randn(channels, dtype=dtype, device=device)
     running_var = torch.abs(torch.randn(channels, dtype=dtype, device=device)) + 1e-5
-
     check_functions_are_equivalent(
         fn, device, [input_tensor, weight, bias, running_mean, running_var]
     )
@@ -342,9 +350,9 @@ def test_aten_acos_basic(conf: Conf, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_aten_acos_special_values(device: str, dtype: torch.dtype):
+def test_aten_acos_special_values(conf: Conf, dtype: torch.dtype):
     """Test aten.acos with special mathematical values"""
-    if device == "cuda" and dtype == torch.float64:
+    if conf.device == "cuda:0" and dtype == torch.float64:
         pytest.xfail("Bug: could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d'")
 
     def fn(x):
@@ -355,7 +363,7 @@ def test_aten_acos_special_values(device: str, dtype: torch.dtype):
     # acos(0.0) = π/2 ≈ 1.5708
     # acos(-1.0) = π ≈ 3.1416
     x = torch.tensor([1.0, 0.0, -1.0], dtype=dtype)
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_aten_acos_2d_tensor(conf: Conf):
@@ -963,9 +971,9 @@ def test_foreach_pow_scalarandtensor(device: str, dtype: torch.dtype):
         exponent_tensors = [x, y, z]
         return aten._foreach_pow.ScalarAndTensor(2.0, exponent_tensors)
 
-    x = torch.randn(3, 4, dtype=dtype)
-    y = torch.randn(2, 5, dtype=dtype)
-    z = torch.randn(4, dtype=dtype)
+    x = torch.randn(3, 4, dtype=dtype, device=device)
+    y = torch.randn(2, 5, dtype=dtype, device=device)
+    z = torch.randn(4, dtype=dtype, device=device)
 
     check_functions_are_equivalent(fn, device, [x, y, z])
 
@@ -1037,10 +1045,10 @@ def test_foreach_div_tensor(conf: Conf, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_sqrt(device: str, dtype: torch.dtype):
+def test_foreach_sqrt(conf: Conf, dtype: torch.dtype):
     """Test _foreach_sqrt - computes square root of each tensor in list"""
     # xfail for float64 on CUDA due to current MAX limitation with sqrt intrinsic
-    if device == "cuda" and dtype == torch.float64:
+    if conf.device == "cuda:0" and dtype == torch.float64:
         pytest.xfail(
             "float64 sqrt on CUDA currently fails in MAX (llvm.nvvm.sqrt.approx.d intrinsic issue)"
         )
@@ -1053,7 +1061,7 @@ def test_foreach_sqrt(device: str, dtype: torch.dtype):
     y = torch.randn(2, 5, dtype=dtype).abs() + 0.1
     z = torch.randn(4, dtype=dtype).abs() + 0.1
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -1837,35 +1845,35 @@ def test_aten_square_zero_tensor(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_single_dim(device: str):
+def test_aten_squeeze_single_dim(conf: Conf):
     """Test aten.squeeze with single dimension"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
-    x = torch.randn(3, 1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 1, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
-def test_aten_squeeze_different_dims(device: str, dim: int):
+def test_aten_squeeze_different_dims(conf: Conf, dim: int):
     """Test aten.squeeze on different dimensions"""
 
     def fn(x):
         return aten.squeeze(x, dim)
 
-    x = torch.randn(1, 3, 1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(1, 3, 1, 5)
+    check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_negative_dim(device: str):
+def test_aten_squeeze_negative_dim(conf: Conf):
     """Test aten.squeeze with negative dimension"""
 
     def fn(x):
         return aten.squeeze(x, -2)
 
-    x = torch.randn(3, 1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 1, 5)
+    check_outputs(fn, conf, [x])
 
 
 def test_aten_squeeze_multiple_dims(device: str):
@@ -1878,31 +1886,31 @@ def test_aten_squeeze_multiple_dims(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_no_change(device: str):
+def test_aten_squeeze_no_change(conf: Conf):
     """Test aten.squeeze when dimension is not size 1"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.bool])
-def test_aten_squeeze_different_dtypes(device: str, dtype: torch.dtype):
+def test_aten_squeeze_different_dtypes(conf: Conf, dtype: torch.dtype):
     """Test aten.squeeze with different data types"""
 
     def fn(x):
         return aten.squeeze(x, 1)
 
     if dtype == torch.bool:
-        x = torch.randint(0, 2, (3, 1, 5), dtype=dtype, device=device)
+        x = torch.randint(0, 2, (3, 1, 5), dtype=dtype)
     elif dtype == torch.int32:
-        x = torch.randint(0, 10, (3, 1, 5), dtype=dtype, device=device)
+        x = torch.randint(0, 10, (3, 1, 5), dtype=dtype)
     else:
-        x = torch.randn(3, 1, 5, dtype=dtype, device=device)
+        x = torch.randn(3, 1, 5, dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_aten_squeeze_all_ones(device: str):
@@ -1915,14 +1923,14 @@ def test_aten_squeeze_all_ones(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_aten_squeeze_2d(device: str):
+def test_aten_squeeze_2d(conf: Conf):
     """Test aten.squeeze with 2D tensor"""
 
     def fn(x):
         return aten.squeeze(x, 0)
 
-    x = torch.randn(1, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(1, 5)
+    check_outputs(fn, conf, [x])
 
 
 def test_aten_squeeze_5d(device: str):
@@ -2268,14 +2276,14 @@ def test_aten_amax_multiple_dims(conf: Conf, dims: list[int], keepdim: bool):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_max_no_dim(device: str):
+def test_aten_max_no_dim(conf: Conf):
     """Test aten_max without dimension (returns single value)"""
 
     def fn(x):
         return aten.max(x)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2])
@@ -2348,14 +2356,14 @@ def test_aten_amin_multiple_dims(conf: Conf, dims: list[int], keepdim: bool):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_min_no_dim(device: str):
+def test_aten_min_no_dim(conf: Conf):
     """Test aten_min without dimension (returns single value)"""
 
     def fn(x):
         return aten.min(x)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2])
