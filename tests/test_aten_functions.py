@@ -1876,14 +1876,14 @@ def test_aten_squeeze_negative_dim(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_multiple_dims(conf: Conf):
+def test_aten_squeeze_multiple_dims(device: str):
     """Test aten.squeeze with multiple dimensions"""
 
     def fn(x):
         return aten.squeeze(x, [0, 2])
 
-    x = torch.randn(1, 3, 1, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(1, 3, 1, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_aten_squeeze_no_change(conf: Conf):
