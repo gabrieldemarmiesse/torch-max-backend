@@ -2431,7 +2431,7 @@ def aten_select_scatter(
     # Handle negative index
     dim_size = input.shape[dim]
     if index < 0:
-        index = index + dim_size
+        index = index + dim_size.dim
 
     # Step 1: Create a range tensor for the dimension to build the mask
     indices = F.range(0, dim_size, 1, dtype=DType.int64, device=input.device)
