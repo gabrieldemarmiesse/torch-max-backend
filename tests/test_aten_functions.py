@@ -929,7 +929,7 @@ def test_foreach_pow_scalar(conf: Conf, dtype: torch.dtype):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_pow_list(conf: Conf, dtype: torch.dtype):
+def test_foreach_pow_list(device: str, dtype: torch.dtype):
     """Test _foreach_pow.List - raises corresponding tensors to powers"""
 
     def fn(x1, y1, z1, x2, y2, z2):
@@ -944,7 +944,7 @@ def test_foreach_pow_list(conf: Conf, dtype: torch.dtype):
     y2 = torch.randn(2, 5, dtype=dtype)
     z2 = torch.randn(4, dtype=dtype)
 
-    check_outputs(fn, conf, [x1, y1, z1, x2, y2, z2])
+    check_functions_are_equivalent(fn, device, [x1, y1, z1, x2, y2, z2])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
