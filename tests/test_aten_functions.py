@@ -1913,14 +1913,14 @@ def test_aten_squeeze_different_dtypes(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_all_ones(conf: Conf):
+def test_aten_squeeze_all_ones(device: str):
     """Test aten.squeeze with tensor of all size-1 dimensions"""
 
     def fn(x):
         return aten.squeeze(x, [0, 1, 2, 3])
 
-    x = torch.randn(1, 1, 1, 1)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(1, 1, 1, 1, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_aten_squeeze_2d(conf: Conf):
@@ -1933,14 +1933,14 @@ def test_aten_squeeze_2d(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_squeeze_5d(conf: Conf):
+def test_aten_squeeze_5d(device: str):
     """Test aten.squeeze with 5D tensor"""
 
     def fn(x):
         return aten.squeeze(x, [1, 3])
 
-    x = torch.randn(2, 1, 3, 1, 4)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(2, 1, 3, 1, 4, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 def test_aten_squeeze_empty_dims(device: str):
