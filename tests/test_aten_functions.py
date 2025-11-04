@@ -2288,29 +2288,29 @@ def test_aten_max_no_dim(conf: Conf):
 
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_aten_max_with_dim(conf: Conf, dim: int, keepdim: bool):
+def test_aten_max_with_dim(device: str, dim: int, keepdim: bool):
     """Test aten_max with dimension (returns values and indices tuple)"""
 
     def fn(x):
         return aten.max(x, dim=dim, keepdim=keepdim)
 
-    x = torch.randn(3, 4, 5)
-    check_outputs(fn, conf, [x])
+    x = torch.randn(3, 4, 5, device=device)
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
-def test_aten_max_different_dtypes(conf: Conf, dtype: torch.dtype):
+def test_aten_max_different_dtypes(device: str, dtype: torch.dtype):
     """Test aten_max with different data types"""
 
     def fn(x):
         return aten.max(x, dim=1, keepdim=False)
 
     if dtype.is_floating_point:
-        x = torch.randn(3, 4, dtype=dtype)
+        x = torch.randn(3, 4, dtype=dtype, device=device)
     else:
-        x = torch.randint(-10, 10, (3, 4), dtype=dtype)
+        x = torch.randint(-10, 10, (3, 4), dtype=dtype, device=device)
 
-    check_outputs(fn, conf, [x])
+    check_functions_are_equivalent(fn, device, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
