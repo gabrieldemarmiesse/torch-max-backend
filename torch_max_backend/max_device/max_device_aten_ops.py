@@ -305,6 +305,38 @@ register_aten_op("aten::max_pool2d_with_indices")(
 register_aten_op("aten::maximum")(wrap_for_max_device(aten_functions.aten_maximum))
 register_aten_op("aten::mean")(wrap_for_max_device(aten_functions.aten_mean))
 register_aten_op("aten::min")(wrap_for_max_device(aten_functions.aten_min))
+
+
+@register_aten_op("aten::min.dim_min")
+def max_device_min_dim_min(
+    input: TorchMaxTensor,
+    dim: int,
+    keepdim: bool = False,
+    min: TorchMaxTensor | None = None,
+    min_indices: TorchMaxTensor | None = None,
+) -> tuple[TorchMaxTensor, TorchMaxTensor]:
+    """
+    Out-variant of min operation along a dimension for max_device.
+    Computes minimum values and indices, writing to pre-allocated output tensors.
+    """
+    # Convert input to MaxEagerTensor
+    input_max = input._max_data
+
+    # Compute results using aten_functions
+    values, indices = aten_functions.aten_min_dim_min(
+        input_max, dim=dim, keepdim=keepdim, min=None, min_indices=None
+    )
+
+    # Copy results into pre-allocated output tensors
+    if min is not None:
+        min._max_data = values
+    if min_indices is not None:
+        min_indices._max_data = indices
+
+    # Return the output tensors (wrapped as TorchMaxTensor)
+    return (min, min_indices)
+
+
 register_aten_op("aten::minimum")(wrap_for_max_device(aten_functions.aten_minimum))
 
 register_aten_op("aten::mul.Tensor")(wrap_for_max_device(aten_functions.aten_mul))
