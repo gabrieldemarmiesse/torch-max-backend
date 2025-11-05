@@ -2368,29 +2368,29 @@ def test_aten_min_no_dim(conf: Conf):
 
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_aten_min_with_dim(device: str, dim: int, keepdim: bool):
+def test_aten_min_with_dim(conf: Conf, dim: int, keepdim: bool):
     """Test aten_min with dimension (returns values and indices tuple)"""
 
     def fn(x):
         return aten.min(x, dim=dim, keepdim=keepdim)
 
-    x = torch.randn(3, 4, 5, device=device)
-    check_functions_are_equivalent(fn, device, [x])
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
-def test_aten_min_different_dtypes(device: str, dtype: torch.dtype):
+def test_aten_min_different_dtypes(conf: Conf, dtype: torch.dtype):
     """Test aten_min with different data types"""
 
     def fn(x):
         return aten.min(x, dim=1, keepdim=False)
 
     if dtype.is_floating_point:
-        x = torch.randn(3, 4, dtype=dtype, device=device)
+        x = torch.randn(3, 4, dtype=dtype)
     else:
-        x = torch.randint(-10, 10, (3, 4), dtype=dtype, device=device)
+        x = torch.randint(-10, 10, (3, 4), dtype=dtype)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
