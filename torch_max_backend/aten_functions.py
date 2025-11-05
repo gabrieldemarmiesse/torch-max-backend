@@ -2051,6 +2051,28 @@ def aten_min(
         return (values, indices)
 
 
+# min.dim_min(Tensor self, int dim, bool keepdim=False, *, Tensor(a!) min, Tensor(b!) min_indices) -> (Tensor(a!) values, Tensor(b!) indices)
+def aten_min_dim_min(
+    input: MaxTensor,
+    dim: int,
+    keepdim: bool = False,
+    min: MaxTensor | None = None,
+    min_indices: MaxTensor | None = None,
+) -> tuple[MaxTensor, MaxTensor]:
+    """
+    Out-variant of torch.min along a dimension.
+    Computes minimum values and indices, writing results to pre-allocated tensors.
+
+    This is used by PyTorch's dispatcher in eager mode when calling torch.min(x, dim=dim).
+    """
+    # Compute the results using the regular min implementation
+    values, indices = aten_min(input, dim=dim, keepdim=keepdim)
+
+    # For graph mode, just return the computed values (output tensors are not used)
+    # For eager mode, the registration wrapper will handle copying to output tensors
+    return (values, indices)
+
+
 # minimum(Tensor self, Tensor other) -> Tensor
 @map_to(aten.minimum)
 def aten_minimum(x: MaxTensor, y: MaxTensor) -> MaxTensor:
