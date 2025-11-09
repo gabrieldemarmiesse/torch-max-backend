@@ -1334,6 +1334,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-retry"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c5/5b/607b017994cca28de3a1ad22a3eee8418e5d428dcd8ec25b26b18e995a73/pytest_retry-1.7.0.tar.gz", hash = "sha256:f8d52339f01e949df47c11ba9ee8d5b362f5824dff580d3870ec9ae0057df80f", size = 19977, upload-time = "2025-01-19T01:56:13.115Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/ff/3266c8a73b9b93c4b14160a7e2b31d1e1088e28ed29f4c2d93ae34093bfd/pytest_retry-1.7.0-py3-none-any.whl", hash = "sha256:a2dac85b79a4e2375943f1429479c65beb6c69553e7dae6b8332be47a60954f4", size = 13775, upload-time = "2025-01-19T01:56:11.199Z" },
+]
+
+[[package]]
 name = "pytest-split"
 version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1842,6 +1854,7 @@ source = { editable = "." }
 dependencies = [
     { name = "beartype" },
     { name = "max" },
+    { name = "pytest-retry" },
     { name = "tabulate" },
     { name = "torch" },
 ]
@@ -1878,6 +1891,7 @@ dev = [
 requires-dist = [
     { name = "beartype", specifier = ">=0.17.0" },
     { name = "max", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "pytest-retry", specifier = ">=1.7.0" },
     { name = "tabulate" },
     { name = "torch", index = "https://download.pytorch.org/whl/nightly/cu128" },
 ]
