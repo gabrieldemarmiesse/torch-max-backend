@@ -1726,17 +1726,7 @@ def aten_gelu_backward(
             f"approximate argument must be either 'none' or 'tanh', got '{approximate}'"
         )
 
-    grad_input = F.custom(
-        name="gelu_backward",
-        device=input.device,
-        values=[grad_output, input],
-        parameters=dict(approximate=approximate),
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
-
-    return grad_input
+    return custom_mojo_ops.gelu_backward(grad_output, input, approximate=approximate)
 
 
 # grid_sampler_2d(Tensor input, Tensor grid, int interpolation_mode, int padding_mode, bool align_corners) -> Tensor

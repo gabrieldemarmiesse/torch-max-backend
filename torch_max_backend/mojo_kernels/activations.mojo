@@ -1,9 +1,8 @@
 import math
 from compiler import register
-from gpu.id import global_idx
 from runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor, foreach
-from utils import IndexList, StaticTuple
+from utils import IndexList
 
 
 @compiler.register("gelu_backward")
@@ -25,7 +24,6 @@ struct GeluBackwardKernel:
         fn func[
             width: Int,
         ](idx: IndexList[rank]) -> SIMD[dtype, width]:
-            var i = idx[0]
             var x = input.load[width](idx)
             var grad_out = grad_output.load[width](idx)
             var result = SIMD[dtype, width]()

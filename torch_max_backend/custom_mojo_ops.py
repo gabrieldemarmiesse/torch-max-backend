@@ -164,3 +164,22 @@ def ceil(input: MaxTensor) -> MaxTensor:
             TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
         ],
     )[0]
+
+
+def gelu_backward(
+    grad_output: MaxTensor, input: MaxTensor, *, approximate: str = "none"
+) -> MaxTensor:
+    """
+    Custom Mojo kernel for gelu_backward operation.
+    """
+    _register_kernels()
+
+    return F.custom(
+        name="gelu_backward",
+        device=input.device,
+        values=[grad_output, input],
+        parameters=dict(approximate=approximate),
+        out_types=[
+            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+        ],
+    )[0]
