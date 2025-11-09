@@ -1051,6 +1051,94 @@ def aten_argmin(
 
 
 # as_strided(Tensor(a) self, SymInt[] size, SymInt[] stride, SymInt? storage_offset=None) -> Tensor(a)
+@map_to(aten.as_strided)
+def aten_as_strided(
+    self: MaxTensor,
+    size: list[int],
+    stride: list[int],
+    storage_offset: int | None = None,
+) -> MaxTensor:
+    """
+    Create a view of the input tensor with the given size, stride, and storage offset.
+
+    Implementation strategy:
+    1. Create coordinate grids for each output dimension
+    2. Compute flat indices using stride formula: offset + sum(coord_i * stride_i)
+    3. Use gather to collect elements from flattened input
+    4. Reshape to target size
+
+    This works for both TensorValue (graph mode) and MaxEagerTensor (eager mode)
+    because it uses only tensor operations.
+    """
+    if storage_offset is None:
+        storage_offset = 0
+
+    # Handle empty tensor case
+    output_numel = 1
+    for s in size:
+        output_numel *= s
+
+    if output_numel == 0:
+        # Return empty tensor with correct shape and dtype
+        return F.reshape(self, size)
+
+    # Flatten input to access as 1D storage
+    flat_input = F.reshape(self, [-1])
+
+    # Build coordinate grids for each dimension
+    # We need to compute indices[i,j,k,...] = storage_offset + i*stride[0] + j*stride[1] + k*stride[2] + ...
+
+    # Get device from input tensor
+    device = self.device
+
+    # We'll build the indices step by step
+    # Start with storage offset for all output positions
+    flat_indices = F.constant(storage_offset, dtype=DType.int64, device=device)
+    flat_indices = F.broadcast_to(flat_indices, [output_numel])
+
+    # Calculate the contribution of each dimension to the flat index
+    # We need to convert multi-dimensional coordinates to flat indices
+    current_multiplier = 1
+    for dim_idx in range(len(size) - 1, -1, -1):
+        # For each output position, calculate which coordinate it has in this dimension
+        # coordinate_in_dim = (flat_position // current_multiplier) % size[dim_idx]
+        dim_range = F.range(
+            Dim(0),
+            Dim(output_numel),
+            Dim(1),
+            out_dim=Dim(output_numel),
+            device=device,
+            dtype=DType.int64,
+        )
+
+        # Calculate coordinate in this dimension for each output position
+        # Use floor division and modulo, cast back to int64 to prevent type promotion
+        if current_multiplier > 1:
+            coord_in_dim = F.floor(dim_range / current_multiplier)
+            coord_in_dim = F.mod(coord_in_dim, size[dim_idx])
+        else:
+            coord_in_dim = F.mod(dim_range, size[dim_idx])
+
+        # Cast to int64 to prevent type promotion in multiplication
+        coord_in_dim = F.cast(coord_in_dim, dtype=DType.int64)
+
+        # Add contribution: coord * stride (use constant to avoid type promotion)
+        stride_const = F.constant(stride[dim_idx], dtype=DType.int64, device=device)
+        contribution = coord_in_dim * stride_const
+        flat_indices = flat_indices + contribution
+
+        # Update multiplier for next dimension
+        current_multiplier *= size[dim_idx]
+
+    # Gather elements from flat input using computed indices
+    result_flat = F.gather(flat_input, flat_indices, axis=0)
+
+    # Reshape to target size
+    result = F.reshape(result_flat, size)
+
+    return result
+
+
 # asin(Tensor self) -> Tensor
 
 

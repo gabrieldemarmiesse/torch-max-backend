@@ -177,6 +177,9 @@ register_aten_op("aten::arange")(wrap_for_max_device(aten_functions.aten_arange)
 
 register_aten_op("aten::argmax")(wrap_for_max_device(aten_functions.aten_argmax))
 register_aten_op("aten::argmin")(wrap_for_max_device(aten_functions.aten_argmin))
+register_aten_op("aten::as_strided")(
+    wrap_for_max_device(aten_functions.aten_as_strided)
+)
 register_aten_op("aten::asinh")(wrap_for_max_device(aten_functions.aten_asinh))
 register_aten_op("aten::atanh")(wrap_for_max_device(aten_functions.aten_atanh))
 
