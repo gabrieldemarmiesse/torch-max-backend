@@ -1722,7 +1722,11 @@ def aten_gelu_backward(
     """
     if approximate not in ("none", "tanh"):
         raise ValueError(
-            f"approximate argument must be either 'none' or 'tanh', got '{approximate}'"
+            f"Invalid approximate argument '{approximate}'. "
+            f"Supported values are:\n"
+            f"  - 'none': Exact GELU using error function (erf)\n"
+            f"  - 'tanh': Tanh approximation of GELU (faster, slightly less accurate)\n"
+            f"See PyTorch documentation for details on approximation trade-offs."
         )
 
     return custom_mojo_ops.gelu_backward(grad_output, input, approximate=approximate)

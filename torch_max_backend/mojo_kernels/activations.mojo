@@ -28,6 +28,7 @@ struct GeluBackwardKernel:
             var grad_out = grad_output.load[width](idx)
             var result = SIMD[dtype, width]()
 
+            @parameter
             if approximate == "none":
                 # Exact GELU backward using error function
                 # Formula: grad = dy * (CDF + x * PDF)
@@ -74,6 +75,10 @@ struct GeluBackwardKernel:
 
                 # Total gradient
                 result = grad_out * (left_derivative + right_derivative)
+            else:
+                # This should never be reached as we validate approximate mode in Python
+                # with a clear error message. Return zeros as safe fallback.
+                result = SIMD[dtype, width](0)
             return result
 
         foreach[
