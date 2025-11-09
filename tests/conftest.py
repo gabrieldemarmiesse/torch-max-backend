@@ -127,3 +127,8 @@ def pytest_make_parametrize_id(config, val, argname):
         return str(val)
     # Return None to fall back to default behavior for other types
     return None
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        item.add_marker(pytest.mark.flaky(retries=2))

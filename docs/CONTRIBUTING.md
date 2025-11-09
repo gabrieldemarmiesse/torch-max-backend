@@ -7,6 +7,25 @@ Thank you for your interest in contributing to the Torch MAX Backend project! Th
 - **uv**: Package manager for dependency management
 - **Git**: For version control
 
+## AI Agent Development
+
+This project uses `AGENTS.md` as the primary documentation file for AI agents working with the codebase. The file contains comprehensive guidance for understanding the project structure, development workflow, and implementation patterns.
+
+### For AI Agents
+
+- **Primary Documentation**: Use `AGENTS.md` in the project root for all development guidance
+- **Legacy Support**: If your agent specifically looks for `MY_AGENT.md`, you can create a symlink:
+  ```bash
+  ln -s AGENTS.md MY_AGENT.md
+  ```
+- **Git Ignore**: The symlink (`MY_AGENT.md`) should be added to `.gitignore` to avoid committing it
+
+The `AGENTS.md` file contains detailed information about:
+- Project architecture and execution modes
+- Step-by-step guides for adding new operations
+- Testing strategies and debugging tools
+- Code quality standards and development workflow
+
 ## Getting Started
 
 ### 1. Fork and Clone the Repository

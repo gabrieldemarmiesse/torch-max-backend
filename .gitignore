@@ -24,4 +24,6 @@ gemma-3-270m-it/
 .vscode/
 
 # Qwen Code files
+# Agent documentation files (use AGENTS.md instead)
+CLAUDE.md
 QWEN.md

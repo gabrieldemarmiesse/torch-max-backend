@@ -14,6 +14,7 @@ dependencies = [
     "tabulate",
     "torch",
     "beartype>=0.17.0",
+    "pytest-retry>=1.7.0",
 ]
 
 [project.urls]
@@ -74,10 +75,10 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "mblack==25.7.0.dev2025102405",
-    "max==25.7.0.dev2025102405",
-    "max-core==25.7.0.dev2025102405",
-    "mojo-compiler==0.25.7.0.dev2025102405",
+    "mblack==25.7.0.dev2025110905",
+    "max==25.7.0.dev2025110905",
+    "max-core==25.7.0.dev2025110905",
+    "mojo-compiler==0.25.7.0.dev2025110905",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",

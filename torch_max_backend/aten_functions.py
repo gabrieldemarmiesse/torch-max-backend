@@ -12,7 +12,6 @@ import os
 from typing import Literal
 
 import max.graph.type as max_type
-import numpy as np
 import torch
 from max.dtype import DType
 from max.experimental import functional as F
@@ -2082,6 +2081,28 @@ def aten_min(
         return (values, indices)
 
 
+# min.dim_min(Tensor self, int dim, bool keepdim=False, *, Tensor(a!) min, Tensor(b!) min_indices) -> (Tensor(a!) values, Tensor(b!) indices)
+def aten_min_dim_min(
+    input: MaxTensor,
+    dim: int,
+    keepdim: bool = False,
+    min: MaxTensor | None = None,
+    min_indices: MaxTensor | None = None,
+) -> tuple[MaxTensor, MaxTensor]:
+    """
+    Out-variant of torch.min along a dimension.
+    Computes minimum values and indices, writing results to pre-allocated tensors.
+
+    This is used by PyTorch's dispatcher in eager mode when calling torch.min(x, dim=dim).
+    """
+    # Compute the results using the regular min implementation
+    values, indices = aten_min(input, dim=dim, keepdim=keepdim)
+
+    # For graph mode, just return the computed values (output tensors are not used)
+    # For eager mode, the registration wrapper will handle copying to output tensors
+    return (values, indices)
+
+
 # minimum(Tensor self, Tensor other) -> Tensor
 @map_to(aten.minimum)
 def aten_minimum(x: MaxTensor, y: MaxTensor) -> MaxTensor:
@@ -2462,7 +2483,7 @@ def aten_select_scatter(
     # Handle negative index
     dim_size = input.shape[dim]
     if index < 0:
-        index = index + dim_size
+        index = index + dim_size.dim
 
     # Step 1: Create a range tensor for the dimension to build the mask
     indices = F.range(0, dim_size, 1, dtype=DType.int64, device=input.device)
@@ -2681,21 +2702,63 @@ def aten_stack(tensors: list[MaxTensor], dim: int = 0) -> MaxTensor:
 # tril(Tensor self, int diagonal=0) -> Tensor
 @map_to(aten.tril)
 def aten_tril(input: MaxTensor, diagonal: int = 0) -> MaxTensor:
-    # Max doesn't have tril built-in, so we get around this. It should be pretty
-    # easy to implement on cpu and gpu though.
-    shape = input.shape
+    # tril keeps the lower triangular part of the matrix
+    # diagonal=0: keep main diagonal and below
+    # diagonal>0: include k diagonals above main (shift cutoff down)
+    # diagonal<0: exclude |k| diagonals below main (shift cutoff up)
+    if diagonal >= 0:
+        # Include diagonal bands above the main diagonal and all below
+        num_upper = diagonal
 
-    for i in range(len(shape)):
-        if not isinstance(shape[i], StaticDim):
-            raise ValueError(f"Input dims must be static, got shape {shape}")
+        # Only apply bounds check if we have static dimensions
+        shape = input.shape
+        if len(shape) >= 2:
+            dim_n = shape[-1]
+            # Check if dimension is static by trying to convert to int
+            try:
+                dim_n_val = int(dim_n)
+                # Dimension can be converted to int, it is static
+                # Clamp num_upper to avoid out of bounds error
+                # num_upper can't be larger than the number of columns - 1
+                num_upper = min(num_upper, dim_n_val - 1)
+            except (TypeError, ValueError):
+                # Dimension is dynamic, don't apply bounds check
+                pass
 
-    shape_ints = [int(dim) for dim in shape]
+        return F.band_part(input, num_lower=None, num_upper=num_upper)
+    else:
+        # Exclude diagonal bands by using exclude with the inverse band
+        # We want to zero out everything above and including (-diagonal-1) diagonals below main
+        # This is equivalent to keeping only bands starting from -diagonal below main
+        # band_part doesn't directly support this, so we need a workaround
+        # We can use exclude=True to invert the selection
 
-    numpy_mask = np.ones(shape_ints, dtype=input.dtype.to_numpy())
-    numpy_mask = np.tril(numpy_mask, k=diagonal)
-    mask_in_graph = F.constant(numpy_mask, dtype=input.dtype, device=input.device)
-    result = input * mask_in_graph
-    return result
+        # Only apply bounds check if we have static dimensions
+        shape = input.shape
+        lower_limit = -diagonal - 1
+
+        # Check if the last two dimensions are static (not dynamic)
+        if len(shape) >= 2:
+            dim_m = shape[-2]
+            dim_n = shape[-1]
+            # Check if both dimensions are static
+            # Dim objects with a value set are static, check if we can convert to int
+            try:
+                dim_m_val = int(dim_m)
+                dim_n_val = int(dim_n)
+                # Both dimensions can be converted to int, they are static
+                min_dim = min(dim_m_val, dim_n_val)
+                # Clamp lower_limit to avoid out of bounds error
+                if -diagonal >= min_dim:
+                    # If -diagonal >= min_dim, the result is all zeros
+                    lower_limit = min_dim - 1
+                else:
+                    lower_limit = -diagonal - 1
+            except (TypeError, ValueError):
+                # At least one dimension is dynamic, use original lower_limit
+                pass
+
+        return F.band_part(input, num_lower=lower_limit, num_upper=None, exclude=True)
 
 
 # triu(Tensor self, int diagonal=0) -> Tensor
