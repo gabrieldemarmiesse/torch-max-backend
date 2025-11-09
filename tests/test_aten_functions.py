@@ -135,9 +135,9 @@ def test_adaptive_avg_pool2d_backward_half_precision(conf: Conf, dtype: torch.dt
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype):
     """Test _scaled_dot_product_flash_attention basic functionality"""
-    # Flash attention only works on CUDA
-    if conf.device != "cuda:0":
-        pytest.skip("Flash attention is only supported on CUDA")
+    # Flash attention only works on CUDA natively, but we have CPU fallback for testing
+    # if conf.device != "cuda:0":
+    #     pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
@@ -156,9 +156,9 @@ def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_scaled_dot_product_flash_attention_with_causal(conf: Conf, dtype: str):
     """Test _scaled_dot_product_flash_attention with causal masking"""
-    # Flash attention only works on CUDA
-    if conf.device != "cuda:0":
-        pytest.skip("Flash attention is only supported on CUDA")
+    # Flash attention only works on CUDA natively, but we have CPU fallback for testing
+    # if conf.device != "cuda:0":
+    #     pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
@@ -177,9 +177,9 @@ def test_scaled_dot_product_flash_attention_with_causal(conf: Conf, dtype: str):
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_scaled_dot_product_flash_attention_with_scale(conf: Conf, dtype):
     """Test _scaled_dot_product_flash_attention with custom scale"""
-    # Flash attention only works on CUDA
-    if conf.device != "cuda:0":
-        pytest.skip("Flash attention is only supported on CUDA")
+    # Flash attention only works on CUDA natively, but we have CPU fallback for testing
+    # if conf.device != "cuda:0":
+    #     pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
         return torch.ops.aten._scaled_dot_product_flash_attention(
