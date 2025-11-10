@@ -364,6 +364,9 @@ register_aten_op("aten::permute")(wrap_for_max_device(aten_functions.aten_permut
 register_aten_op("aten::pow.Tensor_Scalar")(
     wrap_for_max_device(aten_functions.aten_pow)
 )
+register_aten_op("aten::pow.Scalar_out")(
+    wrap_for_max_device(aten_functions.aten_pow_scalar_out)
+)
 
 register_aten_op("aten::pow.Tensor_Tensor")(
     wrap_for_max_device(aten_functions.aten_pow)
