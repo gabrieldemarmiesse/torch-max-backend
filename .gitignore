@@ -27,3 +27,4 @@ gemma-3-270m-it/
 # Agent documentation files (use AGENTS.md instead)
 CLAUDE.md
 QWEN.md
+.testmondata*
