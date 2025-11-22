@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "A PyTorch backend implemented using Modular's MAX framework"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "max",
     "tabulate",
@@ -47,6 +47,9 @@ max-core = [
 mojo-compiler = [
     { index = "modular-nightly" },
 ]
+max-mojo-libs = [
+    { index = "modular-nightly" },
+]
 torch = [
     { index = "pytorch-nightly" },
 ]
@@ -75,10 +78,10 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "mblack==25.7.0.dev2025110905",
-    "max==25.7.0.dev2025110905",
-    "max-core==25.7.0.dev2025110905",
-    "mojo-compiler==0.25.7.0.dev2025110905",
+    "max==26.1.0.dev2025112105",
+    "max-core==26.1.0.dev2025112105",
+    "max-mojo-libs==26.1.0.dev2025112105",
+    "mojo-compiler==0.26.1.0.dev2025112105",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",
