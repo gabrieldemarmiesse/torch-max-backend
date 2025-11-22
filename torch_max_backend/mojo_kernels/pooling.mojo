@@ -1,6 +1,7 @@
 from compiler import register
 from itertools import product
 from math import ceildiv
+from memory import LegacyUnsafePointer as UnsafePointer
 from os import Atomic
 from runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor, ManagedTensorSlice
@@ -9,6 +10,74 @@ from gpu import global_idx
 from gpu.host import DeviceBuffer
 from gpu.host.info import is_cpu
 from layout import Layout, LayoutTensor, RuntimeLayout
+
+
+fn _adaptive_avg_pool2d_backward_gpu_kernel[
+    dtype: DType
+](
+    grad_input_ptr: UnsafePointer[Scalar[dtype]],
+    grad_output_ptr: UnsafePointer[Scalar[dtype]],
+    batch_size: Int,
+    channels: Int,
+    input_height: Int,
+    input_width: Int,
+    output_height: Int,
+    output_width: Int,
+):
+    """GPU kernel for adaptive average pool 2D backward pass."""
+    # Global thread index
+    var tid = global_idx.x
+
+    # Total number of output elements across all batches and channels
+    var total_output_elements = (
+        batch_size * channels * output_height * output_width
+    )
+
+    if tid >= UInt(total_output_elements):
+        return
+
+    # Compute which output position this thread is processing
+    var tid_int = Int(tid)
+    var ow = tid_int % output_width
+    var tid_remaining = tid_int // output_width
+    var oh = tid_remaining % output_height
+    tid_remaining = tid_remaining // output_height
+    var c = tid_remaining % channels
+    var n = tid_remaining // channels
+
+    # Compute input region bounds using adaptive pooling formula
+    var ih_start = (oh * input_height) // output_height
+    var ih_end = ((oh + 1) * input_height + output_height - 1) // output_height
+    var iw_start = (ow * input_width) // output_width
+    var iw_end = ((ow + 1) * input_width + output_width - 1) // output_width
+
+    # Compute region size
+    var kh = ih_end - ih_start
+    var kw = iw_end - iw_start
+    var region_size = kh * kw
+
+    # Get gradient value at this output position
+    var grad_output_idx = (
+        n * (channels * output_height * output_width)
+        + c * (output_height * output_width)
+        + oh * output_width
+        + ow
+    )
+    var grad_val = grad_output_ptr[grad_output_idx]
+
+    # Compute gradient delta (divided by region size for averaging)
+    var grad_delta = grad_val / Scalar[dtype](region_size)
+
+    # Distribute gradient to all input positions in this region
+    # Use atomic add to handle race conditions (multiple threads may write to same input position)
+    for ih, iw in product(range(ih_start, ih_end), range(iw_start, iw_end)):
+        var grad_input_idx = (
+            n * (channels * input_height * input_width)
+            + c * (input_height * input_width)
+            + ih * input_width
+            + iw
+        )
+        _ = Atomic.fetch_add(grad_input_ptr + grad_input_idx, grad_delta)
 
 
 fn _adaptive_avg_pool2d_backward_cpu[
@@ -124,75 +193,6 @@ fn _adaptive_avg_pool2d_backward_gpu[
 
     alias block_dim = 256
 
-    @parameter
-    fn kernel[
-        dtype: DType
-    ](
-        grad_input_ptr: UnsafePointer[Scalar[dtype]],
-        grad_output_ptr: UnsafePointer[Scalar[dtype]],
-        batch_size: Int,
-        channels: Int,
-        input_height: Int,
-        input_width: Int,
-        output_height: Int,
-        output_width: Int,
-    ):
-        # Global thread index
-        var tid = global_idx.x
-
-        # Total number of output elements across all batches and channels
-        var total_output_elements = (
-            batch_size * channels * output_height * output_width
-        )
-
-        if tid >= UInt(total_output_elements):
-            return
-
-        # Compute which output position this thread is processing
-        var tid_int = Int(tid)
-        var ow = tid_int % output_width
-        var tid_remaining = tid_int // output_width
-        var oh = tid_remaining % output_height
-        tid_remaining = tid_remaining // output_height
-        var c = tid_remaining % channels
-        var n = tid_remaining // channels
-
-        # Compute input region bounds using adaptive pooling formula
-        var ih_start = (oh * input_height) // output_height
-        var ih_end = (
-            (oh + 1) * input_height + output_height - 1
-        ) // output_height
-        var iw_start = (ow * input_width) // output_width
-        var iw_end = ((ow + 1) * input_width + output_width - 1) // output_width
-
-        # Compute region size
-        var kh = ih_end - ih_start
-        var kw = iw_end - iw_start
-        var region_size = kh * kw
-
-        # Get gradient value at this output position
-        var grad_output_idx = (
-            n * (channels * output_height * output_width)
-            + c * (output_height * output_width)
-            + oh * output_width
-            + ow
-        )
-        var grad_val = grad_output_ptr[grad_output_idx]
-
-        # Compute gradient delta (divided by region size for averaging)
-        var grad_delta = grad_val / Scalar[dtype](region_size)
-
-        # Distribute gradient to all input positions in this region
-        # Use atomic add to handle race conditions (multiple threads may write to same input position)
-        for ih, iw in product(range(ih_start, ih_end), range(iw_start, iw_end)):
-            var grad_input_idx = (
-                n * (channels * input_height * input_width)
-                + c * (input_height * input_width)
-                + ih * input_width
-                + iw
-            )
-            _ = Atomic.fetch_add(grad_input_ptr + grad_input_idx, grad_delta)
-
     var total_output_elements = (
         batch_size * channels * output_height * output_width
     )
@@ -217,7 +217,8 @@ fn _adaptive_avg_pool2d_backward_gpu[
     device_ctx.enqueue_memset(grad_input_device, Scalar[dtype](0))
 
     # Launch the kernel
-    device_ctx.enqueue_function_checked[kernel[dtype], kernel[dtype]](
+    alias kernel = _adaptive_avg_pool2d_backward_gpu_kernel[dtype]
+    device_ctx.enqueue_function_checked[kernel, kernel](
         grad_input_device,
         grad_output_device,
         batch_size,
