@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "(python_full_version >= '3.12' and platform_machine != 'aarch64') or (python_full_version >= '3.12' and sys_platform != 'linux')",
@@ -93,6 +93,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/26/b9924fa27db384bdcd97ab83b4f0a8058d96ad9626ead570674d5e737d90/charset_normalizer-3.4.4-cp313-cp313-win_amd64.whl", hash = "sha256:b435cba5f4f750aa6c0a0d92c541fb79f69a387c91e61f1795227e4ed9cece14", size = 107092, upload-time = "2025-10-14T04:41:31.188Z" },
     { url = "https://files.pythonhosted.org/packages/af/8f/3ed4bfa0c0c72a7ca17f0380cd9e4dd842b09f664e780c13cff1dcf2ef1b/charset_normalizer-3.4.4-cp313-cp313-win_arm64.whl", hash = "sha256:542d2cee80be6f80247095cc36c418f7bddd14f4a6de45af91dfad36d817bba2", size = 100408, upload-time = "2025-10-14T04:41:32.624Z" },
     { url = "https://files.pythonhosted.org/packages/0a/4c/925909008ed5a988ccbb72dcc897407e5d6d3bd72410d69e051fc0c14647/charset_normalizer-3.4.4-py3-none-any.whl", hash = "sha256:7a32c560861a02ff789ad905a2fe94e3f840803362c84fecf1851cb4cf3dc37f", size = 53402, upload-time = "2025-10-14T04:42:31.76Z" },
+]
+
+[[package]]
+name = "click"
+version = "8.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065, upload-time = "2025-11-15T20:45:42.706Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/78/01c019cdb5d6498122777c1a43056ebb3ebfeef2076d9d026bfe15583b2b/click-8.3.1-py3-none-any.whl", hash = "sha256:981153a64e25f12d547d3426c367a4857371575ee7ad18df2a6183ab0545b2a6", size = 108274, upload-time = "2025-11-15T20:45:41.139Z" },
 ]
 
 [[package]]
@@ -699,11 +711,40 @@ wheels = [
 ]
 
 [[package]]
+name = "mblack"
+version = "26.1.0.dev2025112105"
+source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
+dependencies = [
+    { name = "click" },
+    { name = "mypy-extensions" },
+    { name = "pathspec" },
+    { name = "platformdirs" },
+]
+wheels = [
+    { url = "https://dl.modular.com/public/nightly/python/mblack-26.1.0.dev2025112105-py3-none-any.whl", hash = "sha256:842c4916bc395280a039910dba445a05ca99842cf32302b3e0e0d6fe0a68cff5" },
+]
+
+[[package]]
 name = "mdurl"
 version = "0.1.2"
 source = { registry = "https://download.pytorch.org/whl/nightly/cu128" }
 wheels = [
     { url = "https://download.pytorch.org/whl/nightly/mdurl-0.1.2-py3-none-any.whl" },
+]
+
+[[package]]
+name = "mojo"
+version = "0.26.1.0.dev2025112105"
+source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
+dependencies = [
+    { name = "mblack" },
+    { name = "mojo-compiler" },
+    { name = "mojo-lldb-libs" },
+]
+wheels = [
+    { url = "https://dl.modular.com/public/nightly/python/mojo-0.26.1.0.dev2025112105-py3-none-macosx_13_0_arm64.whl", hash = "sha256:5a30e093e9d9d222e1eb7257618af262a5d3c8ad5a5db48724e9e047dbee128a" },
+    { url = "https://dl.modular.com/public/nightly/python/mojo-0.26.1.0.dev2025112105-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:b072b20749873c5684956b2b8a5296979232d751fcc7dbacc34818718670fb99" },
+    { url = "https://dl.modular.com/public/nightly/python/mojo-0.26.1.0.dev2025112105-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:2bc846b7aa0b9bb7e7de7b7507d0c0cedd940f16607a9c2551561c494d8c75d9" },
 ]
 
 [[package]]
@@ -717,11 +758,30 @@ wheels = [
 ]
 
 [[package]]
+name = "mojo-lldb-libs"
+version = "0.26.1.0.dev2025112105"
+source = { registry = "https://dl.modular.com/public/nightly/python/simple/" }
+wheels = [
+    { url = "https://dl.modular.com/public/nightly/python/mojo_lldb_libs-0.26.1.0.dev2025112105-py3-none-macosx_13_0_arm64.whl", hash = "sha256:702ac43f985cfabb9ba08b7ea4df46288d7e702ddc9ab9e13e6ecd4a3408edcd" },
+    { url = "https://dl.modular.com/public/nightly/python/mojo_lldb_libs-0.26.1.0.dev2025112105-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:1de7276cfbe71ded311ddabd54cb38740687965bc14ce0fca18fa2134de290f0" },
+    { url = "https://dl.modular.com/public/nightly/python/mojo_lldb_libs-0.26.1.0.dev2025112105-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:618a6008ea0b29cbabb86b9fcacf606c24edb288a0f46d3d31021600af713ee6" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://download.pytorch.org/whl/nightly/cu128" }
 wheels = [
     { url = "https://download.pytorch.org/whl/nightly/mpmath-1.3.0-py3-none-any.whl" },
+]
+
+[[package]]
+name = "mypy-extensions"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8dac321cda606860fa4548858c0cc45d9d1d4ca2628b/mypy_extensions-1.1.0.tar.gz", hash = "sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558", size = 6343, upload-time = "2025-04-22T14:54:24.164Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
 ]
 
 [[package]]
@@ -905,10 +965,10 @@ wheels = [
 [[package]]
 name = "nvidia-nvshmem-cu12"
 version = "3.3.24"
-source = { registry = "https://pypi.org/simple" }
+source = { registry = "https://download.pytorch.org/whl/nightly/cu128" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/ce/6b73d2c3cdeb2202a4a79115e543087ca024306c4d290fffd5cfc8d5009d/nvidia_nvshmem_cu12-3.3.24-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:f8666e4d2adffe846c264a836263b53fa5d7b725f0c508e36b40c3d4f9665e2a", size = 138990167, upload-time = "2025-08-22T19:56:19.001Z" },
-    { url = "https://files.pythonhosted.org/packages/ac/49/7e1e3e98f5b8ae79f21260f9a90d8d985e5ad67b69b90b09456fc3c01a18/nvidia_nvshmem_cu12-3.3.24-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:0032831c0ec4fdc64c3bd8daeae588f6647ee4afc3376c5871218546acac0e81", size = 139158697, upload-time = "2025-08-22T19:56:39.552Z" },
+    { url = "https://pypi.nvidia.com/nvidia-nvshmem-cu12/nvidia_nvshmem_cu12-3.3.24-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:f8666e4d2adffe846c264a836263b53fa5d7b725f0c508e36b40c3d4f9665e2a" },
+    { url = "https://pypi.nvidia.com/nvidia-nvshmem-cu12/nvidia_nvshmem_cu12-3.3.24-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:0032831c0ec4fdc64c3bd8daeae588f6647ee4afc3376c5871218546acac0e81" },
 ]
 
 [[package]]
@@ -998,6 +1058,15 @@ wheels = [
     { url = "https://download.pytorch.org/whl/nightly/pillow-12.0.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" },
     { url = "https://download.pytorch.org/whl/nightly/pillow-12.0.0-cp313-cp313t-win_amd64.whl" },
     { url = "https://download.pytorch.org/whl/nightly/pillow-12.0.0-cp313-cp313t-win_arm64.whl" },
+]
+
+[[package]]
+name = "platformdirs"
+version = "4.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/61/33/9611380c2bdb1225fdef633e2a9610622310fed35ab11dac9620972ee088/platformdirs-4.5.0.tar.gz", hash = "sha256:70ddccdd7c99fc5942e9fc25636a8b34d04c24b335100223152c2803e4063312", size = 21632, upload-time = "2025-10-08T17:44:48.791Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/cb/ac7874b3e5d58441674fb70742e6c374b28b0c7cb988d37d991cde47166c/platformdirs-4.5.0-py3-none-any.whl", hash = "sha256:e578a81bb873cbb89a41fcc904c7ef523cc18284b7e3b3ccf06aca1403b7ebd3", size = 18651, upload-time = "2025-10-08T17:44:47.223Z" },
 ]
 
 [[package]]
@@ -1570,7 +1639,10 @@ dev = [
     { name = "max" },
     { name = "max-core" },
     { name = "max-mojo-libs" },
+    { name = "mblack" },
+    { name = "mojo" },
     { name = "mojo-compiler" },
+    { name = "mojo-lldb-libs" },
     { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -1607,7 +1679,10 @@ dev = [
     { name = "max", specifier = "==26.1.0.dev2025112105", index = "https://dl.modular.com/public/nightly/python/simple/" },
     { name = "max-core", specifier = "==26.1.0.dev2025112105", index = "https://dl.modular.com/public/nightly/python/simple/" },
     { name = "max-mojo-libs", specifier = "==26.1.0.dev2025112105", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "mblack", specifier = "==26.1.0.dev2025112105", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "mojo", specifier = "==0.26.1.0.dev2025112105", index = "https://dl.modular.com/public/nightly/python/simple/" },
     { name = "mojo-compiler", specifier = "==0.26.1.0.dev2025112105", index = "https://dl.modular.com/public/nightly/python/simple/" },
+    { name = "mojo-lldb-libs", specifier = "==0.26.1.0.dev2025112105", index = "https://dl.modular.com/public/nightly/python/simple/" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=7.0.0" },

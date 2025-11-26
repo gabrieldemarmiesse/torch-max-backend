@@ -44,6 +44,12 @@ mblack = [
 max-core = [
     { index = "modular-nightly" },
 ]
+mojo = [
+    { index = "modular-nightly" },
+]
+mojo-lldb-libs = [
+    { index = "modular-nightly" },
+]
 mojo-compiler = [
     { index = "modular-nightly" },
 ]
@@ -81,6 +87,9 @@ dev = [
     "max==26.1.0.dev2025112105",
     "max-core==26.1.0.dev2025112105",
     "max-mojo-libs==26.1.0.dev2025112105",
+    "mojo==0.26.1.0.dev2025112105",
+    "mblack==26.1.0.dev2025112105",
+    "mojo-lldb-libs==0.26.1.0.dev2025112105",
     "mojo-compiler==0.26.1.0.dev2025112105",
     "hatchling",
     "ipython",
