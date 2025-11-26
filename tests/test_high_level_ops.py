@@ -1041,6 +1041,7 @@ def test_conv1d_padding(conf: Conf):
     check_outputs(fn, conf, [x, w])
 
 
+@pytest.mark.xfail(reason="Dilation not implemented yet on max")
 def test_conv1d_dilation(conf: Conf):
     """Test conv1d with dilation"""
 

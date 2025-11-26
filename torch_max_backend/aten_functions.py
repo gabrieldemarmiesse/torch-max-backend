@@ -1308,13 +1308,20 @@ def aten_convolution(
     input_rank = len(input.shape)
 
     if input_rank == 3:  # 1D convolution: [N, C, L]
+        # Check for unsupported dilation
+        if dilation[0] != 1:
+            raise NotImplementedError(
+                "Non-unit dilation is not supported for conv1d yet. "
+                "MAX conv2d backend does not support dilation > 1."
+            )
+
         # Convert single values to tuples with dummy dimensions for 2D convolution
         stride_2d = (stride[0], 1)  # stride along length, dummy for height
         dilation_2d = (dilation[0], 1)
 
         # Handle padding: convert to 2D format (pad_h_before, pad_h_after, pad_w_before, pad_w_after)
-        # No height padding, width padding on both sides
-        padding_2d = (0, 0, padding[0], padding[0])
+        # Apply padding to height (length) dimension, no padding on width (dummy) dimension
+        padding_2d = (padding[0], padding[0], 0, 0)
 
         # Convert input from NCL to NCLW (add dummy width dimension)
         # NCL: [batch, channels, length] -> NCLW: [batch, channels, length, 1]
