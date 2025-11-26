@@ -878,6 +878,21 @@ wheels = [
 ]
 
 [[package]]
+name = "mojo"
+version = "0.25.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mblack" },
+    { name = "mojo-compiler" },
+    { name = "mojo-lldb-libs" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/06/ad11f26082034c139b35ca1326bfc4cce2689a5d86088031355dbc7da3c8/mojo-0.25.7.0-py3-none-macosx_13_0_arm64.whl", hash = "sha256:cc17d82b4c41428538c99e937ec813db4605469fab036a45309fc72da0c5de7c", size = 16829240, upload-time = "2025-11-20T16:36:36.441Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/d6/8d1c5a060d77451d726142a7f353460f969f49cee1b59fcf46e1b68af0ca/mojo-0.25.7.0-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:5397ea571817e279cbe9a0864c89f7ba8266f503bb6a6499a3e8da168113eac8", size = 24935294, upload-time = "2025-11-20T16:36:30.152Z" },
+    { url = "https://files.pythonhosted.org/packages/73/8e/0544e245418b9bfde555372619dedb57cfe7f5ba8388e8a847137026423f/mojo-0.25.7.0-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:853e7fe57fb5ad101e4f5cddd9903e16cdf639ddade4b0112f1a5902f5bed571", size = 24644888, upload-time = "2025-11-20T16:37:24.533Z" },
+]
+
+[[package]]
 name = "mojo-compiler"
 version = "0.25.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -885,6 +900,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2c/c8/69e66f0a8f67d85afe64ed266168e7e72dc2c074e60623aae4e8d5238989/mojo_compiler-0.25.7.0-py3-none-macosx_13_0_arm64.whl", hash = "sha256:c8be11b6f17be249ef89748b56c4ff82c60d840995aeb95c739ce3bae2483fe1", size = 76593247, upload-time = "2025-11-20T16:36:11.999Z" },
     { url = "https://files.pythonhosted.org/packages/33/96/be2413eccf3c955534508ab66a044426f2a80a31b84af2204aad983d8e67/mojo_compiler-0.25.7.0-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:1d05455cff7513943c9582ea442547e22f0c266d6cd1d4be599999f183e09e32", size = 102371294, upload-time = "2025-11-20T16:37:16.625Z" },
     { url = "https://files.pythonhosted.org/packages/20/57/9ceec8ae8fadb733272093e267732d9f4f3388099eb3099ae8b27f8b6d8c/mojo_compiler-0.25.7.0-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:b67bfed9675e582b72d1e52dbf64e9b8f13c47dcdf55f855cb889d2ba9a395a7", size = 104405750, upload-time = "2025-11-20T16:36:43.192Z" },
+]
+
+[[package]]
+name = "mojo-lldb-libs"
+version = "0.25.7.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9a/4f/0b3bc49f07606d04e5db2323edea47bf453ddea04172401120a80498c5db/mojo_lldb_libs-0.25.7.0-py3-none-macosx_13_0_arm64.whl", hash = "sha256:184fa4494f4444d0888be764fa280896f78f51f1347174d508f04d5950723e74", size = 76303307, upload-time = "2025-11-20T16:37:11.127Z" },
+    { url = "https://files.pythonhosted.org/packages/df/8a/601defb30cfc5881fa7cbd3da473d417b43232f6f4f619bae73f68931e1c/mojo_lldb_libs-0.25.7.0-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:7a9cfd6d500e18b940a9c5eded2fd420a4c6f9ed5207ae8e7e7497f183aed8bf", size = 82841267, upload-time = "2025-11-20T16:36:25.11Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/61/8d8672fe67e84e45ad5aa23be0f59f782c06b583b98f41a8dc7dc1ebbc71/mojo_lldb_libs-0.25.7.0-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:0f55cbb92293de703e5dec0949441ca4bcf989de1f41db624b1a7e54c4867ca6", size = 83840404, upload-time = "2025-11-20T16:36:07.13Z" },
 ]
 
 [[package]]
@@ -1879,8 +1904,11 @@ dev = [
     { name = "matplotlib" },
     { name = "max" },
     { name = "max-core" },
+    { name = "max-mojo-libs" },
     { name = "mblack" },
+    { name = "mojo" },
     { name = "mojo-compiler" },
+    { name = "mojo-lldb-libs" },
     { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -1916,8 +1944,11 @@ dev = [
     { name = "matplotlib", specifier = ">=3.10.6" },
     { name = "max", specifier = "==25.7.0" },
     { name = "max-core", specifier = "==25.7.0" },
+    { name = "max-mojo-libs", specifier = "==25.7.0" },
     { name = "mblack", specifier = "==25.7.0" },
+    { name = "mojo", specifier = "==0.25.7.0" },
     { name = "mojo-compiler", specifier = "==0.25.7.0" },
+    { name = "mojo-lldb-libs", specifier = "==0.25.7.0" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
