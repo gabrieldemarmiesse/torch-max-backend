@@ -980,6 +980,160 @@ def test_conv2d_edge_cases(conf: Conf):
     check_outputs(fn1, conf, [x, w])
 
 
+def test_conv1d_basic(conf: Conf):
+    """Test basic conv1d with default parameters"""
+
+    def fn(x, w):
+        return F.conv1d(x, w)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv1d_with_bias(conf: Conf):
+    """Test conv1d with bias"""
+
+    def fn(x, w, b):
+        return F.conv1d(x, w, b)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+    b = torch.randn(out_channels)
+
+    check_outputs(fn, conf, [x, w, b])
+
+
+def test_conv1d_stride(conf: Conf):
+    """Test conv1d with stride"""
+
+    def fn(x, w):
+        return F.conv1d(x, w, stride=2)
+
+    batch_size, in_channels, length = 2, 3, 32
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv1d_padding(conf: Conf):
+    """Test conv1d with padding"""
+
+    def fn(x, w):
+        return F.conv1d(x, w, padding=2)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv1d_dilation(conf: Conf):
+    """Test conv1d with dilation"""
+
+    def fn(x, w):
+        return F.conv1d(x, w, dilation=2)
+
+    batch_size, in_channels, length = 2, 3, 32
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv1d_all_params(conf: Conf):
+    """Test conv1d with all parameters specified"""
+
+    def fn(x, w, b):
+        return F.conv1d(x, w, b, stride=2, padding=1, dilation=1)
+
+    batch_size, in_channels, length = 2, 3, 32
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+    b = torch.randn(out_channels)
+
+    check_outputs(fn, conf, [x, w, b])
+
+
+def test_conv1d_1x1_kernel(conf: Conf):
+    """Test conv1d with 1x1 kernel (pointwise convolution)"""
+
+    def fn(x, w):
+        return F.conv1d(x, w)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 1
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv1d_large_kernel(conf: Conf):
+    """Test conv1d with larger kernel"""
+
+    def fn(x, w):
+        return F.conv1d(x, w, padding=2)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 5
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+@pytest.mark.parametrize("size", [(1, 1, 8), (3, 8, 32), (2, 16, 64)])
+def test_conv1d_different_input_sizes(conf: Conf, size: tuple):
+    """Test conv1d with different input tensor sizes"""
+
+    def fn(x, w):
+        return F.conv1d(x, w, padding=1)
+
+    batch_size, in_channels, length = size
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv1d_edge_cases(conf: Conf):
+    """Test conv1d edge cases"""
+
+    # Single element output
+    def fn1(x, w):
+        return F.conv1d(x, w)
+
+    batch_size, in_channels = 1, 2
+    out_channels, kernel_size = 3, 3
+
+    x = torch.randn(batch_size, in_channels, 3)  # Exactly kernel size
+    w = torch.randn(out_channels, in_channels, kernel_size)
+
+    check_outputs(fn1, conf, [x, w])
+
+
 def test_conv2d_combined_with_other_ops(conf: Conf):
     """Test conv2d combined with other operations"""
 

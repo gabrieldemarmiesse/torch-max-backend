@@ -1295,7 +1295,7 @@ def aten_convolution(
     output_padding: list[SymIntType],
     groups: SymIntType,
 ) -> MaxTensor:
-    # For now, we only support the 2D case that maps to F.conv2d
+    # For now, we only support the non-transposed case without groups
     if transposed:
         raise NotImplementedError("Transposed convolution is not supported yet")
     if any(p != 0 for p in output_padding):
@@ -1304,46 +1304,100 @@ def aten_convolution(
     if groups != 1:
         raise NotImplementedError("Grouped convolution is not supported yet.")
 
-    if isinstance(stride, int):
-        stride = (stride, stride)
-    if isinstance(padding, int):
-        padding = (padding, padding, padding, padding)
-    elif isinstance(padding, str):
-        raise ValueError("Padding must be an int or a tuple of ints.")
-    elif isinstance(padding, tuple | list):
-        if len(padding) == 2:
-            # PyTorch padding=(pad_h, pad_w) -> MAX padding=(pad_h_before, pad_h_after, pad_w_before, pad_w_after)
-            padding = (padding[0], padding[0], padding[1], padding[1])
-        elif len(padding) == 4:
-            # Already in MAX format
-            padding = tuple(padding)
-        else:
-            raise ValueError(f"Unsupported padding length: {len(padding)}")
-    if isinstance(dilation, int):
-        dilation = (dilation, dilation)
+    # Determine if this is 1D or 2D convolution based on input dimensions
+    input_rank = len(input.shape)
 
-    # Convert input from NCHW (PyTorch default) to NHWC (MAX requirement)
-    # NCHW: [batch, channels, height, width] -> NHWC: [batch, height, width, channels]
-    input_nhwc = input.permute([0, 2, 3, 1])
+    if input_rank == 3:  # 1D convolution: [N, C, L]
+        # Convert single values to tuples with dummy dimensions for 2D convolution
+        stride_2d = (stride[0], 1)  # stride along length, dummy for height
+        dilation_2d = (dilation[0], 1)
 
-    # Convert weight from PyTorch OIHW: [out_channels, in_channels, kernel_h, kernel_w]
-    # to MAX RSCF: [kernel_h, kernel_w, in_channels, out_channels]
-    weight_rscf = weight.permute([2, 3, 1, 0])
+        # Handle padding: convert to 2D format (pad_h_before, pad_h_after, pad_w_before, pad_w_after)
+        # No height padding, width padding on both sides
+        padding_2d = (0, 0, padding[0], padding[0])
 
-    result = F.conv2d(
-        input_nhwc,
-        weight_rscf,
-        bias=bias,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        input_layout=max_type.ConvInputLayout.NHWC,
-        filter_layout=max_type.FilterLayout.RSCF,
-    )
+        # Convert input from NCL to NCLW (add dummy width dimension)
+        # NCL: [batch, channels, length] -> NCLW: [batch, channels, length, 1]
+        input_2d = F.unsqueeze(input, axis=-1)
 
-    # Convert result back from NHWC to NCHW for PyTorch compatibility
-    # NHWC: [batch, height, width, channels] -> NCHW: [batch, channels, height, width]
-    return result.permute([0, 3, 1, 2])
+        # Convert input from NCLW to NLWC (MAX requirement)
+        # NCLW: [batch, channels, length, 1] -> NLWC: [batch, length, 1, channels]
+        input_nlwc = input_2d.permute([0, 2, 3, 1])
+
+        # Convert weight from OIK to OI1K (add dummy height dimension)
+        # OIK: [out_channels, in_channels, kernel_size] -> OI1K: [out_channels, in_channels, 1, kernel_size]
+        weight_2d = F.unsqueeze(weight, axis=2)
+
+        # Convert weight from OI1K to K1IO (MAX RSCF equivalent)
+        # OI1K: [out_channels, in_channels, 1, kernel_size] -> K1IO: [kernel_size, 1, in_channels, out_channels]
+        weight_k1io = weight_2d.permute([3, 2, 1, 0])
+
+        result = F.conv2d(
+            input_nlwc,
+            weight_k1io,
+            bias=bias,
+            stride=stride_2d,
+            padding=padding_2d,
+            dilation=dilation_2d,
+            input_layout=max_type.ConvInputLayout.NHWC,
+            filter_layout=max_type.FilterLayout.RSCF,
+        )
+
+        # Convert result back from NLWC to NCLW
+        # NLWC: [batch, length, 1, channels] -> NCLW: [batch, channels, length, 1]
+        result_nclw = result.permute([0, 3, 1, 2])
+
+        # Remove dummy width dimension
+        # NCLW: [batch, channels, length, 1] -> NCL: [batch, channels, length]
+        return F.squeeze(result_nclw, axis=-1)
+
+    elif input_rank == 4:  # 2D convolution: [N, C, H, W]
+        # Handle 2D convolution parameters
+        if isinstance(stride, int):
+            stride = (stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding, padding, padding)
+        elif isinstance(padding, str):
+            raise ValueError("Padding must be an int or a tuple of ints.")
+        elif isinstance(padding, tuple | list):
+            if len(padding) == 2:
+                # PyTorch padding=(pad_h, pad_w) -> MAX padding=(pad_h_before, pad_h_after, pad_w_before, pad_w_after)
+                padding = (padding[0], padding[0], padding[1], padding[1])
+            elif len(padding) == 4:
+                # Already in MAX format
+                padding = tuple(padding)
+            else:
+                raise ValueError(f"Unsupported padding length: {len(padding)}")
+        if isinstance(dilation, int):
+            dilation = (dilation, dilation)
+
+        # Convert input from NCHW (PyTorch default) to NHWC (MAX requirement)
+        # NCHW: [batch, channels, height, width] -> NHWC: [batch, height, width, channels]
+        input_nhwc = input.permute([0, 2, 3, 1])
+
+        # Convert weight from PyTorch OIHW: [out_channels, in_channels, kernel_h, kernel_w]
+        # to MAX RSCF: [kernel_h, kernel_w, in_channels, out_channels]
+        weight_rscf = weight.permute([2, 3, 1, 0])
+
+        result = F.conv2d(
+            input_nhwc,
+            weight_rscf,
+            bias=bias,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            input_layout=max_type.ConvInputLayout.NHWC,
+            filter_layout=max_type.FilterLayout.RSCF,
+        )
+
+        # Convert result back from NHWC to NCHW for PyTorch compatibility
+        # NHWC: [batch, height, width, channels] -> NCHW: [batch, channels, height, width]
+        return result.permute([0, 3, 1, 2])
+
+    else:
+        raise ValueError(
+            f"Unsupported input rank for convolution: {input_rank}. Expected 3 (1D) or 4 (2D)."
+        )
 
 
 # convolution_backward(Tensor grad_output, Tensor input, Tensor weight, SymInt[]? bias_sizes, SymInt[] stride, SymInt[] padding, SymInt[] dilation, bool transposed, SymInt[] output_padding, SymInt groups, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
