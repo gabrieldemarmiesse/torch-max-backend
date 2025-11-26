@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "A PyTorch backend implemented using Modular's MAX framework"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11"
 dependencies = [
     "max",
     "tabulate",
@@ -34,34 +34,35 @@ select = [
     "UP", # pyupgrade
 ]
 
-[tool.uv.sources]
-max = [
-    { index = "modular-nightly" },
-]
-mblack = [
-    { index = "modular-nightly" },
-]
-max-core = [
-    { index = "modular-nightly" },
-]
-mojo = [
-    { index = "modular-nightly" },
-]
-mojo-lldb-libs = [
-    { index = "modular-nightly" },
-]
-mojo-compiler = [
-    { index = "modular-nightly" },
-]
-max-mojo-libs = [
-    { index = "modular-nightly" },
-]
-torch = [
-    { index = "pytorch-nightly" },
-]
-torchvision = [
-    { index = "pytorch-nightly" },
-]
+
+# [tool.uv.sources]
+# max = [
+#     { index = "modular-nightly" },
+# ]
+# mblack = [
+#     { index = "modular-nightly" },
+# ]
+# max-core = [
+#     { index = "modular-nightly" },
+# ]
+# mojo = [
+#     { index = "modular-nightly" },
+# ]
+# mojo-lldb-libs = [
+#     { index = "modular-nightly" },
+# ]
+# mojo-compiler = [
+#     { index = "modular-nightly" },
+# ]
+# max-mojo-libs = [
+#     { index = "modular-nightly" },
+# ]
+# torch = [
+#     { index = "pytorch-nightly" },
+# ]
+# torchvision = [
+#     { index = "pytorch-nightly" },
+# ]
 
 [[tool.uv.index]]
 name = "modular-nightly"
@@ -84,13 +85,13 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "max==26.1.0.dev2025112105",
-    "max-core==26.1.0.dev2025112105",
-    "max-mojo-libs==26.1.0.dev2025112105",
-    "mojo==0.26.1.0.dev2025112105",
-    "mblack==26.1.0.dev2025112105",
-    "mojo-lldb-libs==0.26.1.0.dev2025112105",
-    "mojo-compiler==0.26.1.0.dev2025112105",
+    "max==25.7.0",
+    "max-core==25.7.0",
+    "max-mojo-libs==25.7.0",
+    "mojo==0.25.7.0",
+    "mblack==25.7.0",
+    "mojo-lldb-libs==0.25.7.0",
+    "mojo-compiler==0.25.7.0",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",
