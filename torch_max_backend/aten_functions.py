@@ -1343,7 +1343,7 @@ def aten_convolution(
             result = F.conv2d_transpose(
                 input_nlwc,
                 weight_k1oi,
-                bias=bias,
+                bias=None,  # Add bias manually after layout conversion
                 stride=stride_2d,
                 padding=padding_2d,
                 dilation=dilation_2d,
@@ -1378,7 +1378,17 @@ def aten_convolution(
 
         # Remove dummy width dimension
         # NCLW: [batch, channels, length_out, 1] -> NCL: [batch, channels, length_out]
-        return F.squeeze(result_nclw, axis=-1)
+        result_ncl = F.squeeze(result_nclw, axis=-1)
+
+        # Add bias if provided (for transposed conv, bias was not added in conv2d_transpose)
+        if transposed and bias is not None:
+            # bias shape: [out_channels]
+            # result_ncl shape: [batch, out_channels, length_out]
+            # Reshape bias to [1, out_channels, 1] for broadcasting
+            bias_reshaped = F.reshape(bias, (1, bias.shape[0], 1))
+            result_ncl = result_ncl + bias_reshaped
+
+        return result_ncl
 
     elif input_rank == 4:  # 2D convolution: [N, C, H, W]
         # Handle 2D convolution parameters
@@ -1426,7 +1436,7 @@ def aten_convolution(
             result = F.conv2d_transpose(
                 input_nhwc,
                 weight_rscf,
-                bias=bias,
+                bias=None,  # Add bias manually after layout conversion
                 stride=stride,
                 padding=padding,
                 dilation=dilation,
@@ -1452,7 +1462,17 @@ def aten_convolution(
 
         # Convert result back from NHWC to NCHW for PyTorch compatibility
         # NHWC: [batch, height_out, width_out, channels] -> NCHW: [batch, channels, height_out, width_out]
-        return result.permute([0, 3, 1, 2])
+        result_nchw = result.permute([0, 3, 1, 2])
+
+        # Add bias if provided (for transposed conv, bias was not added in conv2d_transpose)
+        if transposed and bias is not None:
+            # bias shape: [out_channels]
+            # result_nchw shape: [batch, out_channels, height_out, width_out]
+            # Reshape bias to [1, out_channels, 1, 1] for broadcasting
+            bias_reshaped = F.reshape(bias, (1, bias.shape[0], 1, 1))
+            result_nchw = result_nchw + bias_reshaped
+
+        return result_nchw
 
     else:
         raise ValueError(
