@@ -34,25 +34,25 @@ select = [
     "UP", # pyupgrade
 ]
 
-[tool.uv.sources]
-max = [
-    { index = "modular-nightly" },
-]
-mblack = [
-    { index = "modular-nightly" },
-]
-max-core = [
-    { index = "modular-nightly" },
-]
-mojo-compiler = [
-    { index = "modular-nightly" },
-]
-torch = [
-    { index = "pytorch-nightly" },
-]
-torchvision = [
-    { index = "pytorch-nightly" },
-]
+#[tool.uv.sources]
+#max = [
+#    { index = "modular-nightly" },
+#]
+#mblack = [
+#    { index = "modular-nightly" },
+#]
+#max-core = [
+#    { index = "modular-nightly" },
+#]
+#mojo-compiler = [
+#    { index = "modular-nightly" },
+#]
+#torch = [
+#    { index = "pytorch-nightly" },
+#]
+#torchvision = [
+#    { index = "pytorch-nightly" },
+#]
 
 [[tool.uv.index]]
 name = "modular-nightly"
@@ -75,10 +75,10 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "mblack==25.7.0.dev2025110905",
-    "max==25.7.0.dev2025110905",
-    "max-core==25.7.0.dev2025110905",
-    "mojo-compiler==0.25.7.0.dev2025110905",
+    "mblack==25.7.0",
+    "max==25.7.0",
+    "max-core==25.7.0",
+    "mojo-compiler==0.25.7.0",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",
