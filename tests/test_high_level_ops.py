@@ -1135,6 +1135,220 @@ def test_conv1d_edge_cases(conf: Conf):
     check_outputs(fn1, conf, [x, w])
 
 
+def test_conv_transpose1d_basic(conf: Conf):
+    """Test basic conv_transpose1d"""
+
+    def fn(x, w):
+        return F.conv_transpose1d(x, w)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(in_channels, out_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose1d_with_bias(conf: Conf):
+    """Test conv_transpose1d with bias"""
+
+    def fn(x, w, b):
+        return F.conv_transpose1d(x, w, b)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(in_channels, out_channels, kernel_size)
+    b = torch.randn(out_channels)
+
+    check_outputs(fn, conf, [x, w, b])
+
+
+def test_conv_transpose1d_stride(conf: Conf):
+    """Test conv_transpose1d with stride"""
+
+    def fn(x, w):
+        return F.conv_transpose1d(x, w, stride=2)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(in_channels, out_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose1d_padding(conf: Conf):
+    """Test conv_transpose1d with padding"""
+
+    def fn(x, w):
+        return F.conv_transpose1d(x, w, padding=1)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 3, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(in_channels, out_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose1d_output_padding(conf: Conf):
+    """Test conv_transpose1d with output_padding"""
+
+    def fn(x, w):
+        return F.conv_transpose1d(x, w, stride=2, output_padding=1)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(in_channels, out_channels, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose1d_all_params(conf: Conf):
+    """Test conv_transpose1d with all parameters"""
+
+    def fn(x, w, b):
+        return F.conv_transpose1d(x, w, b, stride=2, padding=1, output_padding=1)
+
+    batch_size, in_channels, length = 2, 3, 16
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(in_channels, out_channels, kernel_size)
+    b = torch.randn(out_channels)
+
+    check_outputs(fn, conf, [x, w, b])
+
+
+def test_conv_transpose2d_basic(conf: Conf):
+    """Test basic conv_transpose2d"""
+
+    def fn(x, w):
+        return F.conv_transpose2d(x, w)
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(in_channels, out_channels, kernel_size, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose2d_with_bias(conf: Conf):
+    """Test conv_transpose2d with bias"""
+
+    def fn(x, w, b):
+        return F.conv_transpose2d(x, w, b)
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(in_channels, out_channels, kernel_size, kernel_size)
+    b = torch.randn(out_channels)
+
+    check_outputs(fn, conf, [x, w, b])
+
+
+def test_conv_transpose2d_stride_int(conf: Conf):
+    """Test conv_transpose2d with integer stride"""
+
+    def fn(x, w):
+        return F.conv_transpose2d(x, w, stride=2)
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(in_channels, out_channels, kernel_size, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose2d_stride_tuple(conf: Conf):
+    """Test conv_transpose2d with tuple stride"""
+
+    def fn(x, w):
+        return F.conv_transpose2d(x, w, stride=(2, 1))
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(in_channels, out_channels, kernel_size, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose2d_padding_int(conf: Conf):
+    """Test conv_transpose2d with integer padding"""
+
+    def fn(x, w):
+        return F.conv_transpose2d(x, w, padding=1)
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(in_channels, out_channels, kernel_size, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose2d_padding_tuple(conf: Conf):
+    """Test conv_transpose2d with tuple padding"""
+
+    def fn(x, w):
+        return F.conv_transpose2d(x, w, padding=(1, 2))
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(in_channels, out_channels, kernel_size, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose2d_output_padding(conf: Conf):
+    """Test conv_transpose2d with output_padding"""
+
+    def fn(x, w):
+        return F.conv_transpose2d(x, w, stride=2, output_padding=1)
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(in_channels, out_channels, kernel_size, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose2d_all_params(conf: Conf):
+    """Test conv_transpose2d with all parameters"""
+
+    def fn(x, w, b):
+        return F.conv_transpose2d(x, w, b, stride=2, padding=1, output_padding=1)
+
+    batch_size, in_channels, height, width = 2, 3, 8, 8
+    out_channels, kernel_size = 4, 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(in_channels, out_channels, kernel_size, kernel_size)
+    b = torch.randn(out_channels)
+
+    check_outputs(fn, conf, [x, w, b])
+
+
 def test_conv2d_combined_with_other_ops(conf: Conf):
     """Test conv2d combined with other operations"""
 

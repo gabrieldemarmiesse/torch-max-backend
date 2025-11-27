@@ -1295,12 +1295,7 @@ def aten_convolution(
     output_padding: list[SymIntType],
     groups: SymIntType,
 ) -> MaxTensor:
-    # For now, we only support the non-transposed case without groups
-    if transposed:
-        raise NotImplementedError("Transposed convolution is not supported yet")
-    if any(p != 0 for p in output_padding):
-        raise NotImplementedError("Output padding is not supported yet")
-
+    # Check for unsupported features
     if groups != 1:
         raise NotImplementedError("Grouped convolution is not supported yet.")
 
@@ -1323,6 +1318,9 @@ def aten_convolution(
         # Apply padding to height (length) dimension, no padding on width (dummy) dimension
         padding_2d = (padding[0], padding[0], 0, 0)
 
+        # Handle output_padding for transposed convolutions
+        output_padding_2d = (output_padding[0] if output_padding else 0, 0)
+
         # Convert input from NCL to NCLW (add dummy width dimension)
         # NCL: [batch, channels, length] -> NCLW: [batch, channels, length, 1]
         input_2d = F.unsqueeze(input, axis=-1)
@@ -1331,32 +1329,66 @@ def aten_convolution(
         # NCLW: [batch, channels, length, 1] -> NLWC: [batch, length, 1, channels]
         input_nlwc = input_2d.permute([0, 2, 3, 1])
 
-        # Convert weight from OIK to OI1K (add dummy height dimension)
-        # OIK: [out_channels, in_channels, kernel_size] -> OI1K: [out_channels, in_channels, 1, kernel_size]
-        weight_2d = F.unsqueeze(weight, axis=2)
+        if transposed:
+            # For transposed conv1d, weight is [in_channels, out_channels, kernel_size]
+            # Convert from IOK to IO1K (add dummy height dimension)
+            # IOK: [in_channels, out_channels, kernel_size] -> IO1K: [in_channels, out_channels, 1, kernel_size]
+            weight_2d = F.unsqueeze(weight, axis=2)
 
-        # Convert weight from OI1K to K1IO (MAX RSCF equivalent)
-        # OI1K: [out_channels, in_channels, 1, kernel_size] -> K1IO: [kernel_size, 1, in_channels, out_channels]
-        weight_k1io = weight_2d.permute([3, 2, 1, 0])
+            # Convert weight from IO1K to K1OI (MAX RSCF equivalent for transpose)
+            # For transpose conv, MAX expects: [kernel_h, kernel_w, out_channels, in_channels]
+            # IO1K: [in_channels, out_channels, 1, kernel_size] -> K1OI: [kernel_size, 1, out_channels, in_channels]
+            weight_k1oi = weight_2d.permute([3, 2, 1, 0])
 
-        result = F.conv2d(
-            input_nlwc,
-            weight_k1io,
-            bias=bias,
-            stride=stride_2d,
-            padding=padding_2d,
-            dilation=dilation_2d,
-            input_layout=max_type.ConvInputLayout.NHWC,
-            filter_layout=max_type.FilterLayout.RSCF,
-        )
+            result = F.conv2d_transpose(
+                input_nlwc,
+                weight_k1oi,
+                bias=None,  # Add bias manually after layout conversion
+                stride=stride_2d,
+                padding=padding_2d,
+                dilation=dilation_2d,
+                output_paddings=output_padding_2d,
+                input_layout=max_type.ConvInputLayout.NHWC,
+                filter_layout=max_type.FilterLayout.RSCF,
+            )
+        else:
+            # For regular conv1d, weight is [out_channels, in_channels, kernel_size]
+            # Convert weight from OIK to OI1K (add dummy height dimension)
+            # OIK: [out_channels, in_channels, kernel_size] -> OI1K: [out_channels, in_channels, 1, kernel_size]
+            weight_2d = F.unsqueeze(weight, axis=2)
+
+            # Convert weight from OI1K to K1IO (MAX RSCF equivalent)
+            # OI1K: [out_channels, in_channels, 1, kernel_size] -> K1IO: [kernel_size, 1, in_channels, out_channels]
+            weight_k1io = weight_2d.permute([3, 2, 1, 0])
+
+            result = F.conv2d(
+                input_nlwc,
+                weight_k1io,
+                bias=bias,
+                stride=stride_2d,
+                padding=padding_2d,
+                dilation=dilation_2d,
+                input_layout=max_type.ConvInputLayout.NHWC,
+                filter_layout=max_type.FilterLayout.RSCF,
+            )
 
         # Convert result back from NLWC to NCLW
-        # NLWC: [batch, length, 1, channels] -> NCLW: [batch, channels, length, 1]
+        # NLWC: [batch, length_out, 1, channels] -> NCLW: [batch, channels, length_out, 1]
         result_nclw = result.permute([0, 3, 1, 2])
 
         # Remove dummy width dimension
-        # NCLW: [batch, channels, length, 1] -> NCL: [batch, channels, length]
-        return F.squeeze(result_nclw, axis=-1)
+        # NCLW: [batch, channels, length_out, 1] -> NCL: [batch, channels, length_out]
+        result_ncl = F.squeeze(result_nclw, axis=-1)
+
+        # Add bias if provided (for transposed conv, bias was not added in conv2d_transpose)
+        if transposed and bias is not None:
+            # bias shape: [out_channels]
+            # result_ncl shape: [batch, out_channels, length_out]
+            # Reshape bias to [1, out_channels, 1] for broadcasting
+            bias_reshaped = F.reshape(bias, (1, bias.shape[0], 1))
+            result_ncl = result_ncl + bias_reshaped
+
+        return result_ncl
 
     elif input_rank == 4:  # 2D convolution: [N, C, H, W]
         # Handle 2D convolution parameters
@@ -1378,28 +1410,69 @@ def aten_convolution(
         if isinstance(dilation, int):
             dilation = (dilation, dilation)
 
+        # Handle output_padding for transposed convolutions
+        if isinstance(output_padding, int):
+            output_padding_tuple = (output_padding, output_padding)
+        elif isinstance(output_padding, tuple | list):
+            if len(output_padding) == 2:
+                output_padding_tuple = tuple(output_padding)
+            else:
+                raise ValueError(
+                    f"Unsupported output_padding length: {len(output_padding)}"
+                )
+        else:
+            output_padding_tuple = (0, 0)
+
         # Convert input from NCHW (PyTorch default) to NHWC (MAX requirement)
         # NCHW: [batch, channels, height, width] -> NHWC: [batch, height, width, channels]
         input_nhwc = input.permute([0, 2, 3, 1])
 
-        # Convert weight from PyTorch OIHW: [out_channels, in_channels, kernel_h, kernel_w]
-        # to MAX RSCF: [kernel_h, kernel_w, in_channels, out_channels]
-        weight_rscf = weight.permute([2, 3, 1, 0])
+        if transposed:
+            # For transposed conv2d, weight is [in_channels, out_channels, kernel_h, kernel_w]
+            # Convert from PyTorch IOHW to MAX RSCF (for transpose): [kernel_h, kernel_w, out_channels, in_channels]
+            # Note: For transpose conv, MAX expects out_channels before in_channels
+            weight_rscf = weight.permute([2, 3, 1, 0])
 
-        result = F.conv2d(
-            input_nhwc,
-            weight_rscf,
-            bias=bias,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            input_layout=max_type.ConvInputLayout.NHWC,
-            filter_layout=max_type.FilterLayout.RSCF,
-        )
+            result = F.conv2d_transpose(
+                input_nhwc,
+                weight_rscf,
+                bias=None,  # Add bias manually after layout conversion
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                output_paddings=output_padding_tuple,
+                input_layout=max_type.ConvInputLayout.NHWC,
+                filter_layout=max_type.FilterLayout.RSCF,
+            )
+        else:
+            # For regular conv2d, weight is [out_channels, in_channels, kernel_h, kernel_w]
+            # Convert from PyTorch OIHW to MAX RSCF: [kernel_h, kernel_w, in_channels, out_channels]
+            weight_rscf = weight.permute([2, 3, 1, 0])
+
+            result = F.conv2d(
+                input_nhwc,
+                weight_rscf,
+                bias=bias,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                input_layout=max_type.ConvInputLayout.NHWC,
+                filter_layout=max_type.FilterLayout.RSCF,
+            )
 
         # Convert result back from NHWC to NCHW for PyTorch compatibility
-        # NHWC: [batch, height, width, channels] -> NCHW: [batch, channels, height, width]
-        return result.permute([0, 3, 1, 2])
+        # NHWC: [batch, height_out, width_out, channels] -> NCHW: [batch, channels, height_out, width_out]
+        result_nchw = result.permute([0, 3, 1, 2])
+
+        # Add bias if provided (for transposed conv, bias was not added in conv2d_transpose)
+        if transposed and bias is not None:
+            # bias shape: [out_channels]
+            # result_nchw shape: [batch, out_channels, height_out, width_out]
+            # Reshape bias to [1, out_channels, 1, 1] for broadcasting
+            bias_reshaped = F.reshape(bias, (1, bias.shape[0], 1, 1))
+            result_nchw = result_nchw + bias_reshaped
+
+        return result_nchw
 
     else:
         raise ValueError(
