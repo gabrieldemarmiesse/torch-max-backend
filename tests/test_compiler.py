@@ -17,7 +17,11 @@ from torch_max_backend import (
     make_torch_op_from_mojo,
     max_backend,
 )
-from torch_max_backend.testing import check_functions_are_equivalent
+from torch_max_backend.testing import (
+    Conf,
+    check_functions_are_equivalent,
+    check_outputs,
+)
 
 
 def test_basic_training(device: str):
@@ -863,3 +867,11 @@ def test_mojo_custom_op_multi_dynamic_dims(device: str):
         [img, noise],
         fn_compiled=complexe_graph_compiled,
     )
+
+
+def test_input_mutation(conf: Conf):
+    def fn(x):
+        x[1] = 10.5
+
+    x = torch.randn(3, 4)
+    check_outputs(fn, conf, [x])
