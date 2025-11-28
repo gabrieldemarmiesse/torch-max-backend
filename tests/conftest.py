@@ -18,6 +18,8 @@ from torch_max_backend.torch_compile_backend import compiler
 
 # from torch_max_backend.max_device.log_aten_calls import log_aten_calls
 
+# from torch_max_backend.max_device.log_aten_calls import log_aten_calls
+
 # log_aten_calls()
 
 os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
