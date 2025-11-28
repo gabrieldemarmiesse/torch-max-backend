@@ -408,6 +408,108 @@ def test_aten_acos_single_element(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.int32, torch.int64]
+)
+def test_aten_as_strided_basic(conf: Conf, dtype: torch.dtype):
+    """Test aten.as_strided with basic size and stride configurations"""
+
+    def fn(x):
+        # Flatten a 3x4 tensor to 12 elements
+        return aten.as_strided(x, size=[12], stride=[1])
+
+    x = torch.arange(12, dtype=dtype).reshape(3, 4)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_as_strided_transpose(conf: Conf):
+    """Test aten.as_strided for transpose-like operation"""
+
+    def fn(x):
+        # Transpose a 3x4 tensor to 4x3 by swapping strides
+        return aten.as_strided(x, size=[4, 3], stride=[1, 4])
+
+    x = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_as_strided_with_storage_offset(conf: Conf):
+    """Test aten.as_strided with non-zero storage offset"""
+
+    def fn(x):
+        # Create a view starting from index 2, size 3
+        return aten.as_strided(x, size=[3], stride=[1], storage_offset=2)
+
+    x = torch.arange(10, dtype=torch.float32)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_as_strided_zero_stride_broadcast(conf: Conf):
+    """Test aten.as_strided with zero stride for broadcasting-like behavior"""
+
+    def fn(x):
+        # Create a 3x4 tensor where all rows are the same (stride 0 in first dim)
+        return aten.as_strided(x, size=[3, 4], stride=[0, 1])
+
+    x = torch.arange(4, dtype=torch.float32)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_as_strided_diagonal(conf: Conf):
+    """Test aten.as_strided to extract diagonal elements"""
+
+    def fn(x):
+        # Extract diagonal from 4x4 matrix
+        return aten.as_strided(x, size=[4], stride=[5])
+
+    x = torch.arange(16, dtype=torch.float32).reshape(4, 4)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_as_strided_sliding_window(conf: Conf):
+    """Test aten.as_strided to create sliding windows"""
+
+    def fn(x):
+        # Create overlapping windows of size 3 from a sequence of length 5
+        return aten.as_strided(x, size=[3, 3], stride=[1, 1])
+
+    x = torch.arange(5, dtype=torch.float32)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("storage_offset", [0, 1, 3])
+def test_aten_as_strided_various_offsets(conf: Conf, storage_offset: int):
+    """Test aten.as_strided with various storage offsets"""
+
+    def fn(x):
+        return aten.as_strided(x, size=[5], stride=[1], storage_offset=storage_offset)
+
+    x = torch.arange(10, dtype=torch.float32)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_as_strided_size_one_dimension(conf: Conf):
+    """Test aten.as_strided with size-1 dimensions"""
+
+    def fn(x):
+        # Create a view with size-1 middle dimension
+        return aten.as_strided(x, size=[2, 1, 3], stride=[3, 100, 1])
+
+    x = torch.arange(6, dtype=torch.float32)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_as_strided_multidimensional(conf: Conf):
+    """Test aten.as_strided with complex multidimensional strides"""
+
+    def fn(x):
+        # Custom stride pattern for a 2x3 view from a 12-element tensor
+        return aten.as_strided(x, size=[2, 3], stride=[6, 2], storage_offset=1)
+
+    x = torch.arange(12, dtype=torch.float32)
+    check_outputs(fn, conf, [x])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_amax_all_dims(conf: Conf, dtype: torch.dtype):
     """Test aten_amax with default empty dim list (reduces over all dimensions)"""
