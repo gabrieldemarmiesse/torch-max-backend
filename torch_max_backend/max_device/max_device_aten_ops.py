@@ -12,6 +12,7 @@ from torch_max_backend.max_device.torch_max_tensor import (
     TorchMaxTensor,
     find_equivalent_max_device,
 )
+from torch_max_backend.types import Scalar
 
 # Global registry for functions to register
 _aten_ops_registry: list[tuple[str, Callable]] = []
@@ -364,6 +365,27 @@ register_aten_op("aten::permute")(wrap_for_max_device(aten_functions.aten_permut
 register_aten_op("aten::pow.Tensor_Scalar")(
     wrap_for_max_device(aten_functions.aten_pow)
 )
+
+
+@register_aten_op("aten::pow.Scalar_out")
+def max_device_pow_scalar_out(
+    base: Scalar, exponent: TorchMaxTensor, out: TorchMaxTensor
+) -> TorchMaxTensor:
+    """
+    Custom implementation for pow.Scalar_out that properly handles the output tensor.
+    """
+    # Convert inputs to MaxEagerTensor
+    exponent_eager = exponent._max_data
+    out_eager = out._max_data
+
+    # Call the aten function
+    result_eager = aten_functions.aten_pow_scalar_out(base, exponent_eager, out_eager)
+
+    # Copy the result to the output tensor
+    out._max_data = result_eager
+
+    return out
+
 
 register_aten_op("aten::pow.Tensor_Tensor")(
     wrap_for_max_device(aten_functions.aten_pow)

@@ -2403,6 +2403,20 @@ def aten_pow(x: Scalar | MaxTensor, y: Scalar | MaxTensor) -> MaxTensor:
     return operator.pow(x, y)
 
 
+# pow.Scalar_out(Scalar self, Tensor exponent, *, Tensor(a!) out) -> Tensor(a!)
+@map_to(aten.pow.Scalar_out)
+def aten_pow_scalar_out(base: Scalar, exponent: MaxTensor, out: MaxTensor) -> MaxTensor:
+    """
+    Raises scalar base to tensor exponents element-wise, writing result to out tensor.
+    Special case: if base == 1.0, fills out with 1.0 (optimization).
+    """
+    # Special case optimization: 1^x = 1 for any x
+    if isinstance(base, int | float) and base == 1.0:
+        return aten_fill_scalar(out, 1.0)
+    # General case: compute base^exponent element-wise
+    return operator.pow(base, exponent)
+
+
 # prod(Tensor self, *, ScalarType? dtype=None) -> Tensor
 # prod.dim_int(Tensor self, int dim, bool keepdim=False, *, ScalarType? dtype=None) -> Tensor
 # rand(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
