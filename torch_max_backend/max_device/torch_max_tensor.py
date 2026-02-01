@@ -3,7 +3,7 @@ from collections.abc import Callable
 import max.driver
 import torch
 from max.driver import CPU
-from max.experimental.tensor import Tensor as MaxEagerTensor
+from max.tensor import Tensor as MaxEagerTensor
 
 from torch_max_backend.max_device import torch_max_device_module
 
