@@ -119,6 +119,28 @@ struct BitwiseOrScalarKernel:
         foreach[elementwise_bitwise_or, target=target](output, ctx)
 
 
+@compiler.register("bitwise_or_scalar_bool")
+struct BitwiseOrScalarKernelBool:
+    @staticmethod
+    fn execute[
+        dtype: DType, rank: Int, //, target: StaticString, other: Bool
+    ](
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
+        ctx: DeviceContextPtr,
+    ) raises:
+        comptime other_as_scalar = Scalar[dtype](other)
+
+        @parameter
+        @always_inline
+        fn elementwise_bitwise_or[
+            width: Int
+        ](idx: IndexList[x.rank]) -> SIMD[x.dtype, width]:
+            return x.load[width](idx) | other_as_scalar
+
+        foreach[elementwise_bitwise_or, target=target](output, ctx)
+
+
 @compiler.register("bitwise_xor")
 struct BitwiseXorKernel:
     @staticmethod
@@ -148,6 +170,28 @@ struct BitwiseXorScalarKernel:
     @staticmethod
     fn execute[
         dtype: DType, rank: Int, //, target: StaticString, other: Int
+    ](
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
+        ctx: DeviceContextPtr,
+    ) raises:
+        comptime other_as_scalar = Scalar[dtype](other)
+
+        @parameter
+        @always_inline
+        fn elementwise_bitwise_xor[
+            width: Int
+        ](idx: IndexList[x.rank]) -> SIMD[x.dtype, width]:
+            return x.load[width](idx) ^ other_as_scalar
+
+        foreach[elementwise_bitwise_xor, target=target](output, ctx)
+
+
+@compiler.register("bitwise_xor_scalar_bool")
+struct BitwiseXorScalarKernelBool:
+    @staticmethod
+    fn execute[
+        dtype: DType, rank: Int, //, target: StaticString, other: Bool
     ](
         output: OutputTensor[dtype=dtype, rank=rank],
         x: InputTensor[dtype=dtype, rank=rank],
