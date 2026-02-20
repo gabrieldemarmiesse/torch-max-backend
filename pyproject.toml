@@ -35,47 +35,50 @@ select = [
 ]
 
 
-# [tool.uv.sources]
-# max = [
-#     { index = "modular-nightly" },
-# ]
-# mblack = [
-#     { index = "modular-nightly" },
-# ]
-# max-core = [
-#     { index = "modular-nightly" },
-# ]
-# mojo = [
-#     { index = "modular-nightly" },
-# ]
-# mojo-lldb-libs = [
-#     { index = "modular-nightly" },
-# ]
-# mojo-compiler = [
-#     { index = "modular-nightly" },
-# ]
-# max-mojo-libs = [
-#     { index = "modular-nightly" },
-# ]
-# torch = [
-#     { index = "pytorch-nightly" },
-# ]
-# torchvision = [
-#     { index = "pytorch-nightly" },
-# ]
+[tool.uv.sources]
+max = [
+    { index = "modular-nightly" },
+]
+mblack = [
+    { index = "modular-nightly" },
+]
+max-core = [
+    { index = "modular-nightly" },
+]
+mojo = [
+    { index = "modular-nightly" },
+]
+mojo-lldb-libs = [
+    { index = "modular-nightly" },
+]
+mojo-compiler = [
+    { index = "modular-nightly" },
+]
+max-mojo-libs = [
+    { index = "modular-nightly" },
+]
+torch = [
+    { index = "pytorch-nightly" },
+]
+torchvision = [
+    { index = "pytorch-nightly" },
+]
+triton = [
+    { index = "pytorch-nightly" },
+]
 
 [[tool.uv.index]]
 name = "modular-nightly"
-url = "https://dl.modular.com/public/nightly/python/simple/"
+url = "https://whl.modular.com/nightly/simple/"
 explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-nightly"
 url = "https://download.pytorch.org/whl/nightly/cu128"
-explicit = false
+explicit = true
 
 [tool.uv]
-prerelease = "allow"
+prerelease = "explicit"
 python-preference = "only-managed"
 index-strategy = "unsafe-best-match"
 
@@ -85,13 +88,15 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "max==25.7.0",
-    "max-core==25.7.0",
-    "max-mojo-libs==25.7.0",
-    "mojo==0.25.7.0",
-    "mblack==25.7.0",
-    "mojo-lldb-libs==0.25.7.0",
-    "mojo-compiler==0.25.7.0",
+    "max==26.2.0.dev2026022005",
+    "max-core==26.2.0.dev2026022005",
+    "max-mojo-libs==26.2.0.dev2026022005",
+    "mojo==0.26.2.0.dev2026022005",
+    "mblack==26.2.0.dev2026022005",
+    "mojo-lldb-libs==0.26.2.0.dev2026022005",
+    "mojo-compiler==0.26.2.0.dev2026022005",
+    "torch==2.11.0.dev20260201+cu128",
+    "triton==3.6.0+git9844da95",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",
@@ -102,7 +107,7 @@ dev = [
     "requests>=2.32.4",
     "ruff>=0.12.7",
     "tiktoken>=0.11.0",
-    "torchvision>=0.22.1",
+    #"torchvision>=0.22.1",
     "transformers>=4.54.1",
     "line-profiler>=5.0.0",
     "coverage>=7.10.6",

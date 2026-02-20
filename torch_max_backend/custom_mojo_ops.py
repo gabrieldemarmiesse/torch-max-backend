@@ -1,4 +1,4 @@
-from max.experimental import functional as F
+from max import functional as F
 from max.graph import TensorType
 
 from torch_max_backend.types import MaxTensor, Scalar
@@ -6,13 +6,10 @@ from torch_max_backend.types import MaxTensor, Scalar
 
 def _register_kernels() -> None:
     """Register custom Mojo kernels in the global graph."""
-    import max.experimental.tensor
 
-    import torch_max_backend.torch_compile_backend.compiler
-
-    max.experimental.tensor.GRAPH.graph._import_kernels(
-        torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels
-    )
+    # max.tensor.GRAPH.graph._import_kernels(
+    #    torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels
+    # )
 
 
 def bitwise_and(input: MaxTensor, other: MaxTensor) -> MaxTensor:

@@ -345,7 +345,7 @@ def test_aten_acos_basic(conf: Conf, dtype: torch.dtype):
         return aten.acos(x)
 
     # Test with values in valid domain [-1, 1]
-    x = torch.tensor([-1.0, -0.5, 0.0, 0.5, 1.0], dtype=dtype)
+    x = torch.tensor([-1.0, -0.5, 0.0, 0.5, 1.0, 0.8], dtype=dtype)
     check_outputs(fn, conf, [x])
 
 

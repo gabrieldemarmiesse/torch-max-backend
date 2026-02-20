@@ -13,7 +13,7 @@ from typing import Any
 import max.graph.ops as max_ops
 import torch
 from max import engine
-from max.driver.tensor import load_max_tensor
+from max.driver.buffer import load_max_buffer
 from max.graph import TensorValue
 
 from torch_max_backend.flags import debug_graph
@@ -72,7 +72,7 @@ def make_debug_function(node_idx, old_func, node):
                 if not filename.exists():
                     print(f"Debugging file {filename} does not exist, skipping.")
                     continue
-                loaded_tensor = torch.from_dlpack(load_max_tensor(filename))
+                loaded_tensor = torch.from_dlpack(load_max_buffer(filename))
                 true_tensor_from_torch = tensor.to("cpu")
                 # Check dtype
                 if loaded_tensor.dtype != true_tensor_from_torch.dtype:

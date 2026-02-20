@@ -5,7 +5,7 @@ import max.driver
 import torch
 from max.driver import CPU
 from max.dtype import DType
-from max.experimental.tensor import Tensor as MaxEagerTensor
+from max.tensor import Tensor as MaxEagerTensor
 
 from torch_max_backend import aten_functions
 from torch_max_backend.max_device.torch_max_tensor import (
@@ -124,7 +124,7 @@ def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMa
 
     elif self.device.type == "cpu" and dest.device.type == "max_device":
         self = TorchMaxTensor._from_max_data(
-            MaxEagerTensor(storage=max.driver.Tensor.from_dlpack(self.detach()))
+            MaxEagerTensor(storage=max.driver.Buffer.from_dlpack(self.detach()))
         )
         dest._max_data = self._max_data.to(dest._max_data.device)
         return dest

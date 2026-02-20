@@ -2,7 +2,6 @@ import time
 import traceback
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 import max.driver
@@ -47,7 +46,10 @@ class GlobalMaxObjects:
 
 _global_max_objects: GlobalMaxObjects | None = None
 
-paths_to_mojo_kernels = [Path(__file__).parent.parent / "mojo_kernels"]
+paths_to_mojo_kernels = [
+    #    Path(__file__).parent.parent / "mojo_kernels"
+    # re-enable later when mojo is more stable
+]
 
 
 def global_max_objects() -> GlobalMaxObjects:
@@ -481,15 +483,15 @@ dummy_backend = aot_autograd(fw_compiler=dummy_compiler)
 # - Generally users shouldn't be putting this marshalling into their
 #   inner loop. Gains are much more substantial for larger graphs
 #   which can take advantage of MAX's automatic kernel fusion.
-def fast_from_dlpack(t: torch.Tensor) -> max.driver.Tensor:
+def fast_from_dlpack(t: torch.Tensor) -> max.driver.Buffer:
     if t.device.type == "cuda":
         stream = torch.cuda.current_stream(t.device).cuda_stream
         device = torch_device_to_max_device(t.device)
         data = t.__dlpack__()
         try:
-            return max.driver.Tensor._from_dlpack(data, device, stream)
+            return max.driver.Buffer._from_dlpack(data, device, stream)
         except Exception:
             # This approach fails when passing the tensor across threads.
             # Fall back to letting torch slowly sync streams.
-            return max.driver.Tensor.from_dlpack(t)
-    return max.driver.Tensor.from_dlpack(t)
+            return max.driver.Buffer.from_dlpack(t)
+    return max.driver.Buffer.from_dlpack(t)

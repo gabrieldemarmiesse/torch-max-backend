@@ -13,12 +13,12 @@ from typing import Literal
 
 import max.graph.type as max_type
 import torch
+from max import functional as F
 from max.dtype import DType
-from max.experimental import functional as F
-from max.experimental.tensor import Tensor as MaxEagerTensor
 from max.graph import Dim, StaticDim, TensorType
 from max.graph import ops as max_ops
 from max.graph.type import DeviceRef
+from max.tensor import Tensor as MaxEagerTensor
 from max.torch.torch import max_device_ref
 from torch._decomp import core_aten_decompositions
 from torch._ops import OpOverload, OpOverloadPacket
