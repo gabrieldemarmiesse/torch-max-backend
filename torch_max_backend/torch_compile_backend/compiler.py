@@ -2,6 +2,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import max.driver
@@ -46,10 +47,7 @@ class GlobalMaxObjects:
 
 _global_max_objects: GlobalMaxObjects | None = None
 
-paths_to_mojo_kernels = [
-    #    Path(__file__).parent.parent / "mojo_kernels"
-    # re-enable later when mojo is more stable
-]
+paths_to_mojo_kernels = [Path(__file__).parent.parent / "mojo_kernels"]
 
 
 def global_max_objects() -> GlobalMaxObjects:

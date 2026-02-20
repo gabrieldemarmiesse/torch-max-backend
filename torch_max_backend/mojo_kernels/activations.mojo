@@ -2,7 +2,7 @@ import math
 from compiler import register
 from runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor, foreach
-from utils import IndexList
+from utils.index import IndexList
 
 
 @compiler.register("gelu_backward")
@@ -10,7 +10,8 @@ struct GeluBackwardKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int, //,
+        rank: Int,
+        //,
         target: StaticString,
         approximate: StaticString,
     ](
@@ -19,6 +20,10 @@ struct GeluBackwardKernel:
         input: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
+        comptime assert (
+            dtype.is_floating_point()
+        ), "gelu_backward requires floating point dtype"
+
         @parameter
         @always_inline
         fn func[
@@ -36,8 +41,8 @@ struct GeluBackwardKernel:
                 #       PDF = (M_2_SQRTPI * M_SQRT1_2 * 0.5) * exp(-0.5 * x²)
 
                 # Constants from PyTorch implementation
-                alias M_SQRT1_2 = 0.7071067811865476  # sqrt(1/2) = 1/sqrt(2)
-                alias PDF_CONSTANT = 0.39894228040143276  # M_2_SQRTPI * M_SQRT1_2 * 0.5
+                comptime M_SQRT1_2 = 0.7071067811865476  # sqrt(1/2) = 1/sqrt(2)
+                comptime PDF_CONSTANT = 0.39894228040143276  # M_2_SQRTPI * M_SQRT1_2 * 0.5
 
                 # Compute CDF term: 0.5 * (1 + erf(x * M_SQRT1_2))
                 cdf = 0.5 * (1.0 + math.erf(x * M_SQRT1_2))
@@ -54,8 +59,8 @@ struct GeluBackwardKernel:
                 # See PyTorch CUDA implementation for details
 
                 # Constants from PyTorch implementation
-                alias k_Beta = 0.7978845608028654  # sqrt(2) * sqrt(2/π) * 0.5
-                alias k_Kappa = 0.044715
+                comptime k_Beta = 0.7978845608028654  # sqrt(2) * sqrt(2/π) * 0.5
+                comptime k_Kappa = 0.044715
 
                 # Compute inner = kBeta * (x + kKappa * x³)
                 x_squared = x * x
