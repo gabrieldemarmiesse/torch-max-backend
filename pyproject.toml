@@ -88,13 +88,13 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "max==26.2.0.dev2026020605",
-    "max-core==26.2.0.dev2026020605",
-    "max-mojo-libs==26.2.0.dev2026020605",
-    "mojo==0.26.2.0.dev2026020605",
-    "mblack==26.2.0.dev2026020605",
-    "mojo-lldb-libs==0.26.2.0.dev2026020605",
-    "mojo-compiler==0.26.2.0.dev2026020605",
+    "max==26.2.0.dev2026022005",
+    "max-core==26.2.0.dev2026022005",
+    "max-mojo-libs==26.2.0.dev2026022005",
+    "mojo==0.26.2.0.dev2026022005",
+    "mblack==26.2.0.dev2026022005",
+    "mojo-lldb-libs==0.26.2.0.dev2026022005",
+    "mojo-compiler==0.26.2.0.dev2026022005",
     "torch==2.11.0.dev20260201+cu128",
     "triton==3.6.0+git9844da95",
     "hatchling",
