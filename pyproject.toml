@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 dependencies = [
     "max",
     "tabulate",
-    "torch",
+    "torch>=2.10",
     "beartype>=0.17.0",
     "pytest-retry>=1.7.0",
 ]
@@ -57,24 +57,11 @@ mojo-compiler = [
 max-mojo-libs = [
     { index = "modular-nightly" },
 ]
-torch = [
-    { index = "pytorch-nightly" },
-]
-torchvision = [
-    { index = "pytorch-nightly" },
-]
-triton = [
-    { index = "pytorch-nightly" },
-]
+
 
 [[tool.uv.index]]
 name = "modular-nightly"
 url = "https://whl.modular.com/nightly/simple/"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-nightly"
-url = "https://download.pytorch.org/whl/nightly/cu128"
 explicit = true
 
 [tool.uv]
@@ -95,8 +82,6 @@ dev = [
     "mblack==26.2.0.dev2026022005",
     "mojo-lldb-libs==0.26.2.0.dev2026022005",
     "mojo-compiler==0.26.2.0.dev2026022005",
-    "torch==2.11.0.dev20260201+cu128",
-    "triton==3.6.0+git9844da95",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",
@@ -107,7 +92,6 @@ dev = [
     "requests>=2.32.4",
     "ruff>=0.12.7",
     "tiktoken>=0.11.0",
-    #"torchvision>=0.22.1",
     "transformers>=4.54.1",
     "line-profiler>=5.0.0",
     "coverage>=7.10.6",
