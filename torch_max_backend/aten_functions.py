@@ -2563,7 +2563,7 @@ def aten_select_scatter(
         index = index + dim_size.dim
 
     # Step 1: Create a range tensor for the dimension to build the mask
-    indices = F.range(0, dim_size, 1, dtype=DType.int64, device=input.device)
+    indices = F.arange(0, dim_size, 1, dtype=DType.int64, device=input.device)
 
     # Step 2: Create 1D boolean mask where indices == index
     index_tensor = F.constant(index, dtype=DType.int64, device=input.device)
