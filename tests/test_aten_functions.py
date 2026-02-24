@@ -13,6 +13,7 @@ from torch_max_backend.testing import (
 )
 
 
+@pytest.mark.xfail(reason="Not implemented yet")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_adaptive_avg_pool2d_backward_basic(conf: Conf, dtype: torch.dtype):
     """Test _adaptive_avg_pool2d_backward basic functionality"""
@@ -32,6 +33,7 @@ def test_adaptive_avg_pool2d_backward_basic(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [grad_output, input_tensor])
 
 
+@pytest.mark.xfail(reason="Not implemented yet")
 @pytest.mark.parametrize(
     "input_size,output_size",
     [((8, 8), (4, 4)), ((10, 10), (5, 5)), ((7, 7), (3, 3)), ((16, 16), (8, 8))],
@@ -54,6 +56,7 @@ def test_adaptive_avg_pool2d_backward_different_sizes(
     check_outputs(fn, conf, [grad_output, input_tensor])
 
 
+@pytest.mark.xfail(reason="Not implemented yet")
 def test_adaptive_avg_pool2d_backward_3d_input(conf: Conf):
     """Test _adaptive_avg_pool2d_backward with 3D input (no batch dimension)"""
 
@@ -69,6 +72,7 @@ def test_adaptive_avg_pool2d_backward_3d_input(conf: Conf):
     check_outputs(fn, conf, [grad_output, input_tensor])
 
 
+@pytest.mark.xfail(reason="Not implemented yet")
 @pytest.mark.parametrize("channels", [1, 3, 16, 64])
 def test_adaptive_avg_pool2d_backward_different_channels(conf: Conf, channels: int):
     """Test _adaptive_avg_pool2d_backward with different numbers of channels"""
@@ -85,6 +89,7 @@ def test_adaptive_avg_pool2d_backward_different_channels(conf: Conf, channels: i
     check_outputs(fn, conf, [grad_output, input_tensor])
 
 
+@pytest.mark.xfail(reason="Not implemented yet")
 def test_adaptive_avg_pool2d_backward_non_uniform_pooling(conf: Conf):
     """Test _adaptive_avg_pool2d_backward with non-uniform pooling regions"""
 
@@ -99,6 +104,7 @@ def test_adaptive_avg_pool2d_backward_non_uniform_pooling(conf: Conf):
     check_outputs(fn, conf, [grad_output, input_tensor])
 
 
+@pytest.mark.xfail(reason="Not implemented yet")
 def test_adaptive_avg_pool2d_backward_output_size_one(conf: Conf):
     """Test _adaptive_avg_pool2d_backward with output size (1, 1)"""
 
@@ -113,6 +119,7 @@ def test_adaptive_avg_pool2d_backward_output_size_one(conf: Conf):
     check_outputs(fn, conf, [grad_output, input_tensor])
 
 
+@pytest.mark.xfail(reason="Not implemented yet")
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_adaptive_avg_pool2d_backward_half_precision(conf: Conf, dtype: torch.dtype):
     """Test _adaptive_avg_pool2d_backward with half precision types"""

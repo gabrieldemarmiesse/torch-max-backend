@@ -49,26 +49,6 @@ def bitwise_and_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
         )[0]
 
 
-def adaptive_avg_pool2d_backward(
-    grad_output: MaxTensor, input_tensor_reshaped: MaxTensor
-) -> MaxTensor:
-    """Custom Mojo kernel for adaptive_avg_pool2d_backward operation."""
-
-    return F.custom(
-        name="adaptive_avg_pool2d_backward",
-        device=input_tensor_reshaped.device,
-        values=[grad_output, input_tensor_reshaped],
-        out_types=[
-            TensorType(
-                dtype=input_tensor_reshaped.dtype,
-                shape=input_tensor_reshaped.shape,
-                device=input_tensor_reshaped.device,
-            )
-        ],
-        custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
-    )[0]
-
-
 def bitwise_not(input: MaxTensor) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_not operation.

@@ -9,7 +9,7 @@ import max.driver
 import max.graph.value
 import torch
 from functorch.compile import make_boxed_func
-from max import engine, mlir
+from max import engine
 from max.dtype import DType
 from max.graph import DeviceRef, Graph, KernelLibrary
 from max.graph import ops as max_ops
@@ -42,7 +42,6 @@ import datetime as dt
 class GlobalMaxObjects:
     session: engine.InferenceSession
     kernel_library: KernelLibrary
-    context: mlir.Context
 
 
 _global_max_objects: GlobalMaxObjects | None = None
@@ -53,15 +52,13 @@ paths_to_mojo_kernels = [Path(__file__).parent.parent / "mojo_kernels"]
 def global_max_objects() -> GlobalMaxObjects:
     global _global_max_objects
     if _global_max_objects is None:
-        context = mlir.Context()
-        with context:
-            kernel_library = KernelLibrary(context)
-            kernel_library.load_paths(context, paths_to_mojo_kernels)
+        kernel_library = KernelLibrary()
+        kernel_library.load_paths(paths_to_mojo_kernels)
         session = engine.InferenceSession(devices=list(get_accelerators()))
         debug.set_print_options(session)
 
         _global_max_objects = GlobalMaxObjects(
-            session=session, kernel_library=kernel_library, context=context
+            session=session, kernel_library=kernel_library
         )
     return _global_max_objects
 
@@ -202,7 +199,6 @@ class _GraphFactory:
             "torch_max_backend",
             input_types=self.graph_inputs,
             kernel_library=global_max_objects().kernel_library,
-            context=global_max_objects().context,
         ).__enter__()
         # Let's fill the tensor book
         for tensor_name, idx in self.names_to_input_idx.items():
