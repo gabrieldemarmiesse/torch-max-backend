@@ -1,7 +1,4 @@
-from compiler import register
-from gpu.host import DeviceContext
-from gpu.id import block_idx
-from layout import LayoutTensor
+import compiler
 from runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor, foreach
 
@@ -13,7 +10,8 @@ struct BitwiseAndKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int, //,
+        rank: Int,
+        //,
         target: StaticString,
     ](
         output: OutputTensor[dtype=dtype, rank=rank],
@@ -41,7 +39,29 @@ struct BitwiseAndScalarKernel:
         x: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
-        alias other_as_scalar = Scalar[dtype](other)
+        comptime other_as_scalar = Scalar[dtype](other)
+
+        @parameter
+        @always_inline
+        fn elementwise_bitwise_and[
+            width: Int
+        ](idx: IndexList[x.rank]) -> SIMD[x.dtype, width]:
+            return x.load[width](idx) & other_as_scalar
+
+        foreach[elementwise_bitwise_and, target=target](output, ctx)
+
+
+@compiler.register("bitwise_and_scalar_bool")
+struct BitwiseAndScalarKernelBool:
+    @staticmethod
+    fn execute[
+        dtype: DType, rank: Int, //, target: StaticString, other: Bool
+    ](
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
+        ctx: DeviceContextPtr,
+    ) raises:
+        comptime other_as_scalar = Scalar[dtype](other)
 
         @parameter
         @always_inline
@@ -58,7 +78,8 @@ struct BitwiseOrKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int, //,
+        rank: Int,
+        //,
         target: StaticString,
     ](
         output: OutputTensor[dtype=dtype, rank=rank],
@@ -86,7 +107,29 @@ struct BitwiseOrScalarKernel:
         x: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
-        alias other_as_scalar = Scalar[dtype](other)
+        comptime other_as_scalar = Scalar[dtype](other)
+
+        @parameter
+        @always_inline
+        fn elementwise_bitwise_or[
+            width: Int
+        ](idx: IndexList[x.rank]) -> SIMD[x.dtype, width]:
+            return x.load[width](idx) | other_as_scalar
+
+        foreach[elementwise_bitwise_or, target=target](output, ctx)
+
+
+@compiler.register("bitwise_or_scalar_bool")
+struct BitwiseOrScalarKernelBool:
+    @staticmethod
+    fn execute[
+        dtype: DType, rank: Int, //, target: StaticString, other: Bool
+    ](
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
+        ctx: DeviceContextPtr,
+    ) raises:
+        comptime other_as_scalar = Scalar[dtype](other)
 
         @parameter
         @always_inline
@@ -103,7 +146,8 @@ struct BitwiseXorKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int, //,
+        rank: Int,
+        //,
         target: StaticString,
     ](
         output: OutputTensor[dtype=dtype, rank=rank],
@@ -131,7 +175,29 @@ struct BitwiseXorScalarKernel:
         x: InputTensor[dtype=dtype, rank=rank],
         ctx: DeviceContextPtr,
     ) raises:
-        alias other_as_scalar = Scalar[dtype](other)
+        comptime other_as_scalar = Scalar[dtype](other)
+
+        @parameter
+        @always_inline
+        fn elementwise_bitwise_xor[
+            width: Int
+        ](idx: IndexList[x.rank]) -> SIMD[x.dtype, width]:
+            return x.load[width](idx) ^ other_as_scalar
+
+        foreach[elementwise_bitwise_xor, target=target](output, ctx)
+
+
+@compiler.register("bitwise_xor_scalar_bool")
+struct BitwiseXorScalarKernelBool:
+    @staticmethod
+    fn execute[
+        dtype: DType, rank: Int, //, target: StaticString, other: Bool
+    ](
+        output: OutputTensor[dtype=dtype, rank=rank],
+        x: InputTensor[dtype=dtype, rank=rank],
+        ctx: DeviceContextPtr,
+    ) raises:
+        comptime other_as_scalar = Scalar[dtype](other)
 
         @parameter
         @always_inline
@@ -148,7 +214,8 @@ struct BitwiseNotKernel:
     @staticmethod
     fn execute[
         dtype: DType,
-        rank: Int, //,
+        rank: Int,
+        //,
         target: StaticString,
     ](
         output: OutputTensor[dtype=dtype, rank=rank],

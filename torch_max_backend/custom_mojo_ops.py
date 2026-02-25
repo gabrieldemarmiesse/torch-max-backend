@@ -1,22 +1,14 @@
 from max import functional as F
 from max.graph import TensorType
 
+import torch_max_backend
 from torch_max_backend.types import MaxTensor, Scalar
-
-
-def _register_kernels() -> None:
-    """Register custom Mojo kernels in the global graph."""
-
-    # max.tensor.GRAPH.graph._import_kernels(
-    #    torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels
-    # )
 
 
 def bitwise_and(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_and operation.
     """
-    _register_kernels()
 
     return F.custom(
         name="bitwise_and",
@@ -25,6 +17,7 @@ def bitwise_and(input: MaxTensor, other: MaxTensor) -> MaxTensor:
         out_types=[
             TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
         ],
+        custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
     )[0]
 
 
@@ -32,44 +25,34 @@ def bitwise_and_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_and_scalar operation.
     """
-    _register_kernels()
-
-    return F.custom(
-        name="bitwise_and_scalar",
-        device=input.device,
-        values=[input],
-        parameters=dict(other=other),
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
-
-
-def adaptive_avg_pool2d_backward(
-    grad_output: MaxTensor, input_tensor_reshaped: MaxTensor
-) -> MaxTensor:
-    """Custom Mojo kernel for adaptive_avg_pool2d_backward operation."""
-    _register_kernels()
-
-    return F.custom(
-        name="adaptive_avg_pool2d_backward",
-        device=input_tensor_reshaped.device,
-        values=[grad_output, input_tensor_reshaped],
-        out_types=[
-            TensorType(
-                dtype=input_tensor_reshaped.dtype,
-                shape=input_tensor_reshaped.shape,
-                device=input_tensor_reshaped.device,
-            )
-        ],
-    )[0]
+    if isinstance(other, bool):
+        return F.custom(
+            name="bitwise_and_scalar_bool",
+            device=input.device,
+            values=[input],
+            parameters=dict(other=other),
+            out_types=[
+                TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+            ],
+            custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
+        )[0]
+    else:
+        return F.custom(
+            name="bitwise_and_scalar",
+            device=input.device,
+            values=[input],
+            parameters=dict(other=other),
+            out_types=[
+                TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+            ],
+            custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
+        )[0]
 
 
 def bitwise_not(input: MaxTensor) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_not operation.
     """
-    _register_kernels()
 
     return F.custom(
         name="bitwise_not",
@@ -78,6 +61,7 @@ def bitwise_not(input: MaxTensor) -> MaxTensor:
         out_types=[
             TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
         ],
+        custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
     )[0]
 
 
@@ -85,7 +69,6 @@ def bitwise_or(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_or operation.
     """
-    _register_kernels()
 
     return F.custom(
         name="bitwise_or",
@@ -94,6 +77,7 @@ def bitwise_or(input: MaxTensor, other: MaxTensor) -> MaxTensor:
         out_types=[
             TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
         ],
+        custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
     )[0]
 
 
@@ -101,24 +85,34 @@ def bitwise_or_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_or_scalar operation.
     """
-    _register_kernels()
-
-    return F.custom(
-        name="bitwise_or_scalar",
-        device=input.device,
-        values=[input],
-        parameters=dict(other=other),
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    if isinstance(other, bool):
+        return F.custom(
+            name="bitwise_or_scalar_bool",
+            device=input.device,
+            values=[input],
+            parameters=dict(other=other),
+            out_types=[
+                TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+            ],
+            custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
+        )[0]
+    else:
+        return F.custom(
+            name="bitwise_or_scalar",
+            device=input.device,
+            values=[input],
+            parameters=dict(other=other),
+            out_types=[
+                TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+            ],
+            custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
+        )[0]
 
 
 def bitwise_xor(input: MaxTensor, other: MaxTensor) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_xor operation.
     """
-    _register_kernels()
 
     return F.custom(
         name="bitwise_xor",
@@ -127,6 +121,7 @@ def bitwise_xor(input: MaxTensor, other: MaxTensor) -> MaxTensor:
         out_types=[
             TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
         ],
+        custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
     )[0]
 
 
@@ -134,24 +129,34 @@ def bitwise_xor_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
     """
     Custom Mojo kernel for bitwise_xor_scalar operation.
     """
-    _register_kernels()
-
-    return F.custom(
-        name="bitwise_xor_scalar",
-        device=input.device,
-        values=[input],
-        parameters=dict(other=other),
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-    )[0]
+    if isinstance(other, bool):
+        return F.custom(
+            name="bitwise_xor_scalar_bool",
+            device=input.device,
+            values=[input],
+            parameters=dict(other=other),
+            out_types=[
+                TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+            ],
+            custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
+        )[0]
+    else:
+        return F.custom(
+            name="bitwise_xor_scalar",
+            device=input.device,
+            values=[input],
+            parameters=dict(other=other),
+            out_types=[
+                TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
+            ],
+            custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
+        )[0]
 
 
 def ceil(input: MaxTensor) -> MaxTensor:
     """
     Custom Mojo kernel for ceil operation.
     """
-    _register_kernels()
 
     return F.custom(
         name="ceil",
@@ -160,6 +165,7 @@ def ceil(input: MaxTensor) -> MaxTensor:
         out_types=[
             TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
         ],
+        custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
     )[0]
 
 
@@ -169,8 +175,6 @@ def gelu_backward(
     """
     Custom Mojo kernel for gelu_backward operation.
     """
-    _register_kernels()
-
     return F.custom(
         name="gelu_backward",
         device=input.device,
@@ -179,4 +183,5 @@ def gelu_backward(
         out_types=[
             TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
         ],
+        custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
     )[0]

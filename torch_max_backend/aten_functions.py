@@ -240,28 +240,7 @@ def aten__adaptive_avg_pool2d_backward(
     Returns:
         Gradient with respect to input, same shape as input_tensor
     """
-    # Get shapes
-    grad_shape = grad_output.shape
-    input_shape = input_tensor.shape
-
-    # Handle both 3D (C, H, W) and 4D (N, C, H, W) inputs
-    if len(input_shape) == 3:
-        # Add batch dimension
-        grad_output = grad_output.reshape([1] + list(grad_shape))
-        input_tensor_reshaped = input_tensor.reshape([1] + list(input_shape))
-        remove_batch = True
-    else:
-        input_tensor_reshaped = input_tensor
-        remove_batch = False
-
-    grad_input = custom_mojo_ops.adaptive_avg_pool2d_backward(
-        grad_output, input_tensor_reshaped
-    )
-
-    if remove_batch:
-        grad_input = grad_input.reshape(input_shape)
-
-    return grad_input
+    raise NotImplementedError()
 
 
 # _adaptive_avg_pool3d(Tensor self, SymInt[3] output_size) -> Tensor
