@@ -898,7 +898,7 @@ def aten_arange(
         out_dim = int(math.ceil(out_dim / step))
 
     # Use F.range to create the sequence
-    result = F.range(
+    result = F.arange(
         Dim(start),
         Dim(end),
         Dim(step),
