@@ -1,4 +1,4 @@
-from max import functional as F
+from max.experimental import functional as F
 from max.graph import TensorType
 
 import torch_max_backend

@@ -5,7 +5,7 @@ import max.driver
 import torch
 from max.driver import CPU
 from max.dtype import DType
-from max.tensor import Tensor as MaxEagerTensor
+from max.experimental.tensor import Tensor as MaxEagerTensor
 
 from torch_max_backend import aten_functions
 from torch_max_backend.max_device.torch_max_tensor import (
