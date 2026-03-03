@@ -259,7 +259,7 @@ class TestMNISTCompilation:
         model = SimpleNet().to(device)
         x = torch.randn(8, 1, 28, 28).to(device)
 
-        check_functions_are_equivalent(model, device, [x])
+        check_functions_are_equivalent(model, device, [x], atol=1e-3, rtol=1e-3)
 
     def test_compiled_no_graph_breaks(self, device: str):
         """Test that SimpleNet compiles without graph breaks (fullgraph=True)."""

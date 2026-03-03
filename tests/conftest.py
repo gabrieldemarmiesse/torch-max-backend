@@ -29,6 +29,13 @@ compiler.paths_to_mojo_kernels[0] = _build_mojo_source_package(
 )
 
 
+@pytest.fixture()
+def disable_interpreter():
+    os.environ["MAX_USE_EAGER_INTERPRETER"] = "0"
+    yield
+    os.environ["MAX_USE_EAGER_INTERPRETER"] = "1"
+
+
 @pytest.fixture(params=["cpu", "cuda"])
 def device(request, gpu_available: bool):
     device_name = request.param

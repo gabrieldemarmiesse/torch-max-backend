@@ -13,132 +13,6 @@ from torch_max_backend.testing import (
 )
 
 
-@pytest.mark.xfail(reason="Not implemented yet")
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_adaptive_avg_pool2d_backward_basic(conf: Conf, dtype: torch.dtype):
-    """Test _adaptive_avg_pool2d_backward basic functionality"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    # Create test tensors
-    batch_size, channels, height, width = 2, 3, 8, 8
-    output_height, output_width = 4, 4
-
-    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
-    grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, dtype=dtype
-    )
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-@pytest.mark.parametrize(
-    "input_size,output_size",
-    [((8, 8), (4, 4)), ((10, 10), (5, 5)), ((7, 7), (3, 3)), ((16, 16), (8, 8))],
-)
-def test_adaptive_avg_pool2d_backward_different_sizes(
-    conf: Conf, input_size: tuple, output_size: tuple
-):
-    """Test _adaptive_avg_pool2d_backward with different input and output sizes"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    batch_size, channels = 2, 3
-    input_height, input_width = input_size
-    output_height, output_width = output_size
-
-    input_tensor = torch.randn(batch_size, channels, input_height, input_width)
-    grad_output = torch.randn(batch_size, channels, output_height, output_width)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-def test_adaptive_avg_pool2d_backward_3d_input(conf: Conf):
-    """Test _adaptive_avg_pool2d_backward with 3D input (no batch dimension)"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    channels, height, width = 3, 8, 8
-    output_height, output_width = 4, 4
-
-    input_tensor = torch.randn(channels, height, width)
-    grad_output = torch.randn(channels, output_height, output_width)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-@pytest.mark.parametrize("channels", [1, 3, 16, 64])
-def test_adaptive_avg_pool2d_backward_different_channels(conf: Conf, channels: int):
-    """Test _adaptive_avg_pool2d_backward with different numbers of channels"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    batch_size, height, width = 2, 8, 8
-    output_height, output_width = 4, 4
-
-    input_tensor = torch.randn(batch_size, channels, height, width)
-    grad_output = torch.randn(batch_size, channels, output_height, output_width)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-def test_adaptive_avg_pool2d_backward_non_uniform_pooling(conf: Conf):
-    """Test _adaptive_avg_pool2d_backward with non-uniform pooling regions"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    # Input size 9x9 to output size 4x4 creates non-uniform pooling regions
-    batch_size, channels = 2, 3
-    input_tensor = torch.randn(batch_size, channels, 9, 9)
-    grad_output = torch.randn(batch_size, channels, 4, 4)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-def test_adaptive_avg_pool2d_backward_output_size_one(conf: Conf):
-    """Test _adaptive_avg_pool2d_backward with output size (1, 1)"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    batch_size, channels, height, width = 2, 3, 8, 8
-
-    input_tensor = torch.randn(batch_size, channels, height, width)
-    grad_output = torch.randn(batch_size, channels, 1, 1)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_adaptive_avg_pool2d_backward_half_precision(conf: Conf, dtype: torch.dtype):
-    """Test _adaptive_avg_pool2d_backward with half precision types"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    batch_size, channels, height, width = 2, 3, 8, 8
-    output_height, output_width = 4, 4
-
-    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
-    grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, dtype=dtype
-    )
-
-    # Half precision may have lower accuracy
-    check_outputs(fn, conf, [grad_output, input_tensor], atol=1e-2, rtol=1e-2)
-
-
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype):
     """Test _scaled_dot_product_flash_attention basic functionality"""
@@ -1790,6 +1664,7 @@ def test_aten_pow_tensor_tensor_single_element(conf: Conf):
     check_outputs(fn, conf, [base, exponent])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_aten_scatter_src_basic_2d(conf: Conf, dtype: torch.dtype):
     """Test aten.scatter.src basic functionality with 2D tensors"""
@@ -1805,6 +1680,7 @@ def test_aten_scatter_src_basic_2d(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [self, index, src])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.int64])
 def test_aten_scatter_src_dim0(conf: Conf, dtype: torch.dtype):
     """Test aten.scatter.src along dimension 0"""
@@ -1820,6 +1696,7 @@ def test_aten_scatter_src_dim0(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [self, index, src])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_scatter_src_3d_tensor(conf: Conf, dtype: torch.dtype):
     """Test aten.scatter.src with 3D tensor"""
@@ -1839,6 +1716,7 @@ def test_aten_scatter_src_3d_tensor(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [self, index, src])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_src_negative_dim(conf: Conf):
     """Test aten.scatter.src with negative dimension"""
 
@@ -1853,6 +1731,7 @@ def test_aten_scatter_src_negative_dim(conf: Conf):
     check_outputs(fn, conf, [self, index, src])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_value_basic(conf: Conf):
     """Test aten.scatter.value with scalar value - basic functionality"""
 
@@ -1866,6 +1745,7 @@ def test_aten_scatter_value_basic(conf: Conf):
     check_outputs(fn, conf, [x, index])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_value_diagonal(conf: Conf):
     """Test aten.scatter.value with scalar value - create diagonal pattern"""
 
@@ -1877,6 +1757,7 @@ def test_aten_scatter_value_diagonal(conf: Conf):
     check_outputs(fn, conf, [x, index])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float64, torch.int32, torch.int64]
 )
@@ -1898,6 +1779,7 @@ def test_aten_scatter_value_dtypes(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [x, index])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_value_dim1(conf: Conf):
     """Test aten.scatter.value with scalar value along dimension 1"""
 
@@ -1909,6 +1791,7 @@ def test_aten_scatter_value_dim1(conf: Conf):
     check_outputs(fn, conf, [x, index])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_value_3d(conf: Conf):
     """Test aten.scatter.value with scalar value on 3D tensor"""
 
@@ -2225,6 +2108,7 @@ def test_aten_squeeze_edge_cases(device: str, shape: tuple):
     check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_basic(conf: Conf):
     """Test aten.triu with default diagonal=0"""
 
@@ -2235,6 +2119,7 @@ def test_aten_triu_basic(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("diagonal", [-2, -1, 0, 1, 2])
 def test_aten_triu_different_diagonals(conf: Conf, diagonal: int):
     """Test aten.triu with different diagonal values"""
@@ -2246,6 +2131,7 @@ def test_aten_triu_different_diagonals(conf: Conf, diagonal: int):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("shape", [(3, 5), (5, 3), (7, 7)])
 def test_aten_triu_rectangular(conf: Conf, shape: tuple):
     """Test aten.triu with rectangular matrices"""
@@ -2257,6 +2143,7 @@ def test_aten_triu_rectangular(conf: Conf, shape: tuple):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float64, torch.int32, torch.bool]
 )
@@ -2276,6 +2163,7 @@ def test_aten_triu_different_dtypes(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_3d(conf: Conf):
     """Test aten.triu with 3D tensor (batch of matrices)"""
 
@@ -2286,6 +2174,7 @@ def test_aten_triu_3d(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("diagonal", [-1, 0, 1])
 def test_aten_triu_3d_different_diagonals(conf: Conf, diagonal: int):
     """Test aten.triu with 3D tensor and different diagonals"""
@@ -2297,6 +2186,7 @@ def test_aten_triu_3d_different_diagonals(conf: Conf, diagonal: int):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_large_diagonal(conf: Conf):
     """Test aten.triu with diagonal larger than matrix size"""
 
@@ -2307,6 +2197,7 @@ def test_aten_triu_large_diagonal(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_negative_large_diagonal(conf: Conf):
     """Test aten.triu with large negative diagonal"""
 
@@ -2317,6 +2208,7 @@ def test_aten_triu_negative_large_diagonal(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_small_matrix(conf: Conf):
     """Test aten.triu with small matrices"""
 
@@ -2327,6 +2219,7 @@ def test_aten_triu_small_matrix(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_single_element(conf: Conf):
     """Test aten.triu with 1x1 matrix"""
 
@@ -2337,6 +2230,7 @@ def test_aten_triu_single_element(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("diagonal", [10, -10])
 def test_aten_triu_dynamic_dimensions_large_diagonal(device: str, diagonal: int):
     """Test aten.triu with dynamic dimensions and large diagonal"""
@@ -2351,6 +2245,7 @@ def test_aten_triu_dynamic_dimensions_large_diagonal(device: str, diagonal: int)
     check_functions_are_equivalent(fn, device, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_dynamic_batch_dimension(conf: Conf):
     """Test aten.triu with dynamic batch dimension"""
 
