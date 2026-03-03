@@ -2522,6 +2522,7 @@ def test_aten_min_no_dim(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_aten_min_with_dim(conf: Conf, dim: int, keepdim: bool):
@@ -2534,6 +2535,7 @@ def test_aten_min_with_dim(conf: Conf, dim: int, keepdim: bool):
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
 def test_aten_min_different_dtypes(conf: Conf, dtype: torch.dtype):
     """Test aten_min with different data types"""
