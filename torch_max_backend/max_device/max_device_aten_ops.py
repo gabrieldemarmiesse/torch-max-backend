@@ -282,6 +282,8 @@ register_aten_op("aten::full")(wrap_for_max_device(aten_functions.aten_full))
 register_aten_op("aten::full_like")(wrap_for_max_device(aten_functions.aten_full_like))
 
 register_aten_op("aten::ge")(wrap_for_max_device(aten_functions.aten_ge))
+register_aten_op("aten::ge.Scalar")(wrap_for_max_device(aten_functions.aten_ge))
+
 register_aten_op("aten::gelu")(wrap_for_max_device(aten_functions.aten_gelu))
 register_aten_op("aten::gelu_backward")(
     wrap_for_max_device(aten_functions.aten_gelu_backward)
