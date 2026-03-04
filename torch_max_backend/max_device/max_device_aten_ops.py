@@ -326,6 +326,30 @@ register_aten_op("aten::masked_fill.Scalar")(
 register_aten_op("aten::masked_fill.Tensor")(
     wrap_for_max_device(aten_functions.aten_masked_fill)
 )
+
+
+@register_aten_op("aten::masked_fill_.Scalar")
+def max_device_masked_fill__scalar(
+    self: TorchMaxTensor, mask: TorchMaxTensor, value: int | float
+) -> TorchMaxTensor:
+    # in-place masked fill
+    self._max_data = aten_functions.aten_masked_fill(
+        self._max_data, mask._max_data, value
+    )
+    return self
+
+
+@register_aten_op("aten::masked_fill_.Tensor")
+def max_device_masked_fill__tensor(
+    self: TorchMaxTensor, mask: TorchMaxTensor, value: TorchMaxTensor
+) -> TorchMaxTensor:
+    # in-place masked fill
+    self._max_data = aten_functions.aten_masked_fill(
+        self._max_data, mask._max_data, value._max_data
+    )
+    return self
+
+
 register_aten_op("aten::max")(wrap_for_max_device(aten_functions.aten_max))
 
 register_aten_op("aten::max_pool2d_with_indices")(

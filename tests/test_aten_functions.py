@@ -1090,6 +1090,33 @@ def test_foreach_addcdiv_scalarlist(conf: Conf, dtype: torch.dtype):
 # See: https://github.com/pytorch/pytorch/issues/139795
 
 
+def test_aten_masked_fill__inplace_scalar(conf: Conf):
+    """Test aten.masked_fill_ with scalar values"""
+
+    def fn(x, mask):
+        aten.masked_fill_(x, mask, 5.0)
+        # Modified in-place
+        return x
+
+    x = torch.randn(2, 3)
+    mask = torch.tensor([[True, False, True], [False, True, False]])
+    check_outputs(fn, conf, [x, mask])
+
+
+def test_aten_masked_fill__inplace_tensor(conf: Conf):
+    """Test aten.masked_fill_ with tensor values"""
+
+    def fn(x, mask, value):
+        aten.masked_fill_(x, mask, value)
+        # Modified in-place
+        return x
+
+    x = torch.randn(2, 3)
+    mask = torch.tensor([[True, False, True], [False, True, False]])
+    value = torch.tensor(5.0)
+    check_outputs(fn, conf, [x, mask, value])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_ceil_basic(conf: Conf, dtype: torch.dtype):
     """Test aten.ceil basic functionality with floating point numbers"""
