@@ -300,6 +300,8 @@ register_aten_op("aten::isin.Tensor_Tensor_out")(
 register_aten_op("aten::isnan")(wrap_for_max_device(aten_functions.aten_isnan))
 
 register_aten_op("aten::le")(wrap_for_max_device(aten_functions.aten_le))
+register_aten_op("aten::le.Scalar")(wrap_for_max_device(aten_functions.aten_le))
+
 register_aten_op("aten::log")(wrap_for_max_device(aten_functions.aten_log))
 register_aten_op("aten::log1p")(wrap_for_max_device(aten_functions.aten_log1p))
 
