@@ -184,6 +184,10 @@ register_aten_op("aten::alias")(wrap_for_max_device(aten_functions.aten_alias))
 register_aten_op("aten::amax")(wrap_for_max_device(aten_functions.aten_amax))
 register_aten_op("aten::amin")(wrap_for_max_device(aten_functions.aten_amin))
 register_aten_op("aten::any")(wrap_for_max_device(aten_functions.aten_any))
+register_aten_op("aten::all")(wrap_for_max_device(aten_functions.aten_all))
+register_aten_op("aten::all.dim")(wrap_for_max_device(aten_functions.aten_all))
+register_aten_op("aten::all.dims")(wrap_for_max_device(aten_functions.aten_all))
+
 register_aten_op("aten::arange")(wrap_for_max_device(aten_functions.aten_arange))
 
 register_aten_op("aten::argmax")(wrap_for_max_device(aten_functions.aten_argmax))
