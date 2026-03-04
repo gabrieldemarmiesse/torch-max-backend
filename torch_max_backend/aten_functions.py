@@ -208,7 +208,7 @@ def aten_all(
     # Handle negative dimensions
     dim = [x if x >= 0 else len(input.shape) + x for x in dim]
 
-    result = input_bool.cast(DType.int8)
+    result = input_bool.cast(DType.int32)
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
         result = F.min(result, axis=axis)
@@ -893,7 +893,7 @@ def aten_any(
     dim = [x if x >= 0 else len(input.shape) + x for x in dim]
 
     # Remove this cast when https://github.com/modular/modular/issues/6067 is fixed
-    result = input_bool.cast(DType.int8)
+    result = input_bool.cast(DType.int32)
 
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
