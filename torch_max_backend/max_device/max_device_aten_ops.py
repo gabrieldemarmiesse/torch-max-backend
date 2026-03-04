@@ -109,7 +109,9 @@ def wrap_for_max_device(func: Callable) -> Callable:
 # ----------------------------------------------------------------------------------
 # List of registered aten ops for max_device
 # ----------------------------------------------------------------------------------
-
+register_aten_op("aten::_local_scalar_dense")(
+    wrap_for_max_device(aten_functions.aten__local_scalar_dense)
+)
 register_aten_op("aten::_adaptive_avg_pool2d")(
     wrap_for_max_device(aten_functions.aten__adaptive_avg_pool2d)
 )

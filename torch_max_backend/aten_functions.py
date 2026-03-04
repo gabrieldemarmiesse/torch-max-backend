@@ -179,6 +179,17 @@ def aten_floordiv(x, y):
     return operator.floordiv(x, y)
 
 
+# _local_scalar_dense(Tensor self) -> Scalar
+@map_to(aten._local_scalar_dense)
+def aten__local_scalar_dense(tensor: MaxTensor) -> Scalar:
+    if tensor.num_elements() != 1:
+        raise ValueError(
+            f"_local_scalar_dense requires a tensor with a single element, got {tensor.num_elements()} elements"
+        )
+    # We need to convert the result to a Python scalar for PyTorch to recognize it as a valid return type for this operator
+    return tensor.item()
+
+
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
 @map_to(aten._adaptive_avg_pool2d)
 def aten__adaptive_avg_pool2d(
