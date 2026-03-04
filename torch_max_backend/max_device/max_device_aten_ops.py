@@ -311,6 +311,7 @@ register_aten_op("aten::logical_xor")(
     wrap_for_max_device(aten_functions.aten_logical_xor)
 )
 register_aten_op("aten::lt")(wrap_for_max_device(aten_functions.aten_lt))
+register_aten_op("aten::lt.Scalar")(wrap_for_max_device(aten_functions.aten_lt))
 
 register_aten_op("aten::masked_fill.Scalar")(
     wrap_for_max_device(aten_functions.aten_masked_fill)
