@@ -323,6 +323,9 @@ register_aten_op("aten::lt.Scalar")(wrap_for_max_device(aten_functions.aten_lt))
 register_aten_op("aten::masked_fill.Scalar")(
     wrap_for_max_device(aten_functions.aten_masked_fill)
 )
+register_aten_op("aten::masked_fill.Tensor")(
+    wrap_for_max_device(aten_functions.aten_masked_fill)
+)
 register_aten_op("aten::max")(wrap_for_max_device(aten_functions.aten_max))
 
 register_aten_op("aten::max_pool2d_with_indices")(
