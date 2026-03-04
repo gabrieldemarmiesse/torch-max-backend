@@ -1894,6 +1894,86 @@ def broadcast_shape(shapes):
 # isinf(Tensor self) -> Tensor
 
 
+# isin.Tensor_Tensor(Tensor elements, Tensor test_elements, *, bool assume_unique=False, bool invert=False) -> Tensor
+@map_to(aten.isin)
+def aten_isin(
+    elements: MaxTensor,
+    test_elements: MaxTensor,
+    assume_unique: bool = False,
+    invert: bool = False,
+) -> MaxTensor:
+    """
+    Tests whether each element of elements tensor is in test_elements tensor.
+
+    For each element in `elements`, returns True if that element is in
+    `test_elements`, False otherwise. The result has the same shape as `elements`.
+
+    Args:
+        elements: Input tensor to check elements from
+        test_elements: Tensor of values to test against (typically 1D)
+        assume_unique: If True, assumes both inputs contain unique elements
+            for potential performance optimization (currently unused)
+        invert: If True, inverts the result - returns True for elements NOT in test_elements
+
+    Returns:
+        Boolean tensor of same shape as elements
+    """
+    # Special case: if test_elements is empty, return False for all elements
+    # if elements is empty, return empty boolean tensor
+    # Check by flattening and checking size
+    test_flat = F.reshape(test_elements, [-1])
+    elements_flat = F.reshape(elements, [-1])
+    num_test = test_flat.shape[0]
+    num_elements = elements_flat.shape[0]
+
+    if num_elements == 0:
+        # Empty elements means empty result
+        elements_bool = F.cast(elements_flat, DType.bool)
+        return F.reshape(elements_bool, elements.shape)
+
+    if num_test == 0:
+        # Empty test_elements means no matches
+        # Create all-False tensor by negating an all-True tensor
+        # True > False, so comparing any element with itself gives True
+        all_true = F.equal(elements_flat, elements_flat)
+        result_flat = F.logical_not(all_true)
+        result = F.reshape(result_flat, elements.shape)
+        if invert:
+            result = F.logical_not(result)
+        return result
+
+    # Cast test_flat to same dtype as elements_flat for comparison
+    # This ensures F.equal compares compatible types
+    test_flat = F.cast(test_flat, elements_flat.dtype)
+
+    # Broadcast shapes: (num_elements, 1) vs (1, num_test) -> (num_elements, num_test)
+    # This compares every element against every test_element
+    num_elements = elements_flat.shape[0]
+
+    # Add broadcasting dimensions
+    elements_expanded = F.reshape(elements_flat, [num_elements, 1])
+    test_expanded = F.reshape(test_flat, [1, num_test])
+
+    # Compare all pairs: result shape (num_elements, num_test)
+    comparisons = F.equal(elements_expanded, test_expanded)
+
+    # Reduce across test_elements dimension using logical_or
+    # Any=True means at least one test element matched
+    # Need to cast to numeric type first since reduce doesn't support bool
+    comparisons_numeric = F.cast(comparisons, DType.int32)
+    result_flat_numeric = F.max(comparisons_numeric, axis=-1)
+    result_flat = F.cast(result_flat_numeric, DType.bool)
+
+    # Reshape back to original elements shape
+    result = F.reshape(result_flat, elements.shape)
+
+    # Handle invert if needed
+    if invert:
+        result = F.logical_not(result)
+
+    return result
+
+
 # isnan(Tensor self) -> Tensor
 @map_to(aten.isnan)
 def aten_isnan(input: MaxTensor) -> MaxTensor:

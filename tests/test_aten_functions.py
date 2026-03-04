@@ -1365,6 +1365,179 @@ def test_aten_trigon_scalar_tensor(conf: Conf, fn: Callable):
     check_outputs(fn, conf, [x])
 
 
+def test_aten_isin_basic(conf: Conf):
+    """Test aten.isin basic functionality with 1D tensors"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 3, 4, 5])
+    test_elements = torch.tensor([2, 4])
+
+    # Expected: elements 2 and 4 are in test_elements
+    # Result should be [False, True, False, True, False]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.int32, torch.int64]
+)
+def test_aten_isin_different_dtypes(conf: Conf, dtype: torch.dtype):
+    """Test aten.isin with different numeric data types"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    if dtype in (torch.float32, torch.float64):
+        elements = torch.tensor([1.0, 2.5, 3.0, 4.5], dtype=dtype)
+        test_elements = torch.tensor([2.5, 4.5], dtype=dtype)
+    else:
+        elements = torch.tensor([1, 2, 3, 4], dtype=dtype)
+        test_elements = torch.tensor([2, 4], dtype=dtype)
+
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_with_invert(conf: Conf):
+    """Test aten.isin with invert=True"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=True)
+
+    elements = torch.tensor([1, 2, 3, 4, 5])
+    test_elements = torch.tensor([2, 4])
+
+    # With invert=True: return True for elements NOT in test_elements
+    # Expected: [True, False, True, False, True]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_empty_test_elements(conf: Conf):
+    """Test aten.isin with empty test_elements tensor"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 3, 4, 5])
+    test_elements = torch.tensor([])
+
+    # No elements should be found in empty test_elements
+    # Expected: [False, False, False, False, False]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_empty_elements(conf: Conf):
+    """Test aten.isin with empty elements tensor"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([])
+    test_elements = torch.tensor([1, 2, 3])
+
+    # Empty elements should return empty result
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_all_match(conf: Conf):
+    """Test aten.isin when all elements are in test_elements"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 3])
+    test_elements = torch.tensor([1, 2, 3, 4, 5])
+
+    # All elements should be found
+    # Expected: [True, True, True]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_none_match(conf: Conf):
+    """Test aten.isin when no elements are in test_elements"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 3])
+    test_elements = torch.tensor([4, 5, 6])
+
+    # No elements should be found
+    # Expected: [False, False, False]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_with_duplicates(conf: Conf):
+    """Test aten.isin with duplicates in both tensors"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 2, 3, 3, 3])
+    test_elements = torch.tensor([2, 2, 4])
+
+    # Elements 2 and 2 should be found (duplicated values treated separately)
+    # Note: behavior depends on assume_unique, with False it should handle duplicates
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_2d_tensor(conf: Conf):
+    """Test aten.isin with 2D tensor"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([[1, 2, 3], [4, 5, 6]])
+    test_elements = torch.tensor([2, 5, 7])
+
+    # Expected: [[False, True, False], [False, True, False]]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_3d_tensor(conf: Conf):
+    """Test aten.isin with 3D tensor"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
+    test_elements = torch.tensor([2, 4, 6, 8])
+
+    # Expected: [[[False, True], [False, True]], [[False, True], [False, True]]]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_with_assume_unique(conf: Conf):
+    """Test aten.isin with assume_unique=True"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=True, invert=False)
+
+    elements = torch.tensor([1, 2, 3, 4, 5])
+    test_elements = torch.tensor([2, 4])
+
+    # Result should be the same as assume_unique=False for valid unique inputs
+    # Expected: [False, True, False, True, False]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32])
+def test_aten_isin_numeric_types(conf: Conf, dtype: torch.dtype):
+    """Test aten.isin with different numeric types"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    if dtype == torch.float32:
+        elements = torch.tensor([1.5, 2.5, 3.5], dtype=dtype)
+        test_elements = torch.tensor([2.5, 4.5], dtype=dtype)
+    else:
+        elements = torch.tensor([10, 20, 30], dtype=dtype)
+        test_elements = torch.tensor([20, 40], dtype=dtype)
+
+    check_outputs(fn, conf, [elements, test_elements])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_aten_select_scatter_basic_2d(conf: Conf, dtype: torch.dtype):
     """Test aten.select_scatter basic functionality with 2D tensors"""

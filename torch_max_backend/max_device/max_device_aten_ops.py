@@ -52,7 +52,15 @@ def convert_all_torch_max_tensors_to_lazy(x: Any) -> Any:
             for key, value in x.items()
         }
     elif isinstance(
-        x, int | float | str | bool | type(None) | torch.dtype | torch.device
+        x,
+        int
+        | float
+        | str
+        | bool
+        | type(None)
+        | torch.dtype
+        | torch.device
+        | torch.layout,
     ):
         return x
     else:
@@ -130,7 +138,7 @@ def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMa
         return dest
     else:
         raise RuntimeError(
-            f"invalid configuration {self.device.type}, {dest.device.type}"
+            f"invalid configuration, trying to copy from {self.device.type} to {dest.device.type}"
         )
 
 
@@ -279,6 +287,12 @@ register_aten_op("aten::gelu_backward")(
 register_aten_op("aten::gt")(wrap_for_max_device(aten_functions.aten_gt))
 
 register_aten_op("aten::index.Tensor")(wrap_for_max_device(aten_functions.aten_index))
+register_aten_op("aten::isin.Tensor_Tensor")(
+    wrap_for_max_device(aten_functions.aten_isin)
+)
+register_aten_op("aten::isin.Tensor_Tensor_out")(
+    wrap_for_max_device(aten_functions.aten_isin)
+)
 register_aten_op("aten::isnan")(wrap_for_max_device(aten_functions.aten_isnan))
 
 register_aten_op("aten::le")(wrap_for_max_device(aten_functions.aten_le))
