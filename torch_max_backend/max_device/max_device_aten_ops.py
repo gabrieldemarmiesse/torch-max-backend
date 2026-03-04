@@ -60,7 +60,8 @@ def convert_all_torch_max_tensors_to_lazy(x: Any) -> Any:
         | type(None)
         | torch.dtype
         | torch.device
-        | torch.layout,
+        | torch.layout
+        | torch.memory_format,
     ):
         return x
     else:
