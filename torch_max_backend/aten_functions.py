@@ -190,6 +190,35 @@ def aten__local_scalar_dense(tensor: MaxTensor) -> Scalar:
     return tensor.item()
 
 
+@map_to(aten.all)
+def aten_all(
+    input: MaxTensor, dim: list[int] | None = None, keepdim: bool = False
+) -> MaxTensor:
+    input_bool = F.not_equal(input, 0)
+
+    if dim is None:
+        # Return True if any element is True (reduce all dimensions)
+        dim = tuple(range(len(input.shape)))
+    elif isinstance(dim, int):
+        dim = (dim,)
+
+    # Handle negative dimensions
+    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
+
+    result = input_bool.to(dtype=DType.uint8)
+    # Use max() to implement any() since True > False
+    for axis in sorted(dim, reverse=True):
+        result = F.min(result, axis=axis)
+
+    # Handle keepdim=False
+    if not keepdim:
+        # Squeeze the reduced dimensions
+        for axis in sorted(dim, reverse=True):
+            result = F.squeeze(result, axis=axis)
+
+    return result.to(dtype=DType.bool)
+
+
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
 @map_to(aten._adaptive_avg_pool2d)
 def aten__adaptive_avg_pool2d(
@@ -846,7 +875,10 @@ def aten_any(
     Uses max() on boolean tensor since True > False.
     """
     # Convert input to boolean first (non-zero values become True)
-    input_bool = F.not_equal(input, 0)
+    if input.dtype == DType.bool:
+        input_bool = input
+    else:
+        input_bool = F.not_equal(input, 0)
 
     if dim is None:
         # Return True if any element is True (reduce all dimensions)
@@ -857,7 +889,9 @@ def aten_any(
     # Handle negative dimensions
     dim = [x if x >= 0 else len(input.shape) + x for x in dim]
 
-    result = input_bool
+    # Remove this cast when https://github.com/modular/modular/issues/6067 is fixed
+    result = input_bool.cast(DType.int8)
+
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
         result = F.max(result, axis=axis)
@@ -868,7 +902,8 @@ def aten_any(
         for axis in sorted(dim, reverse=True):
             result = F.squeeze(result, axis=axis)
 
-    return result
+    # Remove this cast when https://github.com/modular/modular/issues/6067 is fixed
+    return result.cast(DType.bool)
 
 
 # arange.start_step(Scalar start, Scalar end, Scalar step=1, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
