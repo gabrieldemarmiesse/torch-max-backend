@@ -194,7 +194,10 @@ def aten__local_scalar_dense(tensor: MaxTensor) -> Scalar:
 def aten_all(
     input: MaxTensor, dim: list[int] | None = None, keepdim: bool = False
 ) -> MaxTensor:
-    input_bool = F.not_equal(input, 0)
+    if input.dtype == DType.bool:
+        input_bool = input
+    else:
+        input_bool = F.not_equal(input, 0)
 
     if dim is None:
         # Return True if any element is True (reduce all dimensions)
@@ -205,7 +208,7 @@ def aten_all(
     # Handle negative dimensions
     dim = [x if x >= 0 else len(input.shape) + x for x in dim]
 
-    result = input_bool.to(dtype=DType.uint8)
+    result = input_bool.cast(DType.int8)
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
         result = F.min(result, axis=axis)
@@ -216,7 +219,7 @@ def aten_all(
         for axis in sorted(dim, reverse=True):
             result = F.squeeze(result, axis=axis)
 
-    return result.to(dtype=DType.bool)
+    return result.cast(DType.bool)
 
 
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
