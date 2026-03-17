@@ -2731,8 +2731,11 @@ def test_aten_min_no_dim(conf: Conf, call_checker: CallChecker):
 @pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_aten_min_with_dim(conf: Conf, dim: int, keepdim: bool):
+def test_aten_min_with_dim(
+    conf: Conf, dim: int, keepdim: bool, call_checker: CallChecker
+):
     """Test aten_min with dimension (returns values and indices tuple)"""
+    call_checker.register(aten_functions.aten_min)
 
     def fn(x):
         return aten.min(x, dim=dim, keepdim=keepdim)
@@ -2743,8 +2746,11 @@ def test_aten_min_with_dim(conf: Conf, dim: int, keepdim: bool):
 
 @pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
-def test_aten_min_different_dtypes(conf: Conf, dtype: torch.dtype):
+def test_aten_min_different_dtypes(
+    conf: Conf, dtype: torch.dtype, call_checker: CallChecker
+):
     """Test aten_min with different data types"""
+    call_checker.register(aten_functions.aten_min)
 
     def fn(x):
         return aten.min(x, dim=1, keepdim=False)
@@ -2760,8 +2766,15 @@ def test_aten_min_different_dtypes(conf: Conf, dtype: torch.dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
 @pytest.mark.parametrize("value", [-1.5, 42])
-def test_fill_scalar_basic(conf: Conf, dtype: torch.dtype, shape: tuple, value: float):
+def test_fill_scalar_basic(
+    conf: Conf,
+    dtype: torch.dtype,
+    shape: tuple,
+    value: float,
+    call_checker: CallChecker,
+):
     """Test basic fill.Scalar functionality with different dtypes, shapes, and values"""
+    call_checker.register(aten_functions.aten_fill_scalar)
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -2776,9 +2789,10 @@ def test_fill_scalar_basic(conf: Conf, dtype: torch.dtype, shape: tuple, value: 
 @pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
 @pytest.mark.parametrize("value", [-5, 42])
 def test_fill_scalar_integer_dtypes(
-    conf: Conf, dtype: torch.dtype, shape: tuple, value: int
+    conf: Conf, dtype: torch.dtype, shape: tuple, value: int, call_checker: CallChecker
 ):
     """Test fill.Scalar functionality with integer dtypes"""
+    call_checker.register(aten_functions.aten_fill_scalar)
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -2790,8 +2804,9 @@ def test_fill_scalar_integer_dtypes(
 
 
 @pytest.mark.parametrize("value", [-5, 100])
-def test_fill_scalar_integer_values(conf: Conf, value: int):
+def test_fill_scalar_integer_values(conf: Conf, value: int, call_checker: CallChecker):
     """Test fill.Scalar with integer values"""
+    call_checker.register(aten_functions.aten_fill_scalar)
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -2802,8 +2817,9 @@ def test_fill_scalar_integer_values(conf: Conf, value: int):
     check_outputs(fn, conf, [x])
 
 
-def test_fill_scalar_single_element(conf: Conf):
+def test_fill_scalar_single_element(conf: Conf, call_checker: CallChecker):
     """Test fill.Scalar with single element tensor"""
+    call_checker.register(aten_functions.aten_fill_scalar)
 
     def fn(x):
         return torch.ops.aten.fill.Scalar(x, 7.5)
