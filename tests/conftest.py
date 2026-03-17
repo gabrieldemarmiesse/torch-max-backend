@@ -2,6 +2,7 @@ import os
 
 os.environ["MODULAR_TELEMETRY_ENABLED"] = "0"
 os.environ["MAX_USE_EAGER_INTERPRETER"] = "1"
+os.environ["TORCH_MAX_BACKEND_TESTING"] = "1"
 import pytest
 
 # must be called before importing torch_max_backend
@@ -13,7 +14,7 @@ from mojo.paths import _build_mojo_source_package
 
 from torch_max_backend import get_accelerators, register_max_devices
 from torch_max_backend.profiler import profile
-from torch_max_backend.testing import Conf
+from torch_max_backend.testing import CallChecker, Conf
 from torch_max_backend.torch_compile_backend import compiler
 
 # from torch_max_backend.max_device.log_aten_calls import log_aten_calls
@@ -140,3 +141,10 @@ def pytest_make_parametrize_id(config, val, argname):
 def pytest_collection_modifyitems(items):
     for item in items:
         item.add_marker(pytest.mark.flaky(retries=2))
+
+
+@pytest.fixture()
+def call_checker():
+    call_checker_instance = CallChecker()
+    yield call_checker_instance
+    call_checker_instance.check_was_called()

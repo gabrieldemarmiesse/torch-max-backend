@@ -6,7 +6,9 @@ from torch._dynamo import mark_dynamic
 from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
+from torch_max_backend import aten_functions
 from torch_max_backend.testing import (
+    CallChecker,
     Conf,
     check_functions_are_equivalent,
     check_outputs,
@@ -2702,8 +2704,11 @@ def test_aten_amin_single_dim(conf: Conf, dim: int, keepdim: bool):
 
 @pytest.mark.parametrize("dims", [[0, 1], [1, 2], [0, 2]])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_aten_amin_multiple_dims(conf: Conf, dims: list[int], keepdim: bool):
+def test_aten_amin_multiple_dims(
+    conf: Conf, dims: list[int], keepdim: bool, call_checker: CallChecker
+):
     """Test aten_amin with multiple dimensions"""
+    call_checker.register(aten_functions.aten_amin)
 
     def fn(x):
         return aten.amin(x, dim=dims, keepdim=keepdim)
@@ -2712,8 +2717,9 @@ def test_aten_amin_multiple_dims(conf: Conf, dims: list[int], keepdim: bool):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_min_no_dim(conf: Conf):
+def test_aten_min_no_dim(conf: Conf, call_checker: CallChecker):
     """Test aten_min without dimension (returns single value)"""
+    call_checker.register(aten_functions.aten_min)
 
     def fn(x):
         return aten.min(x)

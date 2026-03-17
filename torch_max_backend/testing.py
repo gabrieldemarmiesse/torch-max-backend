@@ -7,6 +7,28 @@ import torch
 from torch_max_backend import max_backend
 
 
+class CallChecker:
+    def __init__(self):
+        self._function_to_check = None
+        self._count_before_starting_to_check = None
+
+    def register(self, func: Callable):
+        self._function_to_check = func
+        self._count_before_starting_to_check = func.call_count
+
+    def check_was_called(self):
+        if self._function_to_check is None:
+            raise ValueError(
+                "No function to check was set, call call_checker.register first"
+            )
+        if not (
+            self._function_to_check.call_count > self._count_before_starting_to_check
+        ):
+            raise AssertionError(
+                f"Expected {self._function_to_check.__name__} to be called at least once in the test, but it was not"
+            )
+
+
 def check_functions_are_equivalent(
     fn: Callable,
     device: str | None,

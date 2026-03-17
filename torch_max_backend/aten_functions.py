@@ -5,6 +5,7 @@ The only ressources I could find on the subject are:
 - https://docs.pytorch.org/docs/stable/torch.compiler_ir.html
 """
 
+import functools
 import itertools
 import math
 import operator
@@ -24,6 +25,7 @@ from torch._decomp import core_aten_decompositions
 from torch._ops import OpOverload, OpOverloadPacket
 from torch.ops import aten
 
+import torch_max_backend.is_running_tests
 from torch_max_backend import custom_mojo_ops
 from torch_max_backend.flags import verbose_enabled
 from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerators
@@ -122,7 +124,19 @@ def map_to(func):
 
             func_to_map = beartype(func_to_map)
 
-        MAPPING_TORCH_ATEN_TO_MAX[func] = func_to_map
+        # We count the number of calls here because otherwise it's hard to
+        # get it with mock since the functions are all gathered at import time
+        # into dicts.
+        if torch_max_backend.is_running_tests.IS_RUNNING_TESTS:
+
+            @functools.wraps(func_to_map)
+            def wrapped_func(*args, **kwargs):
+                wrapped_func.call_count += 1
+                return func_to_map(*args, **kwargs)
+
+            wrapped_func.call_count = 0
+
+        MAPPING_TORCH_ATEN_TO_MAX[func] = wrapped_func
         if isinstance(func, OpOverload):
             DECOMPOSITION_TABLE.pop(func, None)
         elif isinstance(func, OpOverloadPacket):
@@ -139,7 +153,10 @@ def map_to(func):
             raise TypeError(
                 f"Expected OpOverload or OpOverloadPacket, got {type(func)}"
             )
-        return func_to_map
+        if torch_max_backend.is_running_tests.IS_RUNNING_TESTS:
+            return wrapped_func
+        else:
+            return func_to_map
 
     return decorator
 

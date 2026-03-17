@@ -68,12 +68,14 @@ Write unit tests in `test_aten_functions.py` using this op directly:
 You shoud check in the unit test that the aten function has been called with this pattern:
 
 ```python
-def test_welcome_email(mocker):
-    mock_send = mocker.patch("mymodule.send_email")
-    
-    send_welcome_email({"email": "alice@example.com"})
-    
-    mock_send.assert_called_once_with("alice@example.com", "Welcome!")
+def test_aten_min_no_dim(conf: Conf, call_checker: CallChecker):
+    call_checker.register(aten_functions.aten_min)
+
+    def fn(x):
+        return aten.min(x)
+
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
 ```
 
 ### Step 3: Run Tests (Expected to Fail)
