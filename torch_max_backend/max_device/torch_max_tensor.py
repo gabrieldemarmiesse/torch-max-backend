@@ -4,6 +4,7 @@ import max.driver
 import torch
 from max.driver import CPU
 from max.experimental.tensor import Tensor as MaxEagerTensor
+from max.experimental.torch import max_dtype_to_torch
 
 from torch_max_backend.max_device import torch_max_device_module
 
@@ -43,7 +44,7 @@ class TorchMaxTensor(torch.Tensor):
     def _from_max_data(cls, max_data: MaxEagerTensor) -> "TorchMaxTensor":
         shape = tuple(max_data.shape)
 
-        dtype = max_data.dtype.to_torch()
+        dtype = max_dtype_to_torch(max_data.dtype)
         return TorchMaxTensor(shape, dtype=dtype, max_data=max_data)
 
     __torch_function__ = torch._C._disabled_torch_function_impl

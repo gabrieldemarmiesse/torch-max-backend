@@ -11,9 +11,9 @@ import torch
 from functorch.compile import make_boxed_func
 from max import engine
 from max.dtype import DType
+from max.experimental.torch.torch import max_device_ref
 from max.graph import DeviceRef, Graph, KernelLibrary
 from max.graph import ops as max_ops
-from max.torch.torch import max_device_ref
 from torch._dynamo.backends.common import aot_autograd
 
 from torch_max_backend.aten_functions import (

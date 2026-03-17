@@ -3,8 +3,8 @@ from pathlib import Path
 
 import max.graph.ops as max_ops
 import torch
+from max.experimental.torch import CustomOpLibrary
 from max.graph import TensorType
-from max.torch import CustomOpLibrary
 
 import torch_max_backend
 import torch_max_backend.torch_compile_backend.compiler

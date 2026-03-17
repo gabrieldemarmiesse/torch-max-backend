@@ -57,7 +57,12 @@ mojo-compiler = [
 max-mojo-libs = [
     { index = "modular-nightly" },
 ]
-
+max-mojo-mogg-libs = [
+    { index = "modular-nightly" },
+]
+mojo-compiler-mojo-libs = [
+    { index = "modular-nightly" },
+]
 
 [[tool.uv.index]]
 name = "modular-nightly"
@@ -75,13 +80,15 @@ skip-magic-trailing-comma = true
 [dependency-groups]
 dev = [
     # Bump the version of max nightly here
-    "max==26.2.0.dev2026030305",
-    "max-core==26.2.0.dev2026030305",
-    "max-mojo-libs==26.2.0.dev2026030305",
-    "mojo==0.26.2.0.dev2026030305",
-    "mblack==26.2.0.dev2026030305",
-    "mojo-lldb-libs==0.26.2.0.dev2026030305",
-    "mojo-compiler==0.26.2.0.dev2026030305",
+    "max==26.3.0.dev2026031605",
+    "max-core==26.3.0.dev2026031605",
+    "max-mojo-libs==26.3.0.dev2026031605",
+    "mojo==0.26.3.0.dev2026031605",
+    "mblack==26.3.0.dev2026031605",
+    "mojo-lldb-libs==0.26.3.0.dev2026031605",
+    "mojo-compiler==0.26.3.0.dev2026031605",
+    "max-mojo-mogg-libs==26.3.0.dev2026031605",
+    "mojo-compiler-mojo-libs==0.26.3.0.dev2026031605",
     "hatchling",
     "ipython",
     "pillow>=11.3.0",
@@ -100,5 +107,6 @@ dev = [
     "matplotlib>=3.10.6",
     "pytest-random-order>=1.2.0",
     "setuptools>=80.9.0",
+    "pytest-mock>=3.14.0",
 ]
 

@@ -4,8 +4,8 @@ from typing import Any
 import max.driver
 import torch
 from max.driver import CPU
-from max.dtype import DType
 from max.experimental.tensor import Tensor as MaxEagerTensor
+from max.experimental.torch.torch import torch_dtype_to_max
 
 from torch_max_backend import aten_functions
 from torch_max_backend.max_device.torch_max_tensor import (
@@ -253,7 +253,7 @@ def max_device_empty_memory_format(
     size, *, dtype=None, layout=None, device=None, pin_memory=None, memory_format=None
 ) -> TorchMaxTensor:
     dtype = torch.float32 if dtype is None else dtype
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
     device = find_equivalent_max_device(device)
     return TorchMaxTensor._from_max_data(
         MaxEagerTensor.zeros(size, dtype=dtype, device=device)
@@ -266,7 +266,7 @@ def empty_strided(
     size, stride, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMaxTensor:
     dtype = torch.float32 if dtype is None else dtype
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
     device = find_equivalent_max_device(device)
     return TorchMaxTensor._from_max_data(
         MaxEagerTensor.zeros(size, dtype=dtype, device=device)

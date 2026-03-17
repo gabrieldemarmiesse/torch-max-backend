@@ -1,5 +1,5 @@
 import compiler
-from math import ceil
+from std.math import ceil
 from tensor import ElementwiseUnaryOp
 
 

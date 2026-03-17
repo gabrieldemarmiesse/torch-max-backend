@@ -1,8 +1,8 @@
 import compiler
-from runtime.asyncrt import DeviceContextPtr
+from std.runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor, foreach
 
-from utils.index import IndexList
+from std.utils.index import IndexList
 
 
 @compiler.register("bitwise_and")
@@ -14,9 +14,9 @@ struct BitwiseAndKernel:
         //,
         target: StaticString,
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
-        y: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
+        y: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         @parameter
@@ -35,8 +35,8 @@ struct BitwiseAndScalarKernel:
     fn execute[
         dtype: DType, rank: Int, //, target: StaticString, other: Int
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         comptime other_as_scalar = Scalar[dtype](other)
@@ -57,8 +57,8 @@ struct BitwiseAndScalarKernelBool:
     fn execute[
         dtype: DType, rank: Int, //, target: StaticString, other: Bool
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         comptime other_as_scalar = Scalar[dtype](other)
@@ -82,9 +82,9 @@ struct BitwiseOrKernel:
         //,
         target: StaticString,
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
-        y: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
+        y: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         @parameter
@@ -103,8 +103,8 @@ struct BitwiseOrScalarKernel:
     fn execute[
         dtype: DType, rank: Int, //, target: StaticString, other: Int
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         comptime other_as_scalar = Scalar[dtype](other)
@@ -125,8 +125,8 @@ struct BitwiseOrScalarKernelBool:
     fn execute[
         dtype: DType, rank: Int, //, target: StaticString, other: Bool
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         comptime other_as_scalar = Scalar[dtype](other)
@@ -150,9 +150,9 @@ struct BitwiseXorKernel:
         //,
         target: StaticString,
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
-        y: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
+        y: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         @parameter
@@ -171,8 +171,8 @@ struct BitwiseXorScalarKernel:
     fn execute[
         dtype: DType, rank: Int, //, target: StaticString, other: Int
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         comptime other_as_scalar = Scalar[dtype](other)
@@ -193,8 +193,8 @@ struct BitwiseXorScalarKernelBool:
     fn execute[
         dtype: DType, rank: Int, //, target: StaticString, other: Bool
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         comptime other_as_scalar = Scalar[dtype](other)
@@ -218,8 +218,8 @@ struct BitwiseNotKernel:
         //,
         target: StaticString,
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        x: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        x: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         @parameter

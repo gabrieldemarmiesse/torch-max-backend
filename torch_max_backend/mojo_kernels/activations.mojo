@@ -1,8 +1,8 @@
-import math
+import std.math as math
 from compiler import register
-from runtime.asyncrt import DeviceContextPtr
+from std.runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor, foreach
-from utils.index import IndexList
+from std.utils.index import IndexList
 
 
 @compiler.register("gelu_backward")
@@ -15,9 +15,9 @@ struct GeluBackwardKernel:
         target: StaticString,
         approximate: StaticString,
     ](
-        output: OutputTensor[dtype=dtype, rank=rank],
-        grad_output: InputTensor[dtype=dtype, rank=rank],
-        input: InputTensor[dtype=dtype, rank=rank],
+        output: OutputTensor[dtype=dtype, rank=rank, ...],
+        grad_output: InputTensor[dtype=dtype, rank=rank, ...],
+        input: InputTensor[dtype=dtype, rank=rank, ...],
         ctx: DeviceContextPtr,
     ) raises:
         comptime assert (
