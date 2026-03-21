@@ -10,8 +10,7 @@ import max.graph.value
 import torch
 from functorch.compile import make_boxed_func
 from max import engine
-from max.dtype import DType
-from max.experimental.torch.torch import max_device_ref
+from max.experimental.torch.torch import max_device_ref, torch_dtype_to_max
 from max.graph import DeviceRef, Graph, KernelLibrary
 from max.graph import ops as max_ops
 from torch._dynamo.backends.common import aot_autograd
@@ -210,7 +209,7 @@ class _GraphFactory:
         for input_name, tensor in self.replace_inputs.items():
             self.tensor_book[input_name] = max_ops.constant(
                 tensor,
-                dtype=DType.from_torch(tensor.dtype),
+                dtype=torch_dtype_to_max(tensor.dtype),
                 device=self.get_max_device(tensor),
             )
 
@@ -251,7 +250,7 @@ class _GraphFactory:
                     )
             self.graph_inputs.append(
                 max.graph.value.TensorType(
-                    dtype=DType.from_torch(example_value.dtype),
+                    dtype=torch_dtype_to_max(example_value.dtype),
                     shape=shape,
                     device=self.get_max_device(example_value),
                 )

@@ -100,6 +100,7 @@ def convert_all_lazy_to_torch_max_tensors(x: Any) -> Any:
 
 def wrap_for_max_device(func: Callable) -> Callable:
     def wrapper(*args, **kwargs):
+        print("inside wrapper for", func.__name__)
         args, kwargs = convert_all_torch_max_tensors_to_lazy((args, kwargs))
         result = func(*args, **kwargs)
         return convert_all_lazy_to_torch_max_tensors(result)
@@ -123,8 +124,10 @@ register_aten_op("aten::_adaptive_avg_pool2d_backward")(
 
 @register_aten_op("aten::_copy_from")
 def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMaxTensor:
-    if self.device == dest.device and self.device.type == "max_device":
-        dest._max_data = self._max_data
+    if self.device.type == dest.device.type and self.device.type == "max_device":
+        dest_max_device = find_equivalent_max_device(dest.device)
+        copied_data = self._max_data.to(dest_max_device)
+        dest._max_data = copied_data
         return dest
 
     if self.device.type == "max_device" and dest.device.type == "cpu":
@@ -141,7 +144,8 @@ def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMa
         return dest
     else:
         raise RuntimeError(
-            f"invalid configuration, trying to copy from {self.device.type} to {dest.device.type}"
+            f"invalid configuration, trying to copy from "
+            f"{self.device.type}:{self.device.index} to {dest.device.type}:{dest.device.index}"
         )
 
 
@@ -159,7 +163,9 @@ register_aten_op("aten::_scaled_dot_product_efficient_attention")(
 register_aten_op("aten::_scaled_dot_product_flash_attention")(
     wrap_for_max_device(aten_functions.aten__scaled_dot_product_flash_attention)
 )
-
+register_aten_op("aten::_scaled_dot_product_attention_math")(
+    wrap_for_max_device(aten_functions.aten__scaled_dot_product_attention_math)
+)
 register_aten_op("aten::_softmax")(wrap_for_max_device(aten_functions.aten__softmax))
 
 
