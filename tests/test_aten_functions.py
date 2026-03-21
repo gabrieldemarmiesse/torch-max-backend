@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 import pytest
 import torch
+import torch.nn.functional
 from torch._dynamo import mark_dynamic
 from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
@@ -16,15 +17,18 @@ from torch_max_backend.testing import (
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype):
+def test_scaled_dot_product_flash_attention_basic(
+    conf: Conf, dtype: torch.dtype, call_checker: CallChecker
+):
     """Test _scaled_dot_product_flash_attention basic functionality"""
+    call_checker.register(aten_functions.aten__scaled_dot_product_flash_attention)
     # Flash attention only works on CUDA
-    if conf.device != "cuda:0":
-        pytest.skip("Flash attention is only supported on CUDA")
+    # if conf.device != "cuda:0":
+    #    pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
-        return torch.ops.aten._scaled_dot_product_flash_attention(
-            q, k, v, dropout_p=0.0, is_causal=False, return_debug_mask=False
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, dropout_p=0.0, is_causal=False
         )[0]  # For the moment we support only training
 
     batch_size, num_heads, seq_len, head_dim = 2, 4, 8, 16
@@ -37,8 +41,11 @@ def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_with_causal(conf: Conf, dtype: str):
+def test_scaled_dot_product_flash_attention_with_causal(
+    conf: Conf, dtype: str, call_checker: CallChecker
+):
     """Test _scaled_dot_product_flash_attention with causal masking"""
+    call_checker.register(aten_functions.aten__scaled_dot_product_flash_attention)
     # Flash attention only works on CUDA
     if conf.device != "cuda:0":
         pytest.skip("Flash attention is only supported on CUDA")

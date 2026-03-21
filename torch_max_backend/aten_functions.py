@@ -17,7 +17,7 @@ import torch
 from max.dtype import DType
 from max.experimental import functional as F
 from max.experimental.tensor import Tensor as MaxEagerTensor
-from max.experimental.torch.torch import max_device_ref
+from max.experimental.torch.torch import max_device_ref, torch_dtype_to_max
 from max.graph import Dim, StaticDim, TensorType
 from max.graph import ops as max_ops
 from max.graph.type import DeviceRef
@@ -209,13 +209,14 @@ def aten__local_scalar_dense(tensor: MaxTensor) -> Scalar:
 
 @map_to(aten.all)
 def aten_all(
-    input: MaxTensor, dim: list[int] | None = None, keepdim: bool = False
+    input: MaxTensor, dim: list[int] | int | None = None, keepdim: bool = False
 ) -> MaxTensor:
     if input.dtype == DType.bool:
         input_bool = input
     else:
         input_bool = F.not_equal(input, 0)
-
+    if isinstance(dim, int):
+        dim = [dim]
     if dim is None:
         # Return True if any element is True (reduce all dimensions)
         dim = tuple(range(len(input.shape)))
@@ -379,6 +380,23 @@ def aten__native_batch_norm_legit_no_training(
 
 
 # _pdist_forward(Tensor self, float p=2) -> Tensor
+
+
+@map_to(aten._scaled_dot_product_attention_math)
+def aten__scaled_dot_product_attention_math(
+    query: MaxTensor,
+    key: MaxTensor,
+    value: MaxTensor,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    return_debug_mask: bool = False,
+    scale: float | None = None,
+):
+    return aten__scaled_dot_product_flash_attention(
+        query, key, value, dropout_p, is_causal, return_debug_mask, scale
+    )
+
+
 # _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)
 @map_to(aten._scaled_dot_product_flash_attention)
 def aten__scaled_dot_product_flash_attention(
@@ -412,6 +430,8 @@ def aten__scaled_dot_product_flash_attention(
     mask_variant = MHAMaskVariant.CAUSAL_MASK if is_causal else MHAMaskVariant.NULL_MASK
 
     # Call flash attention
+    from max.nn.kernels import flash_attention_gpu
+
     attn_out = flash_attention_gpu(q, k, v, mask_variant=mask_variant, scale=scale)
 
     # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
@@ -689,7 +709,7 @@ def aten__to_copy(
     if device is not None:
         result = F.transfer_to(result, device=torch_device_to_max_device(device))
     if dtype is not None:
-        result = F.cast(result, dtype=DType.from_torch(dtype))
+        result = F.cast(result, dtype=torch_dtype_to_max(dtype))
     return result
 
 
