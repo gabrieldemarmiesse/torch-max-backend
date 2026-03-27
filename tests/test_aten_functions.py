@@ -1873,7 +1873,6 @@ def test_aten_pow_tensor_tensor_single_element(conf: Conf):
     check_outputs(fn, conf, [base, exponent])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_aten_scatter_src_basic_2d(conf: Conf, dtype: torch.dtype):
     """Test aten.scatter.src basic functionality with 2D tensors"""
@@ -1889,7 +1888,6 @@ def test_aten_scatter_src_basic_2d(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [self, index, src])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.int32, torch.int64])
 def test_aten_scatter_src_dim0(conf: Conf, dtype: torch.dtype):
     """Test aten.scatter.src along dimension 0"""
@@ -1905,7 +1903,6 @@ def test_aten_scatter_src_dim0(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [self, index, src])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_scatter_src_3d_tensor(conf: Conf, dtype: torch.dtype):
     """Test aten.scatter.src with 3D tensor"""
@@ -1925,7 +1922,6 @@ def test_aten_scatter_src_3d_tensor(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [self, index, src])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_src_negative_dim(conf: Conf):
     """Test aten.scatter.src with negative dimension"""
 
@@ -1940,7 +1936,6 @@ def test_aten_scatter_src_negative_dim(conf: Conf):
     check_outputs(fn, conf, [self, index, src])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_value_basic(conf: Conf):
     """Test aten.scatter.value with scalar value - basic functionality"""
 
@@ -1954,7 +1949,6 @@ def test_aten_scatter_value_basic(conf: Conf):
     check_outputs(fn, conf, [x, index])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_value_diagonal(conf: Conf):
     """Test aten.scatter.value with scalar value - create diagonal pattern"""
 
@@ -1966,7 +1960,6 @@ def test_aten_scatter_value_diagonal(conf: Conf):
     check_outputs(fn, conf, [x, index])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float64, torch.int32, torch.int64]
 )
@@ -1988,7 +1981,6 @@ def test_aten_scatter_value_dtypes(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [x, index])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_value_dim1(conf: Conf):
     """Test aten.scatter.value with scalar value along dimension 1"""
 
@@ -2000,7 +1992,6 @@ def test_aten_scatter_value_dim1(conf: Conf):
     check_outputs(fn, conf, [x, index])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_scatter_value_3d(conf: Conf):
     """Test aten.scatter.value with scalar value on 3D tensor"""
 
@@ -2317,7 +2308,6 @@ def test_aten_squeeze_edge_cases(device: str, shape: tuple):
     check_functions_are_equivalent(fn, device, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_basic(conf: Conf):
     """Test aten.triu with default diagonal=0"""
 
@@ -2328,7 +2318,6 @@ def test_aten_triu_basic(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("diagonal", [-2, -1, 0, 1, 2])
 def test_aten_triu_different_diagonals(conf: Conf, diagonal: int):
     """Test aten.triu with different diagonal values"""
@@ -2340,7 +2329,6 @@ def test_aten_triu_different_diagonals(conf: Conf, diagonal: int):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("shape", [(3, 5), (5, 3), (7, 7)])
 def test_aten_triu_rectangular(conf: Conf, shape: tuple):
     """Test aten.triu with rectangular matrices"""
@@ -2352,7 +2340,6 @@ def test_aten_triu_rectangular(conf: Conf, shape: tuple):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float64, torch.int32, torch.bool]
 )
@@ -2372,7 +2359,6 @@ def test_aten_triu_different_dtypes(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_3d(conf: Conf):
     """Test aten.triu with 3D tensor (batch of matrices)"""
 
@@ -2383,7 +2369,6 @@ def test_aten_triu_3d(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("diagonal", [-1, 0, 1])
 def test_aten_triu_3d_different_diagonals(conf: Conf, diagonal: int):
     """Test aten.triu with 3D tensor and different diagonals"""
@@ -2395,7 +2380,6 @@ def test_aten_triu_3d_different_diagonals(conf: Conf, diagonal: int):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_large_diagonal(conf: Conf):
     """Test aten.triu with diagonal larger than matrix size"""
 
@@ -2406,7 +2390,6 @@ def test_aten_triu_large_diagonal(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_negative_large_diagonal(conf: Conf):
     """Test aten.triu with large negative diagonal"""
 
@@ -2417,7 +2400,6 @@ def test_aten_triu_negative_large_diagonal(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_small_matrix(conf: Conf):
     """Test aten.triu with small matrices"""
 
@@ -2428,7 +2410,6 @@ def test_aten_triu_small_matrix(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_single_element(conf: Conf):
     """Test aten.triu with 1x1 matrix"""
 
@@ -2439,7 +2420,6 @@ def test_aten_triu_single_element(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("diagonal", [10, -10])
 def test_aten_triu_dynamic_dimensions_large_diagonal(device: str, diagonal: int):
     """Test aten.triu with dynamic dimensions and large diagonal"""
@@ -2454,7 +2434,6 @@ def test_aten_triu_dynamic_dimensions_large_diagonal(device: str, diagonal: int)
     check_functions_are_equivalent(fn, device, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_triu_dynamic_batch_dimension(conf: Conf):
     """Test aten.triu with dynamic batch dimension"""
 
@@ -2735,7 +2714,6 @@ def test_aten_min_no_dim(conf: Conf, call_checker: CallChecker):
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_aten_min_with_dim(
@@ -2751,7 +2729,6 @@ def test_aten_min_with_dim(
     check_outputs(fn, conf, [x])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
 def test_aten_min_different_dtypes(
     conf: Conf, dtype: torch.dtype, call_checker: CallChecker
