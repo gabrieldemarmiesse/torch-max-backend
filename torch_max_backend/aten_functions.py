@@ -598,7 +598,7 @@ def aten__softmax(self: MaxTensor, dim: int, half_to_float: bool):
 @map_to(aten.softmax)
 def aten_softmax(input, dim=-1, dtype=None):
     if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
+        max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
 
     # Handle negative dim
@@ -966,7 +966,7 @@ def aten_arange(
         raise ValueError("We don't support float end values for torch.arange")
     if dtype is None:
         dtype = torch.int64
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
 
     if device is None:
         device = torch.get_default_device()
@@ -1520,7 +1520,7 @@ def aten_cumsum(
         dtype: the desired data type of returned tensor
     """
     if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
+        max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
 
     # MAX's cumsum handles negative dimensions automatically, so no need to convert
@@ -1770,7 +1770,7 @@ def aten_full(
 ):
     if dtype is None:
         dtype = torch.float32
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
 
     if device is None:
         device = torch.get_default_device()
@@ -1799,7 +1799,7 @@ def aten_full_like(
     if dtype is None:
         target_dtype = input.dtype
     else:
-        target_dtype = DType.from_torch(dtype)
+        target_dtype = torch_dtype_to_max(dtype)
 
     # If device is not specified, use the input tensor's device
     if device is None:
@@ -2256,7 +2256,7 @@ def aten_mean(
     dtype: torch.dtype | None = None,
 ) -> MaxTensor:
     if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
+        max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
 
     result = input
@@ -2525,7 +2525,7 @@ def aten_ones(
 ) -> MaxEagerTensor:
     if dtype is None:
         dtype = torch.float32
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
 
     if device is None:
         device = torch.get_default_device()
@@ -2624,7 +2624,9 @@ def aten_scalar_tensor(
         device = torch.get_default_device()
 
     return F.constant(
-        value, dtype=DType.from_torch(dtype), device=torch_device_to_max_device(device)
+        value,
+        dtype=torch_dtype_to_max(dtype),
+        device=torch_device_to_max_device(device),
     )
 
 
@@ -2852,7 +2854,7 @@ def aten_sum(
     dtype: torch.dtype | None = None,
 ) -> MaxTensor:
     if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
+        max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
 
     result = input
@@ -3594,7 +3596,7 @@ def aten_zeros(
     pin_memory: bool | None = None,
 ) -> MaxTensor:
     dtype = torch.float32 if dtype is None else dtype
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
     device = torch_device_to_max_device(device)
     return MaxEagerTensor.zeros(size, dtype=dtype, device=device)
 
