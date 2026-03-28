@@ -118,11 +118,11 @@ def gelu_backward(
     """
     Custom Mojo kernel for gelu_backward operation.
     """
+    kernel_name = "gelu_backward_tanh" if approximate == "tanh" else "gelu_backward"
     return F.custom(
-        name="gelu_backward",
+        name=kernel_name,
         device=input.device,
         values=[grad_output, input],
-        parameters=dict(approximate=approximate),
         out_types=[
             TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
         ],
