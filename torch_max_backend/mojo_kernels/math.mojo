@@ -6,7 +6,7 @@ from tensor import ElementwiseUnaryOp
 @compiler.register("ceil")
 struct CeilKernel(ElementwiseUnaryOp):
     @staticmethod
-    fn elementwise[
+    def elementwise[
         dtype: DType,
         width: Int,
     ](x: SIMD[dtype, width]) -> SIMD[dtype, width]:
