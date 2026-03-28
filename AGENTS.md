@@ -43,7 +43,8 @@ Always use uv to run commands to ensure the correct environment is activated. Ne
   - VGG, DenseNet (vision models)
   - `no_graph_breaks.py` (example demonstrating graph compilation without breaks)
 - **Reference Materials**:
-  - The directory `./modular` contains MAX graph implementation examples and API reference
+  - The directory `../modular` contains MAX graph implementation examples and API reference.
+  - The directory `../pytorch` contains the source code for pytorch, which can be useful.
 
 
 ## To add support for an op
