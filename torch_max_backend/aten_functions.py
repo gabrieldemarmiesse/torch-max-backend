@@ -512,7 +512,7 @@ def _scaled_dot_product_attention_cpu(
 
 
 def _is_cpu_tensor(x: MaxTensor) -> bool:
-    return getattr(getattr(x, "device", None), "label", None) == "cpu"
+    return "cpu" in str(x.device).lower()
 
 
 # _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)
