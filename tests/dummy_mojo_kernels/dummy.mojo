@@ -1,26 +1,26 @@
-from compiler import register
+import compiler
+from std.runtime.asyncrt import DeviceContextPtr
 from tensor import InputTensor, OutputTensor, foreach
-from runtime.asyncrt import DeviceContextPtr
-from utils.index import IndexList
+from std.utils.index import IndexList
 
 
-@register("grayscale")
+@compiler.register("grayscale")
 struct Grayscale:
     @staticmethod
-    fn execute[
+    def execute[
         target: StaticString,
     ](
-        img_out: OutputTensor[dtype=DType.float32, rank=2],
-        img_in: InputTensor[dtype=DType.uint8, rank=3],
+        img_out: OutputTensor[dtype=DType.float32, rank=2, ...],
+        img_in: InputTensor[dtype=DType.uint8, rank=3, ...],
         ctx: DeviceContextPtr,
     ) raises:
         @parameter
         @always_inline
-        fn color_to_grayscale[
+        def color_to_grayscale[
             simd_width: Int
         ](idx: IndexList[img_out.rank]) -> SIMD[DType.float32, simd_width]:
             @parameter
-            fn load(
+            def load(
                 idx: IndexList[img_in.rank],
             ) -> SIMD[DType.float32, simd_width]:
                 return img_in.load[simd_width](idx).cast[DType.float32]()
@@ -41,21 +41,21 @@ struct Grayscale:
 
 
 # Multiple inputs and outputs example
-@register("grayscale_multi")
+@compiler.register("grayscale_multi")
 struct GrayscaleMulti:
     @staticmethod
-    fn execute[
+    def execute[
         target: StaticString,
     ](
-        img_out: OutputTensor[dtype=DType.float32, rank=2],
-        red_out: OutputTensor[dtype=DType.float32, rank=2],
-        img_in: InputTensor[dtype=DType.uint8, rank=3],
-        noise_in: InputTensor[dtype=DType.uint8, rank=2],
+        img_out: OutputTensor[dtype=DType.float32, rank=2, ...],
+        red_out: OutputTensor[dtype=DType.float32, rank=2, ...],
+        img_in: InputTensor[dtype=DType.uint8, rank=3, ...],
+        noise_in: InputTensor[dtype=DType.uint8, rank=2, ...],
         ctx: DeviceContextPtr,
     ) raises:
         @parameter
         @always_inline
-        fn color_to_grayscale[
+        def color_to_grayscale[
             simd_width: Int
         ](idx: IndexList[img_out.rank]) -> SIMD[DType.float32, simd_width]:
             row = idx[0]
