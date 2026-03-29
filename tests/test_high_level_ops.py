@@ -4025,7 +4025,6 @@ def test_unbind_negative_dim(conf: Conf):
     check_outputs(fn, conf, [input_tensor])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_repeat_basic(conf: Conf):
     def fn(x):
         return x.repeat(2, 3)
@@ -5114,7 +5113,6 @@ def test_optimizer(conf: Conf):
 
 
 # TODO: support list as input too
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_index_select_basic(conf: Conf):
     """Test basic torch.index_select operation"""
 
@@ -5127,7 +5125,6 @@ def test_aten_index_select_basic(conf: Conf):
     check_outputs(fn, conf, [x, idx])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_index_select_second_dim(conf: Conf):
     """Test basic torch.index_select operation"""
 
@@ -5140,7 +5137,6 @@ def test_aten_index_select_second_dim(conf: Conf):
     check_outputs(fn, conf, [x, idx])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
 def test_aten_index_select_multiple_dtypes(conf: Conf, dtype):
     """Test basic torch.index_select operation"""
@@ -5154,7 +5150,6 @@ def test_aten_index_select_multiple_dtypes(conf: Conf, dtype):
     check_outputs(fn, conf, [x, idx])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_index_select_multiple_dims(conf: Conf):
     """Test basic torch.index_select operation"""
 
@@ -5168,7 +5163,6 @@ def test_aten_index_select_multiple_dims(conf: Conf):
     check_outputs(fn, conf, [x, idx1, idx2])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_aten_index_select_multiple_dims_start_nonzero(conf: Conf):
     """Test basic torch.index_select operation"""
 
