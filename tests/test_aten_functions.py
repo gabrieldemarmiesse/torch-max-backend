@@ -16,7 +16,6 @@ from torch_max_backend.testing import (
 )
 
 
-# @pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_scaled_dot_product_flash_attention_basic(
     conf: Conf, dtype: torch.dtype, call_checker: CallChecker
