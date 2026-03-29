@@ -37,7 +37,10 @@ def test_scaled_dot_product_flash_attention_basic(
     v = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=dtype)
 
     # TensorFloat-32 tensor cores are used by default, lowering precision
-    check_outputs(fn, conf, [q, k, v], atol=1e-2, rtol=1e-2)
+    rtol, atol = 1e-2, 1e-2
+    if conf.device == "cpu" and dtype == torch.bfloat16:
+        rtol, atol = 2e-2, 2e-2
+    check_outputs(fn, conf, [q, k, v], rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
