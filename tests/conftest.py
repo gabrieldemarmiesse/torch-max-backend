@@ -50,8 +50,8 @@ def device(request, gpu_available: bool):
         # Enable when pytorch supports it
         # Conf("max_device:cpu", True),
         # Conf("max_device:gpu", True),
-        Conf("max_device:cpu", False)
-        # Conf("max_device:gpu", False),
+        Conf("max_device:cpu", False),
+        Conf("max_device:gpu", False),
         # Conf("cpu", True),
         # Conf("cuda", True),
     ]
@@ -136,11 +136,6 @@ def pytest_make_parametrize_id(config, val, argname):
         return str(val)
     # Return None to fall back to default behavior for other types
     return None
-
-
-def pytest_collection_modifyitems(items):
-    for item in items:
-        item.add_marker(pytest.mark.flaky(retries=2))
 
 
 @pytest.fixture()
