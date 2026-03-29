@@ -444,16 +444,13 @@ def aten__scaled_dot_product_flash_attention(
     # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
     result = F.permute(attn_out, [0, 2, 1, 3])
 
-    # Create placeholders for remaining outputs to match PyTorch's 9-value return
-    # contract for aten::_scaled_dot_product_flash_attention.
-    zero_scalar = F.constant(0, dtype=result.dtype, device=result.device)
-    zero_int_scalar = F.constant(0, dtype=DType.int32, device=result.device)
-    zero_int64_scalar = F.constant(0, dtype=DType.int64, device=result.device)
-
+    # Create additional outputs to match PyTorch's 9-value return contract for
+    # aten::_scaled_dot_product_flash_attention.
     batch_size = query.shape[0]
     num_heads = query.shape[1]
     seq_len = query.shape[2]
     seq_len_k = key.shape[2]
+    head_dim = query.shape[3]
 
     batch_size_int = (
         int(batch_size.value) if hasattr(batch_size, "value") else int(batch_size)
@@ -465,23 +462,53 @@ def aten__scaled_dot_product_flash_attention(
     seq_len_k_int = (
         int(seq_len_k.value) if hasattr(seq_len_k, "value") else int(seq_len_k)
     )
+    head_dim_int = int(head_dim.value) if hasattr(head_dim, "value") else int(head_dim)
 
     logsumexp = F.broadcast_to(
-        zero_scalar, [batch_size_int, num_heads_int, seq_len_int]
+        F.constant(0, dtype=DType.float32, device=result.device),
+        [batch_size_int, num_heads_int, seq_len_int],
     )
-    cum_seq_q = F.broadcast_to(zero_int_scalar, [batch_size_int])
-    cum_seq_k = F.broadcast_to(zero_int_scalar, [batch_size_int])
-    max_q = seq_len_int
-    max_k = seq_len_k_int
-    rng_state = F.broadcast_to(zero_int64_scalar, [8])
-    unused = F.broadcast_to(zero_scalar, [1])
-    debug_attn_mask = F.broadcast_to(
-        zero_scalar, [batch_size_int, num_heads_int, seq_len_int, seq_len_k_int]
+
+    # cum_seq_q and cum_seq_k are cumulative sequence length vectors for packed
+    # layouts; for dense attention the real backend returns None, but this backend
+    # currently returns symbolic zero placeholders.
+    cum_seq_q = F.broadcast_to(
+        F.constant(0, dtype=DType.int32, device=result.device), [batch_size_int]
     )
+    cum_seq_k = F.broadcast_to(
+        F.constant(0, dtype=DType.int32, device=result.device), [batch_size_int]
+    )
+
+    # max_q and max_k are computed from input sequence dimensions.
+    max_q = seq_len
+    max_k = seq_len_k
+
+    # RNG state placeholders: seed + offset tensors used by flash attention kernels.
+    rng_state = F.broadcast_to(
+        F.constant(0, dtype=DType.int64, device=result.device), [2]
+    )
+    unused = F.broadcast_to(F.constant(0, dtype=DType.int64, device=result.device), [])
+
+    # debug_attn_mask is a compressed debug representation when requested; otherwise
+    # it is returned as an empty tensor.
+    if return_debug_mask:
+        block_size = 128 if head_dim_int > 64 else 256
+        max_seqlen_k = math.ceil(seq_len_int / block_size)
+        if seq_len_k_int <= 128:
+            max_seqlen_k = 128
+        elif seq_len_k_int <= 256:
+            max_seqlen_k = 256
+        debug_attn_mask = F.broadcast_to(
+            F.constant(0, dtype=result.dtype, device=result.device),
+            [batch_size_int, num_heads_int, seq_len_int, max_seqlen_k],
+        )
+    else:
+        debug_attn_mask = F.broadcast_to(
+            F.constant(0, dtype=result.dtype, device=result.device), []
+        )
 
     # Return tuple as expected by PyTorch:
     # output, logsumexp, cum_seq_q, cum_seq_k, max_q, max_k, rng_state, unused, debug_attn_mask
-    print(result.shape)
     return (
         result,  # output
         logsumexp,  # logsumexp
