@@ -2,153 +2,34 @@ from collections.abc import Callable
 
 import pytest
 import torch
+import torch.nn.functional
 from torch._dynamo import mark_dynamic
 from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
+from torch_max_backend import aten_functions
 from torch_max_backend.testing import (
+    CallChecker,
     Conf,
     check_functions_are_equivalent,
     check_outputs,
 )
 
 
-@pytest.mark.xfail(reason="Not implemented yet")
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_adaptive_avg_pool2d_backward_basic(conf: Conf, dtype: torch.dtype):
-    """Test _adaptive_avg_pool2d_backward basic functionality"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    # Create test tensors
-    batch_size, channels, height, width = 2, 3, 8, 8
-    output_height, output_width = 4, 4
-
-    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
-    grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, dtype=dtype
-    )
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-@pytest.mark.parametrize(
-    "input_size,output_size",
-    [((8, 8), (4, 4)), ((10, 10), (5, 5)), ((7, 7), (3, 3)), ((16, 16), (8, 8))],
-)
-def test_adaptive_avg_pool2d_backward_different_sizes(
-    conf: Conf, input_size: tuple, output_size: tuple
+# @pytest.mark.usefixtures("disable_interpreter")
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_scaled_dot_product_flash_attention_basic(
+    conf: Conf, dtype: torch.dtype, call_checker: CallChecker
 ):
-    """Test _adaptive_avg_pool2d_backward with different input and output sizes"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    batch_size, channels = 2, 3
-    input_height, input_width = input_size
-    output_height, output_width = output_size
-
-    input_tensor = torch.randn(batch_size, channels, input_height, input_width)
-    grad_output = torch.randn(batch_size, channels, output_height, output_width)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-def test_adaptive_avg_pool2d_backward_3d_input(conf: Conf):
-    """Test _adaptive_avg_pool2d_backward with 3D input (no batch dimension)"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    channels, height, width = 3, 8, 8
-    output_height, output_width = 4, 4
-
-    input_tensor = torch.randn(channels, height, width)
-    grad_output = torch.randn(channels, output_height, output_width)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-@pytest.mark.parametrize("channels", [1, 3, 16, 64])
-def test_adaptive_avg_pool2d_backward_different_channels(conf: Conf, channels: int):
-    """Test _adaptive_avg_pool2d_backward with different numbers of channels"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    batch_size, height, width = 2, 8, 8
-    output_height, output_width = 4, 4
-
-    input_tensor = torch.randn(batch_size, channels, height, width)
-    grad_output = torch.randn(batch_size, channels, output_height, output_width)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-def test_adaptive_avg_pool2d_backward_non_uniform_pooling(conf: Conf):
-    """Test _adaptive_avg_pool2d_backward with non-uniform pooling regions"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    # Input size 9x9 to output size 4x4 creates non-uniform pooling regions
-    batch_size, channels = 2, 3
-    input_tensor = torch.randn(batch_size, channels, 9, 9)
-    grad_output = torch.randn(batch_size, channels, 4, 4)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-def test_adaptive_avg_pool2d_backward_output_size_one(conf: Conf):
-    """Test _adaptive_avg_pool2d_backward with output size (1, 1)"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    batch_size, channels, height, width = 2, 3, 8, 8
-
-    input_tensor = torch.randn(batch_size, channels, height, width)
-    grad_output = torch.randn(batch_size, channels, 1, 1)
-
-    check_outputs(fn, conf, [grad_output, input_tensor])
-
-
-@pytest.mark.xfail(reason="Not implemented yet")
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_adaptive_avg_pool2d_backward_half_precision(conf: Conf, dtype: torch.dtype):
-    """Test _adaptive_avg_pool2d_backward with half precision types"""
-
-    def fn(grad_output, input_tensor):
-        return aten._adaptive_avg_pool2d_backward.default(grad_output, input_tensor)
-
-    batch_size, channels, height, width = 2, 3, 8, 8
-    output_height, output_width = 4, 4
-
-    input_tensor = torch.randn(batch_size, channels, height, width, dtype=dtype)
-    grad_output = torch.randn(
-        batch_size, channels, output_height, output_width, dtype=dtype
-    )
-
-    # Half precision may have lower accuracy
-    check_outputs(fn, conf, [grad_output, input_tensor], atol=1e-2, rtol=1e-2)
-
-
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype):
     """Test _scaled_dot_product_flash_attention basic functionality"""
+    call_checker.register(aten_functions.aten__scaled_dot_product_flash_attention)
     # Flash attention only works on CUDA
-    if conf.device != "cuda:0":
-        pytest.skip("Flash attention is only supported on CUDA")
+    # if conf.device != "cuda:0":
+    #    pytest.skip("Flash attention is only supported on CUDA")
 
     def fn(q, k, v):
-        return torch.ops.aten._scaled_dot_product_flash_attention(
-            q, k, v, dropout_p=0.0, is_causal=False, return_debug_mask=False
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, dropout_p=0.0, is_causal=False
         )[0]  # For the moment we support only training
 
     batch_size, num_heads, seq_len, head_dim = 2, 4, 8, 16
@@ -161,8 +42,11 @@ def test_scaled_dot_product_flash_attention_basic(conf: Conf, dtype: torch.dtype
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_with_causal(conf: Conf, dtype: str):
+def test_scaled_dot_product_flash_attention_with_causal(
+    conf: Conf, dtype: str, call_checker: CallChecker
+):
     """Test _scaled_dot_product_flash_attention with causal masking"""
+    call_checker.register(aten_functions.aten__scaled_dot_product_flash_attention)
     # Flash attention only works on CUDA
     if conf.device != "cuda:0":
         pytest.skip("Flash attention is only supported on CUDA")
@@ -1216,6 +1100,33 @@ def test_foreach_addcdiv_scalarlist(conf: Conf, dtype: torch.dtype):
 # See: https://github.com/pytorch/pytorch/issues/139795
 
 
+def test_aten_masked_fill__inplace_scalar(conf: Conf):
+    """Test aten.masked_fill_ with scalar values"""
+
+    def fn(x, mask):
+        aten.masked_fill_(x, mask, 5.0)
+        # Modified in-place
+        return x
+
+    x = torch.randn(2, 3)
+    mask = torch.tensor([[True, False, True], [False, True, False]])
+    check_outputs(fn, conf, [x, mask])
+
+
+def test_aten_masked_fill__inplace_tensor(conf: Conf):
+    """Test aten.masked_fill_ with tensor values"""
+
+    def fn(x, mask, value):
+        aten.masked_fill_(x, mask, value)
+        # Modified in-place
+        return x
+
+    x = torch.randn(2, 3)
+    mask = torch.tensor([[True, False, True], [False, True, False]])
+    value = torch.tensor(5.0)
+    check_outputs(fn, conf, [x, mask, value])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_ceil_basic(conf: Conf, dtype: torch.dtype):
     """Test aten.ceil basic functionality with floating point numbers"""
@@ -1489,6 +1400,179 @@ def test_aten_trigon_scalar_tensor(conf: Conf, fn: Callable):
 
     x = torch.tensor(1.0, dtype=torch.float32)
     check_outputs(fn, conf, [x])
+
+
+def test_aten_isin_basic(conf: Conf):
+    """Test aten.isin basic functionality with 1D tensors"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 3, 4, 5])
+    test_elements = torch.tensor([2, 4])
+
+    # Expected: elements 2 and 4 are in test_elements
+    # Result should be [False, True, False, True, False]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.int32, torch.int64]
+)
+def test_aten_isin_different_dtypes(conf: Conf, dtype: torch.dtype):
+    """Test aten.isin with different numeric data types"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    if dtype in (torch.float32, torch.float64):
+        elements = torch.tensor([1.0, 2.5, 3.0, 4.5], dtype=dtype)
+        test_elements = torch.tensor([2.5, 4.5], dtype=dtype)
+    else:
+        elements = torch.tensor([1, 2, 3, 4], dtype=dtype)
+        test_elements = torch.tensor([2, 4], dtype=dtype)
+
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_with_invert(conf: Conf):
+    """Test aten.isin with invert=True"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=True)
+
+    elements = torch.tensor([1, 2, 3, 4, 5])
+    test_elements = torch.tensor([2, 4])
+
+    # With invert=True: return True for elements NOT in test_elements
+    # Expected: [True, False, True, False, True]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_empty_test_elements(conf: Conf):
+    """Test aten.isin with empty test_elements tensor"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 3, 4, 5])
+    test_elements = torch.tensor([])
+
+    # No elements should be found in empty test_elements
+    # Expected: [False, False, False, False, False]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_empty_elements(conf: Conf):
+    """Test aten.isin with empty elements tensor"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([])
+    test_elements = torch.tensor([1, 2, 3])
+
+    # Empty elements should return empty result
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_all_match(conf: Conf):
+    """Test aten.isin when all elements are in test_elements"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 3])
+    test_elements = torch.tensor([1, 2, 3, 4, 5])
+
+    # All elements should be found
+    # Expected: [True, True, True]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_none_match(conf: Conf):
+    """Test aten.isin when no elements are in test_elements"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 3])
+    test_elements = torch.tensor([4, 5, 6])
+
+    # No elements should be found
+    # Expected: [False, False, False]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_with_duplicates(conf: Conf):
+    """Test aten.isin with duplicates in both tensors"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([1, 2, 2, 3, 3, 3])
+    test_elements = torch.tensor([2, 2, 4])
+
+    # Elements 2 and 2 should be found (duplicated values treated separately)
+    # Note: behavior depends on assume_unique, with False it should handle duplicates
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_2d_tensor(conf: Conf):
+    """Test aten.isin with 2D tensor"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([[1, 2, 3], [4, 5, 6]])
+    test_elements = torch.tensor([2, 5, 7])
+
+    # Expected: [[False, True, False], [False, True, False]]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_3d_tensor(conf: Conf):
+    """Test aten.isin with 3D tensor"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    elements = torch.tensor([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
+    test_elements = torch.tensor([2, 4, 6, 8])
+
+    # Expected: [[[False, True], [False, True]], [[False, True], [False, True]]]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+def test_aten_isin_with_assume_unique(conf: Conf):
+    """Test aten.isin with assume_unique=True"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=True, invert=False)
+
+    elements = torch.tensor([1, 2, 3, 4, 5])
+    test_elements = torch.tensor([2, 4])
+
+    # Result should be the same as assume_unique=False for valid unique inputs
+    # Expected: [False, True, False, True, False]
+    check_outputs(fn, conf, [elements, test_elements])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32])
+def test_aten_isin_numeric_types(conf: Conf, dtype: torch.dtype):
+    """Test aten.isin with different numeric types"""
+
+    def fn(elements, test_elements):
+        return aten.isin(elements, test_elements, assume_unique=False, invert=False)
+
+    if dtype == torch.float32:
+        elements = torch.tensor([1.5, 2.5, 3.5], dtype=dtype)
+        test_elements = torch.tensor([2.5, 4.5], dtype=dtype)
+    else:
+        elements = torch.tensor([10, 20, 30], dtype=dtype)
+        test_elements = torch.tensor([20, 40], dtype=dtype)
+
+    check_outputs(fn, conf, [elements, test_elements])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -2607,8 +2691,11 @@ def test_aten_amin_single_dim(conf: Conf, dim: int, keepdim: bool):
 
 @pytest.mark.parametrize("dims", [[0, 1], [1, 2], [0, 2]])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_aten_amin_multiple_dims(conf: Conf, dims: list[int], keepdim: bool):
+def test_aten_amin_multiple_dims(
+    conf: Conf, dims: list[int], keepdim: bool, call_checker: CallChecker
+):
     """Test aten_amin with multiple dimensions"""
+    call_checker.register(aten_functions.aten_amin)
 
     def fn(x):
         return aten.amin(x, dim=dims, keepdim=keepdim)
@@ -2617,8 +2704,9 @@ def test_aten_amin_multiple_dims(conf: Conf, dims: list[int], keepdim: bool):
     check_outputs(fn, conf, [x])
 
 
-def test_aten_min_no_dim(conf: Conf):
+def test_aten_min_no_dim(conf: Conf, call_checker: CallChecker):
     """Test aten_min without dimension (returns single value)"""
+    call_checker.register(aten_functions.aten_min)
 
     def fn(x):
         return aten.min(x)
@@ -2629,8 +2717,11 @@ def test_aten_min_no_dim(conf: Conf):
 
 @pytest.mark.parametrize("dim", [0, 1, 2])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_aten_min_with_dim(conf: Conf, dim: int, keepdim: bool):
+def test_aten_min_with_dim(
+    conf: Conf, dim: int, keepdim: bool, call_checker: CallChecker
+):
     """Test aten_min with dimension (returns values and indices tuple)"""
+    call_checker.register(aten_functions.aten_min)
 
     def fn(x):
         return aten.min(x, dim=dim, keepdim=keepdim)
@@ -2640,8 +2731,11 @@ def test_aten_min_with_dim(conf: Conf, dim: int, keepdim: bool):
 
 
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
-def test_aten_min_different_dtypes(conf: Conf, dtype: torch.dtype):
+def test_aten_min_different_dtypes(
+    conf: Conf, dtype: torch.dtype, call_checker: CallChecker
+):
     """Test aten_min with different data types"""
+    call_checker.register(aten_functions.aten_min)
 
     def fn(x):
         return aten.min(x, dim=1, keepdim=False)
@@ -2657,8 +2751,15 @@ def test_aten_min_different_dtypes(conf: Conf, dtype: torch.dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
 @pytest.mark.parametrize("value", [-1.5, 42])
-def test_fill_scalar_basic(conf: Conf, dtype: torch.dtype, shape: tuple, value: float):
+def test_fill_scalar_basic(
+    conf: Conf,
+    dtype: torch.dtype,
+    shape: tuple,
+    value: float,
+    call_checker: CallChecker,
+):
     """Test basic fill.Scalar functionality with different dtypes, shapes, and values"""
+    call_checker.register(aten_functions.aten_fill_scalar)
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -2673,9 +2774,10 @@ def test_fill_scalar_basic(conf: Conf, dtype: torch.dtype, shape: tuple, value: 
 @pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
 @pytest.mark.parametrize("value", [-5, 42])
 def test_fill_scalar_integer_dtypes(
-    conf: Conf, dtype: torch.dtype, shape: tuple, value: int
+    conf: Conf, dtype: torch.dtype, shape: tuple, value: int, call_checker: CallChecker
 ):
     """Test fill.Scalar functionality with integer dtypes"""
+    call_checker.register(aten_functions.aten_fill_scalar)
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -2687,8 +2789,9 @@ def test_fill_scalar_integer_dtypes(
 
 
 @pytest.mark.parametrize("value", [-5, 100])
-def test_fill_scalar_integer_values(conf: Conf, value: int):
+def test_fill_scalar_integer_values(conf: Conf, value: int, call_checker: CallChecker):
     """Test fill.Scalar with integer values"""
+    call_checker.register(aten_functions.aten_fill_scalar)
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -2699,8 +2802,9 @@ def test_fill_scalar_integer_values(conf: Conf, value: int):
     check_outputs(fn, conf, [x])
 
 
-def test_fill_scalar_single_element(conf: Conf):
+def test_fill_scalar_single_element(conf: Conf, call_checker: CallChecker):
     """Test fill.Scalar with single element tensor"""
+    call_checker.register(aten_functions.aten_fill_scalar)
 
     def fn(x):
         return torch.ops.aten.fill.Scalar(x, 7.5)

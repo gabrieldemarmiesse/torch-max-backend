@@ -5,6 +5,7 @@ The only ressources I could find on the subject are:
 - https://docs.pytorch.org/docs/stable/torch.compiler_ir.html
 """
 
+import functools
 import itertools
 import math
 import operator
@@ -13,21 +14,24 @@ from typing import Literal
 
 import max.graph.type as max_type
 import torch
-from max import functional as F
 from max.dtype import DType
-from max.graph import Dim, StaticDim, TensorType
-from max.graph import ops as max_ops
+from max.experimental import functional as F
+from max.experimental.tensor import Tensor as MaxEagerTensor
+from max.experimental.torch.torch import max_device_ref, torch_dtype_to_max
+from max.graph import Dim, StaticDim
 from max.graph.type import DeviceRef
-from max.tensor import Tensor as MaxEagerTensor
-from max.torch.torch import max_device_ref
+from max.nn.kernels import flash_attention_gpu
 from torch._decomp import core_aten_decompositions
 from torch._ops import OpOverload, OpOverloadPacket
 from torch.ops import aten
 
+import torch_max_backend.is_running_tests
 from torch_max_backend import custom_mojo_ops
 from torch_max_backend.flags import verbose_enabled
 from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerators
 from torch_max_backend.types import MaxTensor, Scalar, SymIntType
+
+flash_attention_gpu = F.functional(flash_attention_gpu)
 
 
 def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
@@ -122,7 +126,21 @@ def map_to(func):
 
             func_to_map = beartype(func_to_map)
 
-        MAPPING_TORCH_ATEN_TO_MAX[func] = func_to_map
+        # We count the number of calls here because otherwise it's hard to
+        # get it with mock since the functions are all gathered at import time
+        # into dicts.
+        if torch_max_backend.is_running_tests.IS_RUNNING_TESTS:
+
+            @functools.wraps(func_to_map)
+            def wrapped_func(*args, **kwargs):
+                wrapped_func.call_count += 1
+                return func_to_map(*args, **kwargs)
+
+            wrapped_func.call_count = 0
+
+            MAPPING_TORCH_ATEN_TO_MAX[func] = wrapped_func
+        else:
+            MAPPING_TORCH_ATEN_TO_MAX[func] = func_to_map
         if isinstance(func, OpOverload):
             DECOMPOSITION_TABLE.pop(func, None)
         elif isinstance(func, OpOverloadPacket):
@@ -139,7 +157,10 @@ def map_to(func):
             raise TypeError(
                 f"Expected OpOverload or OpOverloadPacket, got {type(func)}"
             )
-        return func_to_map
+        if torch_max_backend.is_running_tests.IS_RUNNING_TESTS:
+            return wrapped_func
+        else:
+            return func_to_map
 
     return decorator
 
@@ -177,6 +198,50 @@ def type_promotion(x, y):
 @map_to(aten.floordiv)
 def aten_floordiv(x, y):
     return operator.floordiv(x, y)
+
+
+# _local_scalar_dense(Tensor self) -> Scalar
+@map_to(aten._local_scalar_dense)
+def aten__local_scalar_dense(tensor: MaxTensor) -> Scalar:
+    if tensor.num_elements() != 1:
+        raise ValueError(
+            f"_local_scalar_dense requires a tensor with a single element, got {tensor.num_elements()} elements"
+        )
+    # We need to convert the result to a Python scalar for PyTorch to recognize it as a valid return type for this operator
+    return tensor.item()
+
+
+@map_to(aten.all)
+def aten_all(
+    input: MaxTensor, dim: list[int] | int | None = None, keepdim: bool = False
+) -> MaxTensor:
+    if input.dtype == DType.bool:
+        input_bool = input
+    else:
+        input_bool = F.not_equal(input, 0)
+    if isinstance(dim, int):
+        dim = [dim]
+    if dim is None:
+        # Return True if any element is True (reduce all dimensions)
+        dim = tuple(range(len(input.shape)))
+    elif isinstance(dim, int):
+        dim = (dim,)
+
+    # Handle negative dimensions
+    dim = [x if x >= 0 else len(input.shape) + x for x in dim]
+
+    result = input_bool.cast(DType.int32)
+    # Use max() to implement any() since True > False
+    for axis in sorted(dim, reverse=True):
+        result = F.min(result, axis=axis)
+
+    # Handle keepdim=False
+    if not keepdim:
+        # Squeeze the reduced dimensions
+        for axis in sorted(dim, reverse=True):
+            result = F.squeeze(result, axis=axis)
+
+    return result.cast(DType.bool)
 
 
 # _adaptive_avg_pool2d(Tensor self, SymInt[2] output_size) -> Tensor
@@ -319,6 +384,27 @@ def aten__native_batch_norm_legit_no_training(
 
 
 # _pdist_forward(Tensor self, float p=2) -> Tensor
+
+
+@map_to(aten._scaled_dot_product_attention_math)
+def aten__scaled_dot_product_attention_math(
+    query: MaxTensor,
+    key: MaxTensor,
+    value: MaxTensor,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    return_debug_mask: bool = False,
+    scale: float | None = None,
+):
+    output, logsumexp, *_ = aten__scaled_dot_product_flash_attention(
+        query, key, value, dropout_p, is_causal, return_debug_mask, scale
+    )
+    return (
+        output,  # output: attention output tensor
+        logsumexp,  # logsumexp: placeholder used by ATen as second return value
+    )
+
+
 # _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)
 @map_to(aten._scaled_dot_product_flash_attention)
 def aten__scaled_dot_product_flash_attention(
@@ -352,14 +438,88 @@ def aten__scaled_dot_product_flash_attention(
     mask_variant = MHAMaskVariant.CAUSAL_MASK if is_causal else MHAMaskVariant.NULL_MASK
 
     # Call flash attention
+
     attn_out = flash_attention_gpu(q, k, v, mask_variant=mask_variant, scale=scale)
 
     # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
     result = F.permute(attn_out, [0, 2, 1, 3])
 
-    # Return tuple as expected by PyTorch (we only support inference, not training)
-    # The full signature returns 9 values for training, but we only need the first one
-    return (result,)
+    # Create additional outputs to match PyTorch's 9-value return contract for
+    # aten::_scaled_dot_product_flash_attention.
+    batch_size = query.shape[0]
+    num_heads = query.shape[1]
+    seq_len = query.shape[2]
+    seq_len_k = key.shape[2]
+    head_dim = query.shape[3]
+
+    batch_size_int = (
+        int(batch_size.value) if hasattr(batch_size, "value") else int(batch_size)
+    )
+    num_heads_int = (
+        int(num_heads.value) if hasattr(num_heads, "value") else int(num_heads)
+    )
+    seq_len_int = int(seq_len.value) if hasattr(seq_len, "value") else int(seq_len)
+    seq_len_k_int = (
+        int(seq_len_k.value) if hasattr(seq_len_k, "value") else int(seq_len_k)
+    )
+    head_dim_int = int(head_dim.value) if hasattr(head_dim, "value") else int(head_dim)
+
+    logsumexp = F.broadcast_to(
+        F.constant(0, dtype=DType.float32, device=result.device),
+        [batch_size_int, num_heads_int, seq_len_int],
+    )
+
+    # cum_seq_q and cum_seq_k are cumulative sequence length vectors for packed
+    # layouts; for dense attention the real backend returns None, but this backend
+    # currently returns symbolic zero placeholders.
+    cum_seq_q = F.broadcast_to(
+        F.constant(0, dtype=DType.int32, device=result.device), [batch_size_int]
+    )
+    cum_seq_k = F.broadcast_to(
+        F.constant(0, dtype=DType.int32, device=result.device), [batch_size_int]
+    )
+
+    # max_q and max_k are computed from input sequence dimensions.
+    max_q = seq_len
+    max_k = seq_len_k
+
+    # RNG state placeholders: seed + offset tensors used by flash attention kernels.
+    rng_state = F.broadcast_to(
+        F.constant(0, dtype=DType.int64, device=result.device), [2]
+    )
+    unused = F.broadcast_to(F.constant(0, dtype=DType.int64, device=result.device), [])
+
+    # debug_attn_mask is a compressed debug representation when requested; otherwise
+    # it is returned as an empty tensor.
+    if return_debug_mask:
+        block_size = 128 if head_dim_int > 64 else 256
+        max_seqlen_k = math.ceil(seq_len_int / block_size)
+        if seq_len_k_int <= 128:
+            max_seqlen_k = 128
+        elif seq_len_k_int <= 256:
+            max_seqlen_k = 256
+        debug_attn_mask = F.broadcast_to(
+            F.constant(0, dtype=result.dtype, device=result.device),
+            [batch_size_int, num_heads_int, seq_len_int, max_seqlen_k],
+        )
+    else:
+        debug_attn_mask = F.broadcast_to(
+            F.constant(0, dtype=result.dtype, device=result.device), []
+        )
+
+    # Return tuple as expected by PyTorch:
+    # output, logsumexp, cum_seq_q, cum_seq_k, max_q, max_k, rng_state, unused, debug_attn_mask
+    return (
+        result,  # output
+        logsumexp,  # logsumexp
+        cum_seq_q,  # cum_seq_q
+        cum_seq_k,  # cum_seq_k
+        max_q,  # max_q
+        max_k,  # max_k
+        rng_state,  # rng_state
+        unused,  # unused
+        debug_attn_mask,  # debug_attn_mask
+    )
 
 
 # TODO: remove all of those when https://github.com/modular/modular/issues/5198
@@ -419,92 +579,6 @@ _MHA_MASK_CONFIG_DICT = {
 }
 
 
-def flash_attention_gpu(
-    q: MaxTensor,
-    k: MaxTensor,
-    v: MaxTensor,
-    mask_variant: MHAMaskVariant,
-    scale: float,
-    local_window_size: int = -1,
-    valid_length: MaxTensor | None = None,
-) -> MaxTensor:
-    """Computes flash attention using GPU-optimized kernel.
-
-    Args:
-        q: Query tensor of shape [batch, seq_len, num_heads, head_dim]
-        k: Key tensor of shape [batch, seq_len, num_heads, head_dim]
-        v: Value tensor of shape [batch, seq_len, num_heads, head_dim]
-        mask_variant: The mask variant to use for attention
-        scale: Scaling factor for attention scores
-        local_window_size: Local window size for sliding window attention
-        valid_length: Optional tensor of shape [batch] with dtype uint32.
-            When provided, uses the padded kernel variant that respects
-            the valid sequence lengths for each batch element.
-
-    Returns:
-        Output tensor of shape [batch, seq_len, num_heads, head_dim]
-    """
-    if q.dtype != k.dtype or q.dtype != v.dtype:
-        msg = (
-            "q, k, v must have matching dtypes. Got "
-            f"q.dtype={q.dtype}, k.dtype={k.dtype}, v.dtype={v.dtype}"
-        )
-        raise ValueError(msg)
-
-    expected_rank = 4
-    for name, tensor in [("q", q), ("k", k), ("v", v)]:
-        if tensor.rank != expected_rank:
-            msg = f"{name} must be rank {expected_rank}, got {tensor.rank}"
-            raise ValueError(msg)
-
-    # Validate head dimension matches across all inputs
-    head_dim = q.shape[-1]
-    if k.shape[-1] != head_dim or v.shape[-1] != head_dim:
-        msg = (
-            "All inputs must have same head_dim. Got "
-            f"q: {head_dim}, k: {k.shape[-1]}, v: {v.shape[-1]}"
-        )
-        raise ValueError(msg)
-
-    # Validate valid_length if provided
-    if valid_length is not None:
-        if valid_length.dtype != DType.uint32:
-            msg = f"valid_length must have dtype uint32, got {valid_length.dtype}"
-            raise ValueError(msg)
-
-        if valid_length.rank != 1:
-            msg = f"valid_length must be rank 1, got {valid_length.rank}"
-            raise ValueError(msg)
-
-        if valid_length.shape[0] != q.shape[0]:
-            msg = (
-                f"valid_length batch size ({valid_length.shape[0]}) must match "
-                f"q batch size ({q.shape[0]})"
-            )
-            raise ValueError(msg)
-
-    mha_mask_config = _MHA_MASK_CONFIG_DICT[mask_variant]
-    parameters: dict[str, int | str | DType] = {}
-    parameters["mask_str"] = mha_mask_config.attention_mask_variant.value
-    parameters["score_mod_str"] = mha_mask_config.positional_encoding_variant.value
-    parameters["local_window_size"] = local_window_size
-
-    op_name = "mo.mha.no_cache"
-    values = [q, k, v]
-    if valid_length is not None:
-        op_name = "mo.mha.padded.no_cache"
-        values.append(valid_length)
-    values.append(max_ops.constant(scale, dtype=DType.float32, device=DeviceRef.CPU()))
-
-    return max_ops.custom(
-        op_name,
-        values=values,
-        out_types=[TensorType(dtype=q.dtype, shape=q.shape, device=q.device)],
-        parameters=parameters,
-        device=q.device,
-    )[0].tensor
-
-
 # _softmax(Tensor self, int dim, bool half_to_float) -> Tensor
 @map_to(aten._softmax)
 def aten__softmax(self: MaxTensor, dim: int, half_to_float: bool):
@@ -518,7 +592,7 @@ def aten__softmax(self: MaxTensor, dim: int, half_to_float: bool):
 @map_to(aten.softmax)
 def aten_softmax(input, dim=-1, dtype=None):
     if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
+        max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
 
     # Handle negative dim
@@ -629,7 +703,7 @@ def aten__to_copy(
     if device is not None:
         result = F.transfer_to(result, device=torch_device_to_max_device(device))
     if dtype is not None:
-        result = F.cast(result, dtype=DType.from_torch(dtype))
+        result = F.cast(result, dtype=torch_dtype_to_max(dtype))
     return result
 
 
@@ -835,7 +909,10 @@ def aten_any(
     Uses max() on boolean tensor since True > False.
     """
     # Convert input to boolean first (non-zero values become True)
-    input_bool = F.not_equal(input, 0)
+    if input.dtype == DType.bool:
+        input_bool = input
+    else:
+        input_bool = F.not_equal(input, 0)
 
     if dim is None:
         # Return True if any element is True (reduce all dimensions)
@@ -846,7 +923,9 @@ def aten_any(
     # Handle negative dimensions
     dim = [x if x >= 0 else len(input.shape) + x for x in dim]
 
-    result = input_bool
+    # Remove this cast when https://github.com/modular/modular/issues/6067 is fixed
+    result = input_bool.cast(DType.int32)
+
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
         result = F.max(result, axis=axis)
@@ -857,7 +936,8 @@ def aten_any(
         for axis in sorted(dim, reverse=True):
             result = F.squeeze(result, axis=axis)
 
-    return result
+    # Remove this cast when https://github.com/modular/modular/issues/6067 is fixed
+    return result.cast(DType.bool)
 
 
 # arange.start_step(Scalar start, Scalar end, Scalar step=1, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
@@ -880,7 +960,7 @@ def aten_arange(
         raise ValueError("We don't support float end values for torch.arange")
     if dtype is None:
         dtype = torch.int64
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
 
     if device is None:
         device = torch.get_default_device()
@@ -898,7 +978,7 @@ def aten_arange(
         out_dim = int(math.ceil(out_dim / step))
 
     # Use F.range to create the sequence
-    result = F.range(
+    result = F.arange(
         Dim(start),
         Dim(end),
         Dim(step),
@@ -1434,7 +1514,7 @@ def aten_cumsum(
         dtype: the desired data type of returned tensor
     """
     if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
+        max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
 
     # MAX's cumsum handles negative dimensions automatically, so no need to convert
@@ -1684,7 +1764,7 @@ def aten_full(
 ):
     if dtype is None:
         dtype = torch.float32
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
 
     if device is None:
         device = torch.get_default_device()
@@ -1713,7 +1793,7 @@ def aten_full_like(
     if dtype is None:
         target_dtype = input.dtype
     else:
-        target_dtype = DType.from_torch(dtype)
+        target_dtype = torch_dtype_to_max(dtype)
 
     # If device is not specified, use the input tensor's device
     if device is None:
@@ -1892,6 +1972,86 @@ def broadcast_shape(shapes):
 # index_put(Tensor self, Tensor?[] indices, Tensor values, bool accumulate=False) -> Tensor
 # index_select(Tensor self, int dim, Tensor index) -> Tensor
 # isinf(Tensor self) -> Tensor
+
+
+# isin.Tensor_Tensor(Tensor elements, Tensor test_elements, *, bool assume_unique=False, bool invert=False) -> Tensor
+@map_to(aten.isin)
+def aten_isin(
+    elements: MaxTensor,
+    test_elements: MaxTensor,
+    assume_unique: bool = False,
+    invert: bool = False,
+) -> MaxTensor:
+    """
+    Tests whether each element of elements tensor is in test_elements tensor.
+
+    For each element in `elements`, returns True if that element is in
+    `test_elements`, False otherwise. The result has the same shape as `elements`.
+
+    Args:
+        elements: Input tensor to check elements from
+        test_elements: Tensor of values to test against (typically 1D)
+        assume_unique: If True, assumes both inputs contain unique elements
+            for potential performance optimization (currently unused)
+        invert: If True, inverts the result - returns True for elements NOT in test_elements
+
+    Returns:
+        Boolean tensor of same shape as elements
+    """
+    # Special case: if test_elements is empty, return False for all elements
+    # if elements is empty, return empty boolean tensor
+    # Check by flattening and checking size
+    test_flat = F.reshape(test_elements, [-1])
+    elements_flat = F.reshape(elements, [-1])
+    num_test = test_flat.shape[0]
+    num_elements = elements_flat.shape[0]
+
+    if num_elements == 0:
+        # Empty elements means empty result
+        elements_bool = F.cast(elements_flat, DType.bool)
+        return F.reshape(elements_bool, elements.shape)
+
+    if num_test == 0:
+        # Empty test_elements means no matches
+        # Create all-False tensor by negating an all-True tensor
+        # True > False, so comparing any element with itself gives True
+        all_true = F.equal(elements_flat, elements_flat)
+        result_flat = F.logical_not(all_true)
+        result = F.reshape(result_flat, elements.shape)
+        if invert:
+            result = F.logical_not(result)
+        return result
+
+    # Cast test_flat to same dtype as elements_flat for comparison
+    # This ensures F.equal compares compatible types
+    test_flat = F.cast(test_flat, elements_flat.dtype)
+
+    # Broadcast shapes: (num_elements, 1) vs (1, num_test) -> (num_elements, num_test)
+    # This compares every element against every test_element
+    num_elements = elements_flat.shape[0]
+
+    # Add broadcasting dimensions
+    elements_expanded = F.reshape(elements_flat, [num_elements, 1])
+    test_expanded = F.reshape(test_flat, [1, num_test])
+
+    # Compare all pairs: result shape (num_elements, num_test)
+    comparisons = F.equal(elements_expanded, test_expanded)
+
+    # Reduce across test_elements dimension using logical_or
+    # Any=True means at least one test element matched
+    # Need to cast to numeric type first since reduce doesn't support bool
+    comparisons_numeric = F.cast(comparisons, DType.int32)
+    result_flat_numeric = F.max(comparisons_numeric, axis=-1)
+    result_flat = F.cast(result_flat_numeric, DType.bool)
+
+    # Reshape back to original elements shape
+    result = F.reshape(result_flat, elements.shape)
+
+    # Handle invert if needed
+    if invert:
+        result = F.logical_not(result)
+
+    return result
 
 
 # isnan(Tensor self) -> Tensor
@@ -2090,7 +2250,7 @@ def aten_mean(
     dtype: torch.dtype | None = None,
 ) -> MaxTensor:
     if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
+        max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
 
     result = input
@@ -2359,7 +2519,7 @@ def aten_ones(
 ) -> MaxEagerTensor:
     if dtype is None:
         dtype = torch.float32
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
 
     if device is None:
         device = torch.get_default_device()
@@ -2458,7 +2618,9 @@ def aten_scalar_tensor(
         device = torch.get_default_device()
 
     return F.constant(
-        value, dtype=DType.from_torch(dtype), device=torch_device_to_max_device(device)
+        value,
+        dtype=torch_dtype_to_max(dtype),
+        device=torch_device_to_max_device(device),
     )
 
 
@@ -2686,7 +2848,7 @@ def aten_sum(
     dtype: torch.dtype | None = None,
 ) -> MaxTensor:
     if dtype is not None:
-        max_dtype = DType.from_torch(dtype)
+        max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
 
     result = input
@@ -3428,7 +3590,7 @@ def aten_zeros(
     pin_memory: bool | None = None,
 ) -> MaxTensor:
     dtype = torch.float32 if dtype is None else dtype
-    dtype = DType.from_torch(dtype)
+    dtype = torch_dtype_to_max(dtype)
     device = torch_device_to_max_device(device)
     return MaxEagerTensor.zeros(size, dtype=dtype, device=device)
 

@@ -10,8 +10,8 @@ struct Grayscale:
     fn execute[
         target: StaticString,
     ](
-        img_out: OutputTensor[dtype = DType.float32, rank=2],
-        img_in: InputTensor[dtype = DType.uint8, rank=3],
+        img_out: OutputTensor[dtype=DType.float32, rank=2],
+        img_in: InputTensor[dtype=DType.uint8, rank=3],
         ctx: DeviceContextPtr,
     ) raises:
         @parameter
