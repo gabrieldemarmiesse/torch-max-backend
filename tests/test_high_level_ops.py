@@ -578,7 +578,6 @@ def test_torch_argmax_no_dim(conf: Conf, shapes):
     check_outputs(fn, conf, [a])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("shapes,dims", [((8,), 0), ((2, 3, 4), -1), ((2, 3, 4), None)])
 def test_torch_argmin(conf: Conf, shapes, dims, keepdim):
@@ -592,7 +591,6 @@ def test_torch_argmin(conf: Conf, shapes, dims, keepdim):
     check_outputs(fn, conf, [a])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("shapes", [(8,), (3, 4), (2, 3, 4), (5, 6, 2, 3)])
 def test_torch_argmin_no_dim(conf: Conf, shapes):
     """Test argmin with only tensor argument (no dim parameter)."""
@@ -4002,7 +4000,6 @@ def test_reshape_with_negative_dim(conf: Conf):
     check_outputs(fn, conf, [input_tensor])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_unbind_basic(conf: Conf):
     def fn(x):
         # unbind returns a tuple, so we convert to list for testing
@@ -4063,7 +4060,6 @@ def test_repeat_1d(conf: Conf):
     check_outputs(fn, conf, [input_tensor])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_repeat_2d(conf: Conf):
     def fn(x):
         return x.repeat(2, 3)
@@ -4118,7 +4114,6 @@ def test_torch_full_with_dtype(device: str):
     check_functions_are_equivalent(fn, device, [])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_torch_triu_basic(conf: Conf):
     def fn(x):
         return torch.triu(x)
@@ -4127,7 +4122,6 @@ def test_torch_triu_basic(conf: Conf):
     check_outputs(fn, conf, [input_tensor])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 def test_torch_triu_with_diagonal(conf: Conf):
     def fn(x):
         return torch.triu(x, diagonal=1)
@@ -4136,7 +4130,6 @@ def test_torch_triu_with_diagonal(conf: Conf):
     check_outputs(fn, conf, [input_tensor])
 
 
-@pytest.mark.usefixtures("disable_interpreter")
 @pytest.mark.parametrize("dynamic_dim", [0, 1])
 def test_torch_triu_with_diagonal_dynamic_dim(conf: Conf, dynamic_dim: int):
     def fn(x):
