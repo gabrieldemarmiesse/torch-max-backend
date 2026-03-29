@@ -396,8 +396,12 @@ def aten__scaled_dot_product_attention_math(
     return_debug_mask: bool = False,
     scale: float | None = None,
 ):
-    return aten__scaled_dot_product_flash_attention(
+    output, logsumexp, *_ = aten__scaled_dot_product_flash_attention(
         query, key, value, dropout_p, is_causal, return_debug_mask, scale
+    )
+    return (
+        output,  # output: attention output tensor
+        logsumexp,  # logsumexp: placeholder used by ATen as second return value
     )
 
 
@@ -440,10 +444,55 @@ def aten__scaled_dot_product_flash_attention(
     # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
     result = F.permute(attn_out, [0, 2, 1, 3])
 
-    # Return tuple as expected by PyTorch (we only support inference, not training)
-    # The full signature returns 9 values for training, but we only need the first one
+    # Create placeholders for remaining outputs to match PyTorch's 9-value return
+    # contract for aten::_scaled_dot_product_flash_attention.
+    zero_scalar = F.constant(0, dtype=result.dtype, device=result.device)
+    zero_int_scalar = F.constant(0, dtype=DType.int32, device=result.device)
+    zero_int64_scalar = F.constant(0, dtype=DType.int64, device=result.device)
+
+    batch_size = query.shape[0]
+    num_heads = query.shape[1]
+    seq_len = query.shape[2]
+    seq_len_k = key.shape[2]
+
+    batch_size_int = (
+        int(batch_size.value) if hasattr(batch_size, "value") else int(batch_size)
+    )
+    num_heads_int = (
+        int(num_heads.value) if hasattr(num_heads, "value") else int(num_heads)
+    )
+    seq_len_int = int(seq_len.value) if hasattr(seq_len, "value") else int(seq_len)
+    seq_len_k_int = (
+        int(seq_len_k.value) if hasattr(seq_len_k, "value") else int(seq_len_k)
+    )
+
+    logsumexp = F.broadcast_to(
+        zero_scalar, [batch_size_int, num_heads_int, seq_len_int]
+    )
+    cum_seq_q = F.broadcast_to(zero_int_scalar, [batch_size_int])
+    cum_seq_k = F.broadcast_to(zero_int_scalar, [batch_size_int])
+    max_q = seq_len_int
+    max_k = seq_len_k_int
+    rng_state = F.broadcast_to(zero_int64_scalar, [8])
+    unused = F.broadcast_to(zero_scalar, [1])
+    debug_attn_mask = F.broadcast_to(
+        zero_scalar, [batch_size_int, num_heads_int, seq_len_int, seq_len_k_int]
+    )
+
+    # Return tuple as expected by PyTorch:
+    # output, logsumexp, cum_seq_q, cum_seq_k, max_q, max_k, rng_state, unused, debug_attn_mask
     print(result.shape)
-    return (result,)
+    return (
+        result,  # output
+        logsumexp,  # logsumexp
+        cum_seq_q,  # cum_seq_q
+        cum_seq_k,  # cum_seq_k
+        max_q,  # max_q
+        max_k,  # max_k
+        rng_state,  # rng_state
+        unused,  # unused
+        debug_attn_mask,  # debug_attn_mask
+    )
 
 
 # TODO: remove all of those when https://github.com/modular/modular/issues/5198
