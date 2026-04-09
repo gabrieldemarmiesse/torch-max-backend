@@ -405,6 +405,95 @@ def aten__scaled_dot_product_attention_math(
     )
 
 
+def _scaled_dot_product_attention_cpu(
+    query: MaxTensor,
+    key: MaxTensor,
+    value: MaxTensor,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    return_debug_mask: bool = False,
+    scale: float | None = None,
+):
+    """CPU fallback for scaled dot-product attention using MAX matmuls + softmax."""
+    # Fallback to manual attention computation
+    # Get dimensions for attention computation
+    batch_size = query.shape[0]
+    num_heads = query.shape[1]
+    seq_len_q = query.shape[2]
+    head_dim = query.shape[3]
+    seq_len_k = key.shape[2]
+
+    # Compute attention scores: Q @ K^T
+    # Transpose key to [batch_size, num_heads, head_dim, seq_len_k] for matmul
+    key_transposed = F.transpose(key, 2, 3)
+    scores = F.matmul(query, key_transposed)
+
+    # Scale by provided scale, or by sqrt(head_dim) and preserve query dtype.
+    if scale is None:
+        if hasattr(head_dim, "value"):
+            head_dim_val = float(head_dim.value)
+        else:
+            head_dim_val = float(int(head_dim))
+        scale = 1.0 / math.sqrt(head_dim_val)
+    scores = F.mul(scores, F.constant(scale, dtype=query.dtype, device=query.device))
+
+    # Keep behavior consistent with the existing manual kernel path: causal mask is
+    # not yet implemented in the fallback and will be handled by callers that
+    # request only non-causal attention today.
+    if is_causal:
+        raise NotImplementedError("The causal version is not implemented yet")
+
+    # Apply softmax to get attention weights
+    attention_weights = aten_softmax(scores, dim=-1)
+
+    # Apply attention weights to values: attention_weights @ V
+    output = F.matmul(attention_weights, value)
+
+    # Create additional outputs to match PyTorch's 9-value return contract for
+    # aten::_scaled_dot_product_flash_attention.
+
+    logsumexp = F.broadcast_to(
+        F.constant(0, dtype=DType.float32, device=output.device),
+        [batch_size, num_heads, seq_len_q],
+    )
+    cum_seq_q = F.broadcast_to(
+        F.constant(0, dtype=DType.int32, device=output.device), [batch_size]
+    )
+    cum_seq_k = F.broadcast_to(
+        F.constant(0, dtype=DType.int32, device=output.device), [batch_size]
+    )
+    max_q = seq_len_q
+    max_k = seq_len_k
+    rng_state = F.broadcast_to(
+        F.constant(0, dtype=DType.int64, device=output.device), [2]
+    )
+    unused = None
+
+    if return_debug_mask:
+        debug_attn_mask = F.broadcast_to(
+            F.constant(0, dtype=output.dtype, device=output.device),
+            [batch_size, num_heads, seq_len_q, seq_len_k],
+        )
+    else:
+        debug_attn_mask = None
+
+    return (
+        output,
+        logsumexp,
+        cum_seq_q,
+        cum_seq_k,
+        max_q,
+        max_k,
+        rng_state,
+        unused,
+        debug_attn_mask,
+    )
+
+
+def _is_cpu_tensor(x: MaxTensor) -> bool:
+    return "cpu" in str(x.device).lower()
+
+
 # _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)
 @map_to(aten._scaled_dot_product_flash_attention)
 def aten__scaled_dot_product_flash_attention(
@@ -416,6 +505,13 @@ def aten__scaled_dot_product_flash_attention(
     return_debug_mask: bool = False,
     scale: float | None = None,
 ):
+    if _is_cpu_tensor(query):
+        # CPU does not yet support flash attention kernels in MAX, so use the
+        # equivalent matmul + softmax fallback.
+        return _scaled_dot_product_attention_cpu(
+            query, key, value, dropout_p, is_causal, return_debug_mask, scale
+        )
+
     # We return only the first element for now because we don't support training yet.
     # PyTorch provides tensors in shape [batch, num_heads, seq_len, head_dim]
     # MAX expects tensors in shape [batch, seq_len, num_heads, head_dim]
@@ -452,31 +548,19 @@ def aten__scaled_dot_product_flash_attention(
     seq_len_k = key.shape[2]
     head_dim = query.shape[3]
 
-    batch_size_int = (
-        int(batch_size.value) if hasattr(batch_size, "value") else int(batch_size)
-    )
-    num_heads_int = (
-        int(num_heads.value) if hasattr(num_heads, "value") else int(num_heads)
-    )
-    seq_len_int = int(seq_len.value) if hasattr(seq_len, "value") else int(seq_len)
-    seq_len_k_int = (
-        int(seq_len_k.value) if hasattr(seq_len_k, "value") else int(seq_len_k)
-    )
-    head_dim_int = int(head_dim.value) if hasattr(head_dim, "value") else int(head_dim)
-
     logsumexp = F.broadcast_to(
         F.constant(0, dtype=DType.float32, device=result.device),
-        [batch_size_int, num_heads_int, seq_len_int],
+        [batch_size, num_heads, seq_len],
     )
 
     # cum_seq_q and cum_seq_k are cumulative sequence length vectors for packed
     # layouts; for dense attention the real backend returns None, but this backend
     # currently returns symbolic zero placeholders.
     cum_seq_q = F.broadcast_to(
-        F.constant(0, dtype=DType.int32, device=result.device), [batch_size_int]
+        F.constant(0, dtype=DType.int32, device=result.device), [batch_size]
     )
     cum_seq_k = F.broadcast_to(
-        F.constant(0, dtype=DType.int32, device=result.device), [batch_size_int]
+        F.constant(0, dtype=DType.int32, device=result.device), [batch_size]
     )
 
     # max_q and max_k are computed from input sequence dimensions.
@@ -487,25 +571,17 @@ def aten__scaled_dot_product_flash_attention(
     rng_state = F.broadcast_to(
         F.constant(0, dtype=DType.int64, device=result.device), [2]
     )
-    unused = F.broadcast_to(F.constant(0, dtype=DType.int64, device=result.device), [])
+    unused = None
 
     # debug_attn_mask is a compressed debug representation when requested; otherwise
     # it is returned as an empty tensor.
     if return_debug_mask:
-        block_size = 128 if head_dim_int > 64 else 256
-        max_seqlen_k = math.ceil(seq_len_int / block_size)
-        if seq_len_k_int <= 128:
-            max_seqlen_k = 128
-        elif seq_len_k_int <= 256:
-            max_seqlen_k = 256
         debug_attn_mask = F.broadcast_to(
             F.constant(0, dtype=result.dtype, device=result.device),
-            [batch_size_int, num_heads_int, seq_len_int, max_seqlen_k],
+            [batch_size, num_heads, seq_len, seq_len_k],
         )
     else:
-        debug_attn_mask = F.broadcast_to(
-            F.constant(0, dtype=result.dtype, device=result.device), []
-        )
+        debug_attn_mask = None
 
     # Return tuple as expected by PyTorch:
     # output, logsumexp, cum_seq_q, cum_seq_k, max_q, max_k, rng_state, unused, debug_attn_mask
@@ -3524,22 +3600,10 @@ def aten__scaled_dot_product_efficient_attention(
     zero_int_scalar = F.constant(0, dtype=DType.int32, device=output.device)
     zero_int64_scalar = F.constant(0, dtype=DType.int64, device=output.device)
 
-    # Create appropriately shaped tensors
-    # Convert all dimensions to int for indexing
-    batch_size_int = (
-        int(batch_size.value) if hasattr(batch_size, "value") else int(batch_size)
-    )
-    num_heads_int = (
-        int(num_heads.value) if hasattr(num_heads, "value") else int(num_heads)
-    )
-    seq_len_q_int = (
-        int(seq_len_q.value) if hasattr(seq_len_q, "value") else int(seq_len_q)
-    )
-
-    logsumexp_shape = [batch_size_int, num_heads_int, seq_len_q_int]
+    logsumexp_shape = [batch_size, num_heads, seq_len_q]
     logsumexp = F.broadcast_to(zero_scalar, logsumexp_shape)
 
-    cum_seq_shape = [batch_size_int]
+    cum_seq_shape = [batch_size]
     cum_seq_q = F.broadcast_to(zero_int_scalar, cum_seq_shape)
     cum_seq_k = F.broadcast_to(zero_int_scalar, cum_seq_shape)
 
@@ -3554,11 +3618,7 @@ def aten__scaled_dot_product_efficient_attention(
     unused_shape = [1]
     unused = F.broadcast_to(zero_scalar, unused_shape)
 
-    # Convert scores.shape to int list
-    scores_shape_int = [
-        int(d.value) if hasattr(d, "value") else int(d) for d in scores.shape
-    ]
-    debug_attn_mask = F.broadcast_to(zero_scalar, scores_shape_int)
+    debug_attn_mask = F.broadcast_to(zero_scalar, scores.shape)
 
     return (
         output,
