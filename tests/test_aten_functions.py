@@ -1336,7 +1336,7 @@ TRIGON_FUNCTIONS = [aten.asinh, aten.cosh, aten.sinh, aten.tan, aten.tanh]
 def test_aten_trigon_basic(conf: Conf, fn: Callable, dtype: torch.dtype):
     """Test trigonometric functions basic functionality with floating point numbers"""
 
-    if dtype == torch.float64 and fn == aten.asinh:
+    if dtype == torch.float64 and fn in (aten.asinh, aten.tan):
         pytest.xfail(
             "could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d', see https://github.com/modular/modular/issues/6434"
         )
