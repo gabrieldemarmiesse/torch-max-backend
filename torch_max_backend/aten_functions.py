@@ -456,9 +456,10 @@ def aten__scaled_dot_product_flash_attention(
         scores = F.matmul(q_heads, F.transpose(k_heads, 2, 3))
         scores = F.mul(scores, scale)
         if is_causal:
-            # Causal masking is not currently implemented in fake path; keep
-            # deterministic behavior for tests that use is_causal=False today.
-            pass
+            raise NotImplementedError(
+                "Causal attention is not implemented in fake matmul fallback for "
+                "aten::_scaled_dot_product_flash_attention."
+            )
         attention = aten_softmax(scores, dim=-1)
         attn_out = F.permute(F.matmul(attention, v_heads), [0, 2, 1, 3])
         if q.dtype == DType.bfloat16:
