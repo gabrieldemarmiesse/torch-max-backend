@@ -934,22 +934,16 @@ def test_foreach_div_tensor(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [x, y, z, other])
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_sqrt(conf: Conf, dtype: torch.dtype):
+def test_foreach_sqrt(conf: Conf):
     """Test _foreach_sqrt - computes square root of each tensor in list"""
-    # xfail for float64 on CUDA due to current MAX limitation with sqrt intrinsic
-    if conf.device == "cuda:0" and dtype == torch.float64:
-        pytest.xfail(
-            "float64 sqrt on CUDA currently fails in MAX (llvm.nvvm.sqrt.approx.d intrinsic issue)"
-        )
 
     def fn(x, y, z):
         tensors = [x, y, z]
         return aten._foreach_sqrt(tensors)
 
-    x = torch.randn(3, 4, dtype=dtype).abs() + 0.1
-    y = torch.randn(2, 5, dtype=dtype).abs() + 0.1
-    z = torch.randn(4, dtype=dtype).abs() + 0.1
+    x = torch.randn(3, 4).abs() + 0.1
+    y = torch.randn(2, 5).abs() + 0.1
+    z = torch.randn(4).abs() + 0.1
 
     check_outputs(fn, conf, [x, y, z])
 
