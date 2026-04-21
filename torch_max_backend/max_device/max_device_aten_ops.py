@@ -149,6 +149,30 @@ def max_device__copy_from(self: TorchMaxTensor, dest: TorchMaxTensor) -> TorchMa
         )
 
 
+@register_aten_op("aten::_to_copy")
+def max_device__to_copy(
+    tensor: TorchMaxTensor | torch.Tensor,
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    non_blocking: bool = False,
+    memory_format: torch.memory_format | None = None,
+) -> TorchMaxTensor:
+    if isinstance(tensor, TorchMaxTensor):
+        result = tensor._max_data
+    else:
+        result = MaxEagerTensor(storage=max.driver.Buffer.from_dlpack(tensor))
+    if dtype is not None:
+        result = result.cast(torch_dtype_to_max(dtype))
+    if device is not None and device.type == "cpu":
+        return torch.from_dlpack(result.to(CPU()))
+    if device is not None:
+        result = result.to(find_equivalent_max_device(device))
+    return TorchMaxTensor._from_max_data(result)
+
+
 register_aten_op("aten::_log_softmax")(
     wrap_for_max_device(aten_functions.aten__log_softmax)
 )
