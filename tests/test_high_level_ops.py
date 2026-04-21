@@ -1907,7 +1907,7 @@ def test_tensor_pow_fractional_exponent(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_tensor_pow_with_arithmetic(device: str):
+def test_tensor_pow_with_arithmetic(conf: Conf):
     """Test tensor.pow() combined with arithmetic operations"""
 
     def fn(x, y, z):
@@ -1917,7 +1917,7 @@ def test_tensor_pow_with_arithmetic(device: str):
     y = torch.randn(3, 4) * 2
     z = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 def test_tensor_pow_chained(conf: Conf):
@@ -1931,7 +1931,7 @@ def test_tensor_pow_chained(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_tensor_pow_broadcast(device: str):
+def test_tensor_pow_broadcast(conf: Conf):
     """Test tensor.pow() with broadcasting"""
 
     def fn(x, y):
@@ -1940,7 +1940,7 @@ def test_tensor_pow_broadcast(device: str):
     x = torch.randn(3, 4).abs() + 0.1
     y = torch.randn(1, 4) * 2
 
-    check_functions_are_equivalent(fn, device, [x, y])
+    check_outputs(fn, conf, [x, y])
 
 
 def test_tensor_pow_different_shapes(conf: Conf, tensor_shapes: tuple):
