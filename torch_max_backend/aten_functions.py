@@ -447,16 +447,14 @@ def aten__scaled_dot_product_flash_attention(
         if query_device.type == "cpu":
             use_fake_flash_attention = True
         elif query_device.type == "max_device":
-            try:
-                ordered_accelerators = get_ordered_accelerators()
-                query_device_idx = (
-                    query_device.index if query_device.index is not None else 0
-                )
+            ordered_accelerators = get_ordered_accelerators()
+            query_device_idx = (
+                query_device.index if query_device.index is not None else 0
+            )
+            if 0 <= query_device_idx < len(ordered_accelerators):
                 use_fake_flash_attention = (
                     ordered_accelerators[query_device_idx].label == "cpu"
                 )
-            except Exception:
-                use_fake_flash_attention = False
     if use_fake_flash_attention:
         # Fake path: compute attention with basic matmuls.
         q_heads = F.permute(q, [0, 2, 1, 3])  # [batch, heads, seq_len, head_dim]
