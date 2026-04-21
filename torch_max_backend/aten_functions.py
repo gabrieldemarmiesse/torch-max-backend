@@ -517,11 +517,12 @@ def aten__scaled_dot_product_flash_attention(
     # it is returned as an empty tensor.
     if return_debug_mask:
         block_size = 128 if head_dim_int > 64 else 256
-        max_seqlen_k = math.ceil(seq_len_int / block_size)
-        if seq_len_k_int <= 128:
-            max_seqlen_k = 128
-        elif seq_len_k_int <= 256:
-            max_seqlen_k = 256
+        if seq_len_k_int <= block_size:
+            max_seqlen_k = block_size
+        elif seq_len_k_int <= 2 * block_size:
+            max_seqlen_k = 2 * block_size
+        else:
+            max_seqlen_k = math.ceil(seq_len_k_int / block_size)
         debug_attn_mask = F.broadcast_to(
             F.constant(0, dtype=result.dtype, device=result.device),
             [batch_size_int, num_heads_int, seq_len_int, max_seqlen_k],
