@@ -12,6 +12,7 @@ import operator
 import os
 from typing import Literal
 
+import max.driver
 import max.graph.type as max_type
 import torch
 from max.dtype import DType
@@ -440,9 +441,11 @@ def aten__scaled_dot_product_flash_attention(
     # Flash attention kernels are currently only valid on GPU. Use a fake matmul-based
     # implementation on CPU to keep correctness on CPU-backed execution.
     query_device = query.device
-    use_fake_flash_attention = (
-        isinstance(query, MaxEagerTensor) and query_device.label == "cpu"
-    )
+    use_fake_flash_attention = False
+    if isinstance(query_device, DeviceRef):
+        use_fake_flash_attention = query_device.is_cpu()
+    elif isinstance(query_device, max.driver.Device):
+        use_fake_flash_attention = query_device.label == "cpu"
     if use_fake_flash_attention:
         # Fake path: compute attention with basic matmuls.
         q_heads = F.permute(q, [0, 2, 1, 3])  # [batch, heads, seq_len, head_dim]
@@ -479,17 +482,11 @@ def aten__scaled_dot_product_flash_attention(
     seq_len_k = key.shape[2]
     head_dim = query.shape[3]
 
-    batch_size_int = (
-        int(batch_size.value) if hasattr(batch_size, "value") else int(batch_size)
-    )
-    num_heads_int = (
-        int(num_heads.value) if hasattr(num_heads, "value") else int(num_heads)
-    )
-    seq_len_int = int(seq_len.value) if hasattr(seq_len, "value") else int(seq_len)
-    seq_len_k_int = (
-        int(seq_len_k.value) if hasattr(seq_len_k, "value") else int(seq_len_k)
-    )
-    head_dim_int = int(head_dim.value) if hasattr(head_dim, "value") else int(head_dim)
+    batch_size_int = int(batch_size if isinstance(batch_size, Dim) else batch_size)
+    num_heads_int = int(num_heads if isinstance(num_heads, Dim) else num_heads)
+    seq_len_int = int(seq_len if isinstance(seq_len, Dim) else seq_len)
+    seq_len_k_int = int(seq_len_k if isinstance(seq_len_k, Dim) else seq_len_k)
+    head_dim_int = int(head_dim if isinstance(head_dim, Dim) else head_dim)
 
     logsumexp = F.broadcast_to(
         F.constant(0, dtype=DType.float32, device=result.device),
