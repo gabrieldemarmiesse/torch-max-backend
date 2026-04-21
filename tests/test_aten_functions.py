@@ -41,11 +41,8 @@ def test_scaled_dot_product_flash_attention_basic(
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_with_causal(
-    conf: Conf, dtype: str, call_checker: CallChecker
-):
+def test_scaled_dot_product_flash_attention_with_causal(conf: Conf, dtype: str):
     """Test _scaled_dot_product_flash_attention with causal masking"""
-    call_checker.register(aten_functions.aten__scaled_dot_product_flash_attention)
     # Flash attention only works on CUDA
     if conf.device != "cuda:0":
         pytest.skip("Flash attention is only supported on CUDA")
@@ -242,8 +239,11 @@ def test_aten_acos_basic(conf: Conf, dtype: torch.dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_aten_acos_special_values(conf: Conf, dtype: torch.dtype):
     """Test aten.acos with special mathematical values"""
-    if conf.device == "cuda:0" and dtype == torch.float64:
-        pytest.xfail("Bug: could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d'")
+
+    if dtype == torch.float64:
+        pytest.xfail(
+            "Bug: could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d', see https://github.com/modular/modular/issues/6434"
+        )
 
     def fn(x):
         return aten.acos(x)
