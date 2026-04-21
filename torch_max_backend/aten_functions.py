@@ -438,23 +438,11 @@ def aten__scaled_dot_product_flash_attention(
     mask_variant = MHAMaskVariant.CAUSAL_MASK if is_causal else MHAMaskVariant.NULL_MASK
 
     # Flash attention kernels are currently only valid on GPU. Use a fake matmul-based
-    # implementation on CPU to keep correctness on non-GPU devices.
-    query_device = getattr(query, "_max_data", query).device
-    use_fake_flash_attention = False
-    if hasattr(query_device, "label"):
-        use_fake_flash_attention = query_device.label == "cpu"
-    elif hasattr(query_device, "type"):
-        if query_device.type == "cpu":
-            use_fake_flash_attention = True
-        elif query_device.type == "max_device":
-            ordered_accelerators = get_ordered_accelerators()
-            query_device_idx = (
-                query_device.index if query_device.index is not None else 0
-            )
-            if 0 <= query_device_idx < len(ordered_accelerators):
-                use_fake_flash_attention = (
-                    ordered_accelerators[query_device_idx].label == "cpu"
-                )
+    # implementation on CPU to keep correctness on CPU-backed execution.
+    query_device = query.device
+    use_fake_flash_attention = (
+        isinstance(query, MaxEagerTensor) and query_device.label == "cpu"
+    )
     if use_fake_flash_attention:
         # Fake path: compute attention with basic matmuls.
         q_heads = F.permute(q, [0, 2, 1, 3])  # [batch, heads, seq_len, head_dim]
