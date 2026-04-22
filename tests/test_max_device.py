@@ -331,6 +331,26 @@ def test_custom_module(max_device):
     function_equivalent_on_both_devices(run_module, max_device, rtol=1e-3, atol=1e-3)
 
 
+def test_custom_module_with_seqential(max_device):
+    class MyModule(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(4, 8)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    module = torch.nn.Sequential(MyModule())
+    input_tensor = torch.randn(2, 4)
+
+    def run_module(device):
+        in_device_module = module.to(device)
+        in_device_input_tensor = input_tensor.to(device)
+        return in_device_module(in_device_input_tensor)
+
+    function_equivalent_on_both_devices(run_module, max_device, rtol=1e-3, atol=1e-3)
+
+
 @pytest.mark.xfail(reason="Fixme")
 def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)
