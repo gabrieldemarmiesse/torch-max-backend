@@ -327,7 +327,7 @@ def aten__native_batch_norm_legit_no_training(
     running_var: MaxTensor,
     momentum: float,
     eps: float,
-) -> tuple[MaxTensor, NotImplementedError, NotImplementedError]:
+) -> tuple[MaxTensor, MaxTensor, MaxTensor]:
     """
     Implements batch normalization for inference (no training).
 
@@ -2378,7 +2378,7 @@ def aten_native_group_norm(
     HxW: SymIntType,
     group: int,
     eps: float,
-) -> tuple[MaxTensor, NotImplementedError, NotImplementedError]:
+) -> tuple[MaxTensor, MaxTensor, MaxTensor]:
     """
     This is the low-level operation that F.group_norm gets compiled to.
     Returns (normalized_output, mean, rstd) tuple but we only return the first element for simplicity.
@@ -2470,7 +2470,7 @@ def aten_native_layer_norm(
     weight: MaxTensor | None,
     bias: MaxTensor | None,
     eps: float,
-) -> tuple[MaxTensor, NotImplementedError, NotImplementedError]:
+) -> tuple[MaxTensor, MaxTensor, MaxTensor]:
     # expects a tuple or list for some reason
     # surely for the backward pass,
     # for the moment we only output the first one.
@@ -2487,7 +2487,6 @@ def aten_native_layer_norm(
     centered = input - mean
     variance = aten_mean(centered * centered, dim=axis_to_reduce, keepdim=True)
 
-    # Normalize: (x - mean) / sqrt(variance + eps)
     normalized = centered / F.sqrt(variance + eps)
 
     # Apply scale and shift if provided
@@ -2496,15 +2495,7 @@ def aten_native_layer_norm(
     if bias is not None:
         normalized = normalized + bias
 
-    return (
-        normalized,
-        NotImplementedError(
-            "The implementation of aten.native_layer_norm doesn't support returning mean yet."
-        ),
-        NotImplementedError(
-            "The implementation of aten.native_layer_norm doesn't support returning rstd yet."
-        ),
-    )
+    return (normalized, mean, F.rsqrt(variance + eps))
 
 
 # native_layer_norm_backward(Tensor grad_out, Tensor input, SymInt[] normalized_shape, Tensor mean, Tensor rstd, Tensor? weight, Tensor? bias, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
@@ -3105,7 +3096,14 @@ def aten_split(
             new_split_size.append(shape % split_size)
     else:
         new_split_size = split_size
-    return F.split(input, new_split_size, dim)
+
+    result = []
+    start = 0
+    for size in new_split_size:
+        end = start + int(size)
+        result.append(aten_slice(input, dim, start, end))
+        start = end
+    return result
 
 
 @map_to(aten.unbind)
@@ -3120,13 +3118,10 @@ def aten_unbind(input: MaxTensor, dim: int = 0) -> list[MaxTensor]:
 
     size = int(shape[dim])
 
-    # Use split with size 1 to get individual slices, then squeeze
-    split_sizes = [1] * size
-    split_tensors = F.split(input, split_sizes, dim)
-
-    # Squeeze each tensor to remove the dimension we split along
+    # Split by slicing to avoid recursing into split/unbind dispatch.
     result = []
-    for tensor in split_tensors:
+    for index in range(size):
+        tensor = aten_slice(input, dim, index, index + 1)
         squeezed = F.squeeze(tensor, axis=dim)
         result.append(squeezed)
 
