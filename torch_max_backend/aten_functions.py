@@ -2944,6 +2944,33 @@ def aten_upsample_bilinear2d(
 # upsample_nearest2d.vec(Tensor input, SymInt[]? output_size, float[]? scale_factors) -> Tensor
 # var.correction(Tensor self, int[1]? dim=None, *, Scalar? correction=None, bool keepdim=False) -> Tensor
 # var.dim(Tensor self, int[1]? dim, bool unbiased=True, bool keepdim=False) -> Tensor
+@map_to(aten.var)
+def aten_var(
+    input: MaxTensor,
+    dim=None,
+    *,
+    correction: int | float | None = None,
+    keepdim: bool = False,
+) -> MaxTensor:
+    if correction is None:
+        correction = 1
+    mean = aten_mean(input, dim=dim, keepdim=True)
+    centered = input - mean
+    var = aten_mean(centered * centered, dim=dim, keepdim=keepdim)
+    if correction != 0:
+        # Apply Bessel's correction: var * N / (N - correction)
+        if dim is None:
+            n = 1
+            for s in input.shape:
+                n *= int(s)
+        elif isinstance(dim, int):
+            n = int(input.shape[dim])
+        else:
+            n = 1
+            for d in dim:
+                n *= int(input.shape[d])
+        var = var * (n / (n - correction))
+    return var
 
 
 # view(Tensor(a) self, SymInt[] size) -> Tensor(a)
