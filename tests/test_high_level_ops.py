@@ -2604,19 +2604,20 @@ def test_linear_3d_input(conf: Conf):
     check_outputs(fn, conf, [input, weight, bias])
 
 
-def test_linear_4d_input(device: str):
+def test_linear_4d_input(conf: Conf):
     """Test linear function with 4D input (..., features)"""
 
-    def fn(input, weight):
-        return F.linear(input, weight)
+    def fn(input, weight, bias):
+        return F.linear(input, weight, bias=bias)
 
     batch_size, height, width = 2, 3, 4
     in_features, out_features = 7, 5
 
     input = torch.randn(batch_size, height, width, in_features)
     weight = torch.randn(out_features, in_features)
+    bias = torch.randn(out_features)
 
-    check_functions_are_equivalent(fn, device, [input, weight])
+    check_outputs(fn, conf, [input, weight, bias])
 
 
 def test_linear_1d_input(conf: Conf):
