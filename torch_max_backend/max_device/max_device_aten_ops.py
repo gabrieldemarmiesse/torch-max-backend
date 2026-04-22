@@ -163,7 +163,7 @@ def max_device__to_copy(
     if isinstance(tensor, TorchMaxTensor):
         result = tensor._max_data
     else:
-        result = MaxEagerTensor(storage=max.driver.Buffer.from_dlpack(tensor))
+        result = MaxEagerTensor(storage=max.driver.Buffer.from_dlpack(tensor.detach()))
     if dtype is not None:
         result = result.cast(torch_dtype_to_max(dtype))
     if device is not None and device.type == "cpu":

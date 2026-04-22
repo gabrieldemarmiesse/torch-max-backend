@@ -855,7 +855,6 @@ def test_conv2d_padding_tuple(conf: Conf):
     check_outputs(fn, conf, [x, w])
 
 
-@pytest.mark.xfail(reason="Dilation not implemented yet on max")
 def test_conv2d_dilation_int(conf: Conf):
     def fn(x, w):
         return F.conv2d(x, w, dilation=2)
@@ -869,7 +868,6 @@ def test_conv2d_dilation_int(conf: Conf):
     check_outputs(fn, conf, [x, w])
 
 
-@pytest.mark.xfail(reason="Dilation not implemented yet on max")
 def test_conv2d_dilation_tuple(conf: Conf):
     """Test conv2d with tuple dilation"""
 
