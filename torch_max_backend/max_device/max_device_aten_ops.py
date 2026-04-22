@@ -521,6 +521,11 @@ register_aten_op("aten::triu")(wrap_for_max_device(aten_functions.aten_triu))
 register_aten_op("aten::unbind.int")(wrap_for_max_device(aten_functions.aten_unbind))
 register_aten_op("aten::unsqueeze")(wrap_for_max_device(aten_functions.aten_unsqueeze))
 
+register_aten_op("aten::upsample_bilinear2d")(
+    wrap_for_max_device(aten_functions.aten_upsample_bilinear2d)
+)
+
+
 register_aten_op("aten::view")(wrap_for_max_device(aten_functions.aten_view))
 
 register_aten_op("aten::where.self")(wrap_for_max_device(aten_functions.aten_where))

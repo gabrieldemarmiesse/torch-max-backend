@@ -2915,6 +2915,32 @@ def aten_unsqueeze(tensor: MaxTensor, dim: int) -> MaxTensor:
 
 
 # upsample_bilinear2d.vec(Tensor input, SymInt[]? output_size, bool align_corners, float[]? scale_factors) -> Tensor
+@map_to(aten.upsample_bilinear2d)
+def aten_upsample_bilinear2d(
+    input: MaxTensor,
+    output_size: list[SymIntType],
+    align_corners: bool,
+    scale_factors: list[float] | None = None,
+) -> MaxTensor:
+    if scale_factors is not None:
+        raise NotImplementedError(
+            "The implementation of aten.upsample_bilinear2d doesn't support scale_factors yet. Please provide output_size instead."
+        )
+    if len(input.shape) == 4:
+        # F.interpolate passes only spatial dimensions for 2D interpolation.
+        # Max resize ops expect the full output shape.
+        output_shape = [input.shape[0], input.shape[1], output_size[0], output_size[1]]
+    else:
+        raise ValueError(
+            "Max backend currently only supports upsample_bilinear2d for 4D tensors"
+        )
+
+    coordinate_transform_mode = 1 if align_corners else 0
+    return F.resize_linear(
+        input, output_shape, coordinate_transform_mode=coordinate_transform_mode
+    )
+
+
 # upsample_nearest2d.vec(Tensor input, SymInt[]? output_size, float[]? scale_factors) -> Tensor
 # var.correction(Tensor self, int[1]? dim=None, *, Scalar? correction=None, bool keepdim=False) -> Tensor
 # var.dim(Tensor self, int[1]? dim, bool unbiased=True, bool keepdim=False) -> Tensor
