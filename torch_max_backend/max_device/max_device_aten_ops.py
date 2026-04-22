@@ -15,6 +15,8 @@ from torch_max_backend.max_device.torch_max_tensor import (
 
 # Global registry for functions to register
 _aten_ops_registry: list[tuple[str, Callable]] = []
+_WRAP_DEBUG_PRINT_LIMIT = 200
+_wrap_debug_counter = 0
 
 
 def register_aten_op(op_name: str):
@@ -44,6 +46,10 @@ def convert_all_torch_max_tensors_to_lazy(x: Any) -> Any:
                 "TorchMaxTensor does not have _max_data attribute, this is a bug"
             )
         return x._max_data
+    elif isinstance(x, torch.Tensor):
+        if hasattr(x, "_max_data"):
+            return x._max_data
+        return x
     elif isinstance(x, list | tuple):
         return type(x)(convert_all_torch_max_tensors_to_lazy(item) for item in x)
     elif isinstance(x, dict):
@@ -73,6 +79,8 @@ def convert_all_torch_max_tensors_to_lazy(x: Any) -> Any:
 def convert_all_lazy_to_torch_max_tensors(x: Any) -> Any:
     if isinstance(x, MaxEagerTensor):
         return TorchMaxTensor._from_max_data(x)
+    elif isinstance(x, torch.Tensor):
+        return x
     elif isinstance(x, list | tuple):
         return type(x)(convert_all_lazy_to_torch_max_tensors(item) for item in x)
     elif isinstance(x, dict):
@@ -100,7 +108,10 @@ def convert_all_lazy_to_torch_max_tensors(x: Any) -> Any:
 
 def wrap_for_max_device(func: Callable) -> Callable:
     def wrapper(*args, **kwargs):
-        print("inside wrapper for", func.__name__)
+        global _wrap_debug_counter
+        _wrap_debug_counter += 1
+        if _wrap_debug_counter <= _WRAP_DEBUG_PRINT_LIMIT:
+            print(f"inside wrapper for {func.__name__} (#{_wrap_debug_counter})")
         args, kwargs = convert_all_torch_max_tensors_to_lazy((args, kwargs))
         result = func(*args, **kwargs)
         return convert_all_lazy_to_torch_max_tensors(result)
