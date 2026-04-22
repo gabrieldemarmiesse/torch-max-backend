@@ -2947,7 +2947,7 @@ def aten_upsample_bilinear2d(
 @map_to(aten.var)
 def aten_var(
     input: MaxTensor,
-    dim=None,
+    dim: list[int] | None = None,
     *,
     correction: int | float | None = None,
     keepdim: bool = False,
@@ -2959,16 +2959,10 @@ def aten_var(
     var = aten_mean(centered * centered, dim=dim, keepdim=keepdim)
     if correction != 0:
         # Apply Bessel's correction: var * N / (N - correction)
-        if dim is None:
-            n = 1
-            for s in input.shape:
-                n *= int(s)
-        elif isinstance(dim, int):
-            n = int(input.shape[dim])
-        else:
-            n = 1
-            for d in dim:
-                n *= int(input.shape[d])
+        reduced_dims = range(len(input.shape)) if dim is None else dim
+        n = 1
+        for d in reduced_dims:
+            n *= int(input.shape[d])
         var = var * (n / (n - correction))
     return var
 
