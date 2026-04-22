@@ -2922,6 +2922,10 @@ def aten_upsample_bilinear2d(
     align_corners: bool,
     scale_factors: list[float] | None = None,
 ) -> MaxTensor:
+    if scale_factors is not None:
+        raise NotImplementedError(
+            "The implementation of aten.upsample_bilinear2d doesn't support scale_factors yet. Please provide output_size instead."
+        )
     if len(input.shape) == 4:
         # F.interpolate passes only spatial dimensions for 2D interpolation.
         # Max resize ops expect the full output shape.
