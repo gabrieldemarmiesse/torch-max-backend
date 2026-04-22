@@ -392,13 +392,14 @@ def aten__scaled_dot_product_attention_math(
     query: MaxTensor,
     key: MaxTensor,
     value: MaxTensor,
+    attn_mask: MaxTensor | None = None,
     dropout_p: float = 0.0,
     is_causal: bool = False,
-    return_debug_mask: bool = False,
+    dropout_mask: MaxTensor | None = None,
     scale: float | None = None,
 ):
     output, logsumexp, *_ = aten__scaled_dot_product_flash_attention(
-        query, key, value, dropout_p, is_causal, return_debug_mask, scale
+        query, key, value, dropout_p, is_causal, False, scale, attn_mask=attn_mask
     )
     return (
         output,  # output: attention output tensor
@@ -416,6 +417,7 @@ def aten__scaled_dot_product_flash_attention(
     is_causal: bool = False,
     return_debug_mask: bool = False,
     scale: float | None = None,
+    attn_mask: MaxTensor | None = None,
 ):
     # We return only the first element for now because we don't support training yet.
     # PyTorch provides tensors in shape [batch, num_heads, seq_len, head_dim]
@@ -463,6 +465,14 @@ def aten__scaled_dot_product_flash_attention(
                 "Causal attention is not implemented in fake matmul fallback for "
                 "aten::_scaled_dot_product_flash_attention."
             )
+        if attn_mask is not None:
+            # attn_mask is additive: True positions attend, False positions are masked
+            # Convert bool mask to float: False -> -inf, True -> 0.0
+            if attn_mask.dtype == DType.bool:
+                neg_inf = -1e9  # large negative value
+                # where(mask, 0.0, -inf) - True means attend (add 0), False means mask (add -inf)
+                attn_mask = F.select(attn_mask, 0.0, neg_inf)
+            scores = scores + attn_mask
         attention = aten_softmax(scores, dim=-1)
         attn_out = F.permute(F.matmul(attention, v_heads), [0, 2, 1, 3])
         if q.dtype == DType.bfloat16:
@@ -2303,6 +2313,36 @@ def aten_mean(
     return result
 
 
+# var.correction(Tensor self, int[1]? dim=None, *, Scalar? correction=None, bool keepdim=False) -> Tensor
+@map_to(aten.var)
+def aten_var(
+    input: MaxTensor,
+    dim=None,
+    *,
+    correction: int | float | None = None,
+    keepdim: bool = False,
+) -> MaxTensor:
+    if correction is None:
+        correction = 1
+    mean = aten_mean(input, dim=dim, keepdim=True)
+    centered = input - mean
+    var = aten_mean(centered * centered, dim=dim, keepdim=keepdim)
+    if correction != 0:
+        # Apply Bessel's correction: var * N / (N - correction)
+        if dim is None:
+            n = 1
+            for s in input.shape:
+                n *= int(s)
+        elif isinstance(dim, int):
+            n = int(input.shape[dim])
+        else:
+            n = 1
+            for d in dim:
+                n *= int(input.shape[d])
+        var = var * (n / (n - correction))
+    return var
+
+
 # min.dim(Tensor self, int dim, bool keepdim=False) -> (Tensor values, Tensor indices)
 @map_to(aten.min)
 def aten_min(
@@ -2470,7 +2510,7 @@ def aten_native_layer_norm(
     weight: MaxTensor | None,
     bias: MaxTensor | None,
     eps: float,
-) -> tuple[MaxTensor, NotImplementedError, NotImplementedError]:
+) -> tuple[MaxTensor, MaxTensor, MaxTensor]:
     # expects a tuple or list for some reason
     # surely for the backward pass,
     # for the moment we only output the first one.
@@ -2496,15 +2536,10 @@ def aten_native_layer_norm(
     if bias is not None:
         normalized = normalized + bias
 
-    return (
-        normalized,
-        NotImplementedError(
-            "The implementation of aten.native_layer_norm doesn't support returning mean yet."
-        ),
-        NotImplementedError(
-            "The implementation of aten.native_layer_norm doesn't support returning rstd yet."
-        ),
-    )
+    # Compute rstd = 1 / sqrt(variance + eps)
+    rstd = 1.0 / F.sqrt(variance + eps)
+
+    return (normalized, mean, rstd)
 
 
 # native_layer_norm_backward(Tensor grad_out, Tensor input, SymInt[] normalized_shape, Tensor mean, Tensor rstd, Tensor? weight, Tensor? bias, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
@@ -2758,6 +2793,12 @@ def aten_select_scatter(
 @map_to(aten.sigmoid)
 def aten_sigmoid(input: MaxTensor) -> MaxTensor:
     return F.sigmoid(input)
+
+
+# silu(Tensor self) -> Tensor
+@map_to(aten.silu)
+def aten_silu(input: MaxTensor) -> MaxTensor:
+    return input * F.sigmoid(input)
 
 
 # sign(Tensor self) -> Tensor
