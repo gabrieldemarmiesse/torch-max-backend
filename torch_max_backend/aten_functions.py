@@ -401,6 +401,14 @@ def aten__scaled_dot_product_attention_math(
     scale: float | None = None,
     enable_gqa: bool = False,
 ):
+    if dropout_mask is not None:
+        raise NotImplementedError(
+            "dropout_mask is not supported in aten._scaled_dot_product_attention_math yet"
+        )
+    if enable_gqa:
+        raise NotImplementedError(
+            "enable_gqa is not supported in aten._scaled_dot_product_attention_math yet"
+        )
     if attn_mask is None:
         # No custom mask: delegate to flash attention (handles is_causal) and use its
         # first two return values as (output, logsumexp).
