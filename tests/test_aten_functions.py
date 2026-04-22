@@ -221,6 +221,66 @@ def test_native_batch_norm_legit_no_training_2d_input(device: str):
     )
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_aten_native_layer_norm_basic(
+    conf: Conf, dtype: torch.dtype, call_checker: CallChecker
+):
+    """Test aten.native_layer_norm returns (output, mean, rstd)"""
+    call_checker.register(aten_functions.aten_native_layer_norm)
+
+    def fn(x, weight, bias):
+        out, mean, rstd = aten.native_layer_norm(x, [10], weight, bias, 1e-5)
+        return out, mean, rstd
+
+    x = torch.randn(5, 10, dtype=dtype)
+    weight = torch.randn(10, dtype=dtype)
+    bias = torch.randn(10, dtype=dtype)
+    check_outputs(fn, conf, [x, weight, bias])
+
+
+def test_aten_native_layer_norm_none_weight_bias(conf: Conf, call_checker: CallChecker):
+    """Test aten.native_layer_norm with None weight and bias"""
+    call_checker.register(aten_functions.aten_native_layer_norm)
+
+    def fn(x):
+        out, mean, rstd = aten.native_layer_norm(x, [10], None, None, 1e-5)
+        return out, mean, rstd
+
+    x = torch.randn(5, 10)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_native_layer_norm_multidim(conf: Conf, call_checker: CallChecker):
+    """Test aten.native_layer_norm with multi-dim normalized_shape"""
+    call_checker.register(aten_functions.aten_native_layer_norm)
+
+    def fn(x, weight, bias):
+        out, mean, rstd = aten.native_layer_norm(x, [3, 4], weight, bias, 1e-5)
+        return out, mean, rstd
+
+    x = torch.randn(2, 5, 3, 4)
+    weight = torch.randn(3, 4)
+    bias = torch.randn(3, 4)
+    check_outputs(fn, conf, [x, weight, bias])
+
+
+@pytest.mark.parametrize("eps", [1e-5, 1e-3])
+def test_aten_native_layer_norm_different_eps(
+    conf: Conf, eps: float, call_checker: CallChecker
+):
+    """Test aten.native_layer_norm with different epsilon values"""
+    call_checker.register(aten_functions.aten_native_layer_norm)
+
+    def fn(x, weight, bias):
+        out, mean, rstd = aten.native_layer_norm(x, [10], weight, bias, eps)
+        return out, mean, rstd
+
+    x = torch.randn(5, 10)
+    weight = torch.randn(10)
+    bias = torch.randn(10)
+    check_outputs(fn, conf, [x, weight, bias])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_acos_basic(conf: Conf, dtype: torch.dtype):
     """Test aten.acos basic functionality with values in valid domain [-1, 1]"""
