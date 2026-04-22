@@ -51,8 +51,8 @@ def device(request, gpu_available: bool):
         # Enable when pytorch supports it
         # Conf("max_device:cpu", True),
         # Conf("max_device:gpu", True),
-        Conf("max_device:cpu", False),
-        Conf("max_device:gpu", False),
+        Conf("max_device:cpu", False)
+        # Conf("max_device:gpu", False),
         # Conf("cpu", True),
         # Conf("cuda", True),
     ]
