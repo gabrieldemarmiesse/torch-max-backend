@@ -2754,6 +2754,12 @@ def aten_sign(x: MaxTensor) -> MaxTensor:
     return positive + negative * (-1)
 
 
+# silu(Tensor self) -> Tensor
+@map_to(aten.silu)
+def aten_silu(input: MaxTensor) -> MaxTensor:
+    return input * F.sigmoid(input)
+
+
 # sin(Tensor self) -> Tensor
 @map_to(aten.sin)
 def aten_sin(x: MaxTensor) -> MaxTensor:
