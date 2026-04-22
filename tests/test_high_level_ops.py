@@ -5456,7 +5456,7 @@ def test_interpolate_various_output_sizes(device: str, size: tuple):
     check_functions_are_equivalent(fn, device, [x])
 
 
-def test_interpolate_preserve_aspect_ratio(device: str):
+def test_interpolate_preserve_aspect_ratio(conf: Conf):
     """Test F.interpolate preserving aspect ratio with rectangular input"""
 
     def fn(x):
@@ -5467,7 +5467,7 @@ def test_interpolate_preserve_aspect_ratio(device: str):
     # Input shape: [batch, channels, height, width] - rectangular
     x = torch.randn(2, 3, 4, 8)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_empty_tensor(device: str):
