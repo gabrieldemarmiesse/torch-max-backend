@@ -387,23 +387,47 @@ def aten__native_batch_norm_legit_no_training(
 # _pdist_forward(Tensor self, float p=2) -> Tensor
 
 
+# _scaled_dot_product_attention_math(Tensor query, Tensor key, Tensor value, Tensor? attn_mask=None, float dropout_p=0.0, bool is_causal=False, Tensor? dropout_mask=None, *, float? scale=None, bool enable_gqa=False) -> (Tensor, Tensor)
 @map_to(aten._scaled_dot_product_attention_math)
 def aten__scaled_dot_product_attention_math(
     query: MaxTensor,
     key: MaxTensor,
     value: MaxTensor,
+    attn_mask: MaxTensor | None = None,
     dropout_p: float = 0.0,
     is_causal: bool = False,
-    return_debug_mask: bool = False,
+    dropout_mask: MaxTensor | None = None,
+    *,
     scale: float | None = None,
+    enable_gqa: bool = False,
 ):
-    output, logsumexp, *_ = aten__scaled_dot_product_flash_attention(
-        query, key, value, dropout_p, is_causal, return_debug_mask, scale
-    )
-    return (
-        output,  # output: attention output tensor
-        logsumexp,  # logsumexp: placeholder used by ATen as second return value
-    )
+    if attn_mask is None:
+        # No custom mask: delegate to flash attention (handles is_causal) and use its
+        # first two return values as (output, logsumexp).
+        output, logsumexp, *_ = aten__scaled_dot_product_flash_attention(
+            query, key, value, dropout_p, is_causal, False, scale
+        )
+        return output, logsumexp
+
+    # Custom attn_mask path: compute attention manually so the mask can be applied
+    # to the pre-softmax scores.
+    head_dim = query.shape[-1]
+    head_dim_val = int(head_dim) if isinstance(head_dim, Dim) else head_dim
+    if scale is None:
+        scale = 1.0 / math.sqrt(float(head_dim_val))
+
+    key_transposed = F.transpose(key, -2, -1)
+    scores = F.matmul(query, key_transposed) * scale
+
+    # Match PyTorch's math reference: the mask is always added to scores.
+    # A bool mask is promoted to the scores dtype (True -> 1.0, False -> 0.0).
+    if attn_mask.dtype != scores.dtype:
+        attn_mask = F.cast(attn_mask, dtype=scores.dtype)
+    scores = scores + attn_mask
+
+    attention = aten_softmax(scores, dim=-1)
+    output = F.matmul(attention, value)
+    return output, attention
 
 
 # _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)

@@ -88,6 +88,71 @@ def test_scaled_dot_product_flash_attention_with_scale(conf: Conf, dtype):
     check_outputs(fn, conf, [q, k, v], atol=1e-2, rtol=1e-2)
 
 
+def test_scaled_dot_product_attention_math_additive_mask(
+    conf: Conf, call_checker: CallChecker
+):
+    """Test aten._scaled_dot_product_attention_math with an additive float mask"""
+    call_checker.register(aten_functions.aten__scaled_dot_product_attention_math)
+
+    def fn(q, k, v, attn_mask):
+        out, _ = torch.ops.aten._scaled_dot_product_attention_math(
+            q, k, v, attn_mask=attn_mask
+        )
+        return out
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 6, 16
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    attn_mask = torch.tril(torch.ones(seq_len, seq_len))
+    attn_mask = attn_mask.masked_fill(attn_mask == 0, float("-inf"))
+    attn_mask = attn_mask.masked_fill(attn_mask == 1, 0.0)
+
+    check_outputs(fn, conf, [q, k, v, attn_mask], atol=1e-4, rtol=1e-4)
+
+
+def test_scaled_dot_product_attention_math_broadcast_mask(
+    conf: Conf, call_checker: CallChecker
+):
+    """Test aten._scaled_dot_product_attention_math with a broadcastable mask"""
+    call_checker.register(aten_functions.aten__scaled_dot_product_attention_math)
+
+    def fn(q, k, v, attn_mask):
+        out, _ = torch.ops.aten._scaled_dot_product_attention_math(
+            q, k, v, attn_mask=attn_mask
+        )
+        return out
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 6, 16
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    # Per-head mask that broadcasts across batch: shape [num_heads, seq_len, seq_len]
+    attn_mask = torch.randn(num_heads, seq_len, seq_len)
+
+    check_outputs(fn, conf, [q, k, v, attn_mask], atol=1e-4, rtol=1e-4)
+
+
+def test_scaled_dot_product_attention_math_no_mask(
+    conf: Conf, call_checker: CallChecker
+):
+    """Test aten._scaled_dot_product_attention_math without attn_mask still works"""
+    call_checker.register(aten_functions.aten__scaled_dot_product_attention_math)
+
+    def fn(q, k, v):
+        out, _ = torch.ops.aten._scaled_dot_product_attention_math(q, k, v)
+        return out
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 6, 16
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    check_outputs(fn, conf, [q, k, v], atol=1e-4, rtol=1e-4)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dtype):
     """Test basic batch normalization inference with different dtypes"""
