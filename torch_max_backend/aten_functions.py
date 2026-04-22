@@ -12,6 +12,7 @@ import operator
 import os
 from typing import Literal
 
+import max.driver
 import max.graph.type as max_type
 import torch
 from max.dtype import DType
@@ -437,9 +438,38 @@ def aten__scaled_dot_product_flash_attention(
     # Choose mask variant based on is_causal flag
     mask_variant = MHAMaskVariant.CAUSAL_MASK if is_causal else MHAMaskVariant.NULL_MASK
 
-    # Call flash attention
+    # Flash attention kernels are currently only valid on GPU. Use a fake matmul-based
+    # implementation on CPU to keep correctness on CPU-backed execution.
+    query_device = query.device
+    use_fake_flash_attention = False
+    if isinstance(query_device, DeviceRef):
+        use_fake_flash_attention = query_device.is_cpu()
+    elif isinstance(query_device, max.driver.Device):
+        use_fake_flash_attention = query_device.label == "cpu"
+    if use_fake_flash_attention:
+        # Fake path: compute attention with basic matmuls.
+        q_heads = F.permute(q, [0, 2, 1, 3])  # [batch, heads, seq_len, head_dim]
+        k_heads = F.permute(k, [0, 2, 1, 3])  # [batch, heads, seq_len, head_dim]
+        v_heads = F.permute(v, [0, 2, 1, 3])  # [batch, heads, seq_len, head_dim]
+        if q_heads.dtype == DType.bfloat16:
+            q_heads = F.cast(q_heads, dtype=DType.float32)
+            k_heads = F.cast(k_heads, dtype=DType.float32)
+            v_heads = F.cast(v_heads, dtype=DType.float32)
 
-    attn_out = flash_attention_gpu(q, k, v, mask_variant=mask_variant, scale=scale)
+        scores = F.matmul(q_heads, F.transpose(k_heads, 2, 3))
+        scores = F.mul(scores, scale)
+        if is_causal:
+            raise NotImplementedError(
+                "Causal attention is not implemented in fake matmul fallback for "
+                "aten::_scaled_dot_product_flash_attention."
+            )
+        attention = aten_softmax(scores, dim=-1)
+        attn_out = F.permute(F.matmul(attention, v_heads), [0, 2, 1, 3])
+        if q.dtype == DType.bfloat16:
+            attn_out = F.cast(attn_out, dtype=DType.bfloat16)
+    else:
+        # Call flash attention on GPU.
+        attn_out = flash_attention_gpu(q, k, v, mask_variant=mask_variant, scale=scale)
 
     # Transpose back to PyTorch format [batch, num_heads, seq_len, head_dim]
     result = F.permute(attn_out, [0, 2, 1, 3])
@@ -452,17 +482,11 @@ def aten__scaled_dot_product_flash_attention(
     seq_len_k = key.shape[2]
     head_dim = query.shape[3]
 
-    batch_size_int = (
-        int(batch_size.value) if hasattr(batch_size, "value") else int(batch_size)
-    )
-    num_heads_int = (
-        int(num_heads.value) if hasattr(num_heads, "value") else int(num_heads)
-    )
-    seq_len_int = int(seq_len.value) if hasattr(seq_len, "value") else int(seq_len)
-    seq_len_k_int = (
-        int(seq_len_k.value) if hasattr(seq_len_k, "value") else int(seq_len_k)
-    )
-    head_dim_int = int(head_dim.value) if hasattr(head_dim, "value") else int(head_dim)
+    batch_size_int = int(batch_size if isinstance(batch_size, Dim) else batch_size)
+    num_heads_int = int(num_heads if isinstance(num_heads, Dim) else num_heads)
+    seq_len_int = int(seq_len if isinstance(seq_len, Dim) else seq_len)
+    seq_len_k_int = int(seq_len_k if isinstance(seq_len_k, Dim) else seq_len_k)
+    head_dim_int = int(head_dim if isinstance(head_dim, Dim) else head_dim)
 
     logsumexp = F.broadcast_to(
         F.constant(0, dtype=DType.float32, device=result.device),
@@ -493,11 +517,12 @@ def aten__scaled_dot_product_flash_attention(
     # it is returned as an empty tensor.
     if return_debug_mask:
         block_size = 128 if head_dim_int > 64 else 256
-        max_seqlen_k = math.ceil(seq_len_int / block_size)
-        if seq_len_k_int <= 128:
-            max_seqlen_k = 128
-        elif seq_len_k_int <= 256:
-            max_seqlen_k = 256
+        if seq_len_k_int <= block_size:
+            max_seqlen_k = block_size
+        elif seq_len_k_int <= 2 * block_size:
+            max_seqlen_k = 2 * block_size
+        else:
+            max_seqlen_k = math.ceil(seq_len_k_int / block_size)
         debug_attn_mask = F.broadcast_to(
             F.constant(0, dtype=result.dtype, device=result.device),
             [batch_size_int, num_heads_int, seq_len_int, max_seqlen_k],

@@ -1511,13 +1511,13 @@ def test_tensor_slice_2d(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_tensor_slice_negative_index(device: str):
+def test_tensor_slice_negative_index(conf: Conf):
     def fn(x):
         return x[-2:]  # Negative slice
 
     x = torch.randn(5, 3)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_tensor_slice_with_step(conf: Conf):
@@ -1529,13 +1529,13 @@ def test_tensor_slice_with_step(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_to_float(device: str):
+def test_to_float(conf: Conf):
     def fn(x):
         return x.float()
 
     x = torch.randint(0, 10, (5,))
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_expand_basic(conf: Conf):
@@ -1582,7 +1582,7 @@ def test_expand_same_size(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_expand_add_dimensions(device: str):
+def test_expand_add_dimensions(conf: Conf):
     """Test expand adding new leading dimensions"""
 
     def fn(x):
@@ -1590,7 +1590,7 @@ def test_expand_add_dimensions(device: str):
 
     x = torch.randn(4)  # 1D tensor
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_expand_mixed_operations(conf: Conf):
@@ -1617,7 +1617,7 @@ def test_expand_with_scalar_broadcast(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_expand_complex_pattern(device: str):
+def test_expand_complex_pattern(conf: Conf):
     """Test expand with complex dimension pattern"""
 
     def fn(x):
@@ -1625,7 +1625,7 @@ def test_expand_complex_pattern(device: str):
 
     x = torch.randn(1, 3, 1, 5)
 
-    check_functions_are_equivalent(fn, device, [x])
+    check_outputs(fn, conf, [x])
 
 
 def test_transpose_2d(conf: Conf):
@@ -1907,7 +1907,7 @@ def test_tensor_pow_fractional_exponent(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_tensor_pow_with_arithmetic(device: str):
+def test_tensor_pow_with_arithmetic(conf: Conf):
     """Test tensor.pow() combined with arithmetic operations"""
 
     def fn(x, y, z):
@@ -1917,7 +1917,7 @@ def test_tensor_pow_with_arithmetic(device: str):
     y = torch.randn(3, 4) * 2
     z = torch.randn(3, 4)
 
-    check_functions_are_equivalent(fn, device, [x, y, z])
+    check_outputs(fn, conf, [x, y, z])
 
 
 def test_tensor_pow_chained(conf: Conf):
@@ -1931,7 +1931,7 @@ def test_tensor_pow_chained(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
-def test_tensor_pow_broadcast(device: str):
+def test_tensor_pow_broadcast(conf: Conf):
     """Test tensor.pow() with broadcasting"""
 
     def fn(x, y):
@@ -1940,7 +1940,7 @@ def test_tensor_pow_broadcast(device: str):
     x = torch.randn(3, 4).abs() + 0.1
     y = torch.randn(1, 4) * 2
 
-    check_functions_are_equivalent(fn, device, [x, y])
+    check_outputs(fn, conf, [x, y])
 
 
 def test_tensor_pow_different_shapes(conf: Conf, tensor_shapes: tuple):

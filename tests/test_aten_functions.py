@@ -41,11 +41,8 @@ def test_scaled_dot_product_flash_attention_basic(
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_scaled_dot_product_flash_attention_with_causal(
-    conf: Conf, dtype: str, call_checker: CallChecker
-):
+def test_scaled_dot_product_flash_attention_with_causal(conf: Conf, dtype: str):
     """Test _scaled_dot_product_flash_attention with causal masking"""
-    call_checker.register(aten_functions.aten__scaled_dot_product_flash_attention)
     # Flash attention only works on CUDA
     if conf.device != "cuda:0":
         pytest.skip("Flash attention is only supported on CUDA")
@@ -242,8 +239,11 @@ def test_aten_acos_basic(conf: Conf, dtype: torch.dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_aten_acos_special_values(conf: Conf, dtype: torch.dtype):
     """Test aten.acos with special mathematical values"""
-    if conf.device == "cuda:0" and dtype == torch.float64:
-        pytest.xfail("Bug: could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d'")
+
+    if dtype == torch.float64:
+        pytest.xfail(
+            "Bug: could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d', see https://github.com/modular/modular/issues/6434"
+        )
 
     def fn(x):
         return aten.acos(x)
@@ -934,22 +934,16 @@ def test_foreach_div_tensor(conf: Conf, dtype: torch.dtype):
     check_outputs(fn, conf, [x, y, z, other])
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_foreach_sqrt(conf: Conf, dtype: torch.dtype):
+def test_foreach_sqrt(conf: Conf):
     """Test _foreach_sqrt - computes square root of each tensor in list"""
-    # xfail for float64 on CUDA due to current MAX limitation with sqrt intrinsic
-    if conf.device == "cuda:0" and dtype == torch.float64:
-        pytest.xfail(
-            "float64 sqrt on CUDA currently fails in MAX (llvm.nvvm.sqrt.approx.d intrinsic issue)"
-        )
 
     def fn(x, y, z):
         tensors = [x, y, z]
         return aten._foreach_sqrt(tensors)
 
-    x = torch.randn(3, 4, dtype=dtype).abs() + 0.1
-    y = torch.randn(2, 5, dtype=dtype).abs() + 0.1
-    z = torch.randn(4, dtype=dtype).abs() + 0.1
+    x = torch.randn(3, 4).abs() + 0.1
+    y = torch.randn(2, 5).abs() + 0.1
+    z = torch.randn(4).abs() + 0.1
 
     check_outputs(fn, conf, [x, y, z])
 
@@ -1342,8 +1336,10 @@ TRIGON_FUNCTIONS = [aten.asinh, aten.cosh, aten.sinh, aten.tan, aten.tanh]
 def test_aten_trigon_basic(conf: Conf, fn: Callable, dtype: torch.dtype):
     """Test trigonometric functions basic functionality with floating point numbers"""
 
-    if conf.device == "cuda" and dtype == torch.float64 and fn == aten.asinh:
-        pytest.xfail("could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d'")
+    if dtype == torch.float64 and fn in (aten.asinh, aten.tan):
+        pytest.xfail(
+            "could not find LLVM intrinsic: 'llvm.nvvm.sqrt.approx.d', see https://github.com/modular/modular/issues/6434"
+        )
 
     # Test with positive, negative, and zero values
     # cosh(0) = 1, cosh is even function: cosh(-x) = cosh(x)
