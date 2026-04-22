@@ -2470,41 +2470,25 @@ def aten_native_layer_norm(
     weight: MaxTensor | None,
     bias: MaxTensor | None,
     eps: float,
-) -> tuple[MaxTensor, NotImplementedError, NotImplementedError]:
-    # expects a tuple or list for some reason
-    # surely for the backward pass,
-    # for the moment we only output the first one.
+) -> tuple[MaxTensor, MaxTensor, MaxTensor]:
     # Layer norm normalizes over the last len(normalized_shape) dimensions
-    # Calculate mean and variance over these dimensions
     axis_to_reduce = list(
         range(len(input.shape) - len(normalized_shape), len(input.shape))
     )
 
-    # Calculate mean
     mean = aten_mean(input, dim=axis_to_reduce, keepdim=True)
-
-    # Calculate variance: Var(X) = E[(X - mean)^2]
     centered = input - mean
     variance = aten_mean(centered * centered, dim=axis_to_reduce, keepdim=True)
+    rstd = 1 / F.sqrt(variance + eps)
 
-    # Normalize: (x - mean) / sqrt(variance + eps)
-    normalized = centered / F.sqrt(variance + eps)
+    normalized = centered * rstd
 
-    # Apply scale and shift if provided
     if weight is not None:
         normalized = normalized * weight
     if bias is not None:
         normalized = normalized + bias
 
-    return (
-        normalized,
-        NotImplementedError(
-            "The implementation of aten.native_layer_norm doesn't support returning mean yet."
-        ),
-        NotImplementedError(
-            "The implementation of aten.native_layer_norm doesn't support returning rstd yet."
-        ),
-    )
+    return normalized, mean, rstd
 
 
 # native_layer_norm_backward(Tensor grad_out, Tensor input, SymInt[] normalized_shape, Tensor mean, Tensor rstd, Tensor? weight, Tensor? bias, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
