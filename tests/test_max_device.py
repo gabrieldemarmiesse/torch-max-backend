@@ -220,7 +220,9 @@ def test_gpu_first_cpu_last_convention():
 
 
 # Original tests from the existing file
-def function_equivalent_on_both_devices(func, device, *args, **kwargs):
+def function_equivalent_on_both_devices(
+    func, device, *args, rtol=1e-4, atol=1e-4, **kwargs
+):
     out1 = func(*args, device=device, **kwargs)
     out2 = func(*args, device="cpu", **kwargs)
     if isinstance(out1, list | tuple):
@@ -238,7 +240,7 @@ def function_equivalent_on_both_devices(func, device, *args, **kwargs):
         assert o1.device == o2.device, f"Issue with output {i}"
         assert o1.shape == o2.shape, f"Issue with output {i}"
         assert o1.dtype == o2.dtype, f"Issue with output {i}"
-        assert torch.allclose(o1, o2, rtol=1e-4, atol=1e-4), f"Issue with output {i}"
+        assert torch.allclose(o1, o2, rtol=rtol, atol=atol), f"Issue with output {i}"
 
 
 def test_max_device_basic(max_device):
@@ -307,6 +309,26 @@ def test_simple_module(max_device):
         return my_linear.weight
 
     function_equivalent_on_both_devices(run_module, max_device)
+
+
+def test_custom_module(max_device):
+    class MyModule(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(4, 8)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    module = MyModule()
+    input_tensor = torch.randn(2, 4)
+
+    def run_module(device):
+        in_device_module = module.to(device)
+        in_device_input_tensor = input_tensor.to(device)
+        return in_device_module(in_device_input_tensor)
+
+    function_equivalent_on_both_devices(run_module, max_device, rtol=1e-3, atol=1e-3)
 
 
 @pytest.mark.xfail(reason="Fixme")
