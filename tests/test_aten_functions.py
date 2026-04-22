@@ -2869,6 +2869,21 @@ def test_aten_var_correction_zero_no_dim(conf: Conf, call_checker: CallChecker):
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("shape", [(5,), (3, 4), (2, 3, 4)])
+def test_aten_silu(
+    conf: Conf, dtype: torch.dtype, shape: tuple, call_checker: CallChecker
+):
+    """Test aten.silu (x * sigmoid(x)) across dtypes and shapes"""
+    call_checker.register(aten_functions.aten_silu)
+
+    def fn(x):
+        return aten.silu(x)
+
+    x = torch.randn(shape, dtype=dtype)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
 @pytest.mark.parametrize("value", [-1.5, 42])
 def test_fill_scalar_basic(

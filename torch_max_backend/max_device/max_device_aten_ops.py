@@ -488,6 +488,7 @@ register_aten_op("aten::select_scatter")(
 )
 register_aten_op("aten::sigmoid")(wrap_for_max_device(aten_functions.aten_sigmoid))
 register_aten_op("aten::sign")(wrap_for_max_device(aten_functions.aten_sign))
+register_aten_op("aten::silu")(wrap_for_max_device(aten_functions.aten_silu))
 register_aten_op("aten::sin")(wrap_for_max_device(aten_functions.aten_sin))
 register_aten_op("aten::sinh")(wrap_for_max_device(aten_functions.aten_sinh))
 
