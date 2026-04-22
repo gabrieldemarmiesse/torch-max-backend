@@ -2744,6 +2744,71 @@ def test_aten_min_different_dtypes(
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_aten_var_no_dim(conf: Conf, dtype: torch.dtype, call_checker: CallChecker):
+    """Test aten.var over all dimensions (default correction=1)"""
+    call_checker.register(aten_functions.aten_var)
+
+    def fn(x):
+        return torch.var(x)
+
+    x = torch.randn(3, 4, 5, dtype=dtype)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dim", [0, 1, 2, -1])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_aten_var_with_dim(
+    conf: Conf, dim: int, keepdim: bool, call_checker: CallChecker
+):
+    """Test aten.var with a single dimension"""
+    call_checker.register(aten_functions.aten_var)
+
+    def fn(x):
+        return torch.var(x, dim=dim, keepdim=keepdim)
+
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("correction", [0, 1, 2])
+def test_aten_var_correction(conf: Conf, correction: int, call_checker: CallChecker):
+    """Test aten.var with different correction values (0 = population, 1 = Bessel)"""
+    call_checker.register(aten_functions.aten_var)
+
+    def fn(x):
+        return torch.var(x, dim=1, correction=correction, keepdim=False)
+
+    x = torch.randn(3, 5, 4)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dim", [(0, 1), (1, 2), (0, 2)])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_aten_var_multi_dim(
+    conf: Conf, dim: tuple, keepdim: bool, call_checker: CallChecker
+):
+    """Test aten.var reducing over multiple dimensions"""
+    call_checker.register(aten_functions.aten_var)
+
+    def fn(x):
+        return torch.var(x, dim=list(dim), keepdim=keepdim)
+
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
+
+
+def test_aten_var_correction_zero_no_dim(conf: Conf, call_checker: CallChecker):
+    """Test aten.var over all dims with correction=0 (population variance)"""
+    call_checker.register(aten_functions.aten_var)
+
+    def fn(x):
+        return torch.var(x, correction=0)
+
+    x = torch.randn(3, 4)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("shape", [(2, 3), (1, 4, 4)])
 @pytest.mark.parametrize("value", [-1.5, 42])
 def test_fill_scalar_basic(
