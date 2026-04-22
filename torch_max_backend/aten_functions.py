@@ -12,7 +12,7 @@ import operator
 import os
 from typing import Literal
 
-import max.driver
+import max.driver as max_driver
 import max.graph.type as max_type
 import torch
 from max.dtype import DType
@@ -444,7 +444,7 @@ def aten__scaled_dot_product_flash_attention(
     use_fake_flash_attention = False
     if isinstance(query_device, DeviceRef):
         use_fake_flash_attention = query_device.is_cpu()
-    elif isinstance(query_device, max.driver.Device):
+    elif isinstance(query_device, max_driver.Device):
         use_fake_flash_attention = query_device.label == "cpu"
     if use_fake_flash_attention:
         # Fake path: compute attention with basic matmuls.
