@@ -343,6 +343,7 @@ register_aten_op("aten::gelu_backward")(
     wrap_for_max_device(aten_functions.aten_gelu_backward)
 )
 register_aten_op("aten::gt")(wrap_for_max_device(aten_functions.aten_gt))
+register_aten_op("aten::gt.Scalar")(wrap_for_max_device(aten_functions.aten_gt))
 
 register_aten_op("aten::index.Tensor")(wrap_for_max_device(aten_functions.aten_index))
 register_aten_op("aten::isin.Tensor_Tensor")(
