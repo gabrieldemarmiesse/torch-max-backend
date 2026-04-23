@@ -1527,6 +1527,16 @@ def test_tensor_slice_with_step(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+def test_torch_matmul(conf: Conf):
+    def fn(x, w):
+        return torch.matmul(x, w)
+
+    x = torch.randn(1, 3, 8)
+    w = torch.randn(8, 16)
+
+    check_outputs(fn, conf, [x, w])
+
+
 def test_to_float(conf: Conf):
     def fn(x):
         return x.float()
