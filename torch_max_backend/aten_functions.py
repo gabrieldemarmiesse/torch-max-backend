@@ -2655,6 +2655,7 @@ def aten_scalar_tensor(
 ) -> MaxTensor:
     if dtype is None:
         dtype = torch.float32
+    print(f"[DEBUG scalar_tensor] value={value}, dtype={dtype}, device={device}")
     if device is None:
         device = torch.get_default_device()
 
@@ -2663,6 +2664,39 @@ def aten_scalar_tensor(
         dtype=torch_dtype_to_max(dtype),
         device=torch_device_to_max_device(device),
     )
+
+
+# scaled_dot_product_attention(Tensor query, Tensor key, Tensor value, Tensor? attn_mask=None, float dropout_p=0., bool is_causal=False, *, float? scale=None, bool enable_gqa=False) -> Tensor
+@map_to(aten.scaled_dot_product_attention)
+def aten_scaled_dot_product_attention(
+    query: MaxTensor,
+    key: MaxTensor,
+    value: MaxTensor,
+    attn_mask: MaxTensor | None = None,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    scale: float | None = None,
+    enable_gqa: bool = False,
+) -> MaxTensor:
+    if attn_mask is not None and attn_mask.dtype == DType.bool:
+        # Convert bool mask to additive float mask entirely in Python/MAX so
+        # no C++ composite kernel reads query.device() at the C++ level (which
+        # is always privateuseone:0 regardless of the logical MAX device).
+        neg_inf = F.constant(float("-inf"), dtype=query.dtype, device=query.device)
+        zero = F.constant(0.0, dtype=query.dtype, device=query.device)
+        attn_mask = F.where(attn_mask, zero, neg_inf)
+
+    output, _ = aten__scaled_dot_product_attention_math(
+        query,
+        key,
+        value,
+        attn_mask,
+        dropout_p,
+        is_causal,
+        scale=scale,
+        enable_gqa=enable_gqa,
+    )
+    return output
 
 
 # scatter.src(Tensor self, int dim, Tensor index, Tensor src) -> Tensor

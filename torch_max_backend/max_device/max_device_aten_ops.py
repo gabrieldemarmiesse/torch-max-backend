@@ -204,6 +204,9 @@ register_aten_op("aten::_scaled_dot_product_flash_attention")(
 register_aten_op("aten::_scaled_dot_product_attention_math")(
     wrap_for_max_device(aten_functions.aten__scaled_dot_product_attention_math)
 )
+register_aten_op("aten::scaled_dot_product_attention")(
+    wrap_for_max_device(aten_functions.aten_scaled_dot_product_attention)
+)
 register_aten_op("aten::_softmax")(wrap_for_max_device(aten_functions.aten__softmax))
 
 
