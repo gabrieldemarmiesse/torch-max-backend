@@ -44,6 +44,20 @@ def convert_all_torch_max_tensors_to_lazy(x: Any) -> Any:
                 "TorchMaxTensor does not have _max_data attribute, this is a bug"
             )
         return x._max_data
+    if isinstance(x, torch.Tensor):
+        if x.device.type == "max_device":
+            raise RuntimeError(
+                "Found a raw torch.Tensor on max_device, "
+                "expected it to be wrapped in TorchMaxTensor. This is a bug in the torch-max-backend."
+            )
+        else:
+            raise RuntimeError(
+                f"Cannot perform operations that mix the devices max_device and {x.device.type},"
+                f" found a raw torch.Tensor on {x.device.type} when calling the max backend. "
+                f"It has the shape {x.shape} and dtype {x.dtype}. "
+                f"Please convert the tensor to max_device using .to('max_device') "
+                f"before passing it to the max backend."
+            )
     elif isinstance(x, list | tuple):
         return type(x)(convert_all_torch_max_tensors_to_lazy(item) for item in x)
     elif isinstance(x, dict):
