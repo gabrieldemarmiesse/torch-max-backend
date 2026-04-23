@@ -204,6 +204,9 @@ register_aten_op("aten::_scaled_dot_product_flash_attention")(
 register_aten_op("aten::_scaled_dot_product_attention_math")(
     wrap_for_max_device(aten_functions.aten__scaled_dot_product_attention_math)
 )
+register_aten_op("aten::scaled_dot_product_attention")(
+    wrap_for_max_device(aten_functions.aten_scaled_dot_product_attention)
+)
 register_aten_op("aten::_softmax")(wrap_for_max_device(aten_functions.aten__softmax))
 
 
@@ -214,9 +217,10 @@ register_aten_op("aten::add.Tensor")(wrap_for_max_device(aten_functions.aten_add
 
 @register_aten_op("aten::add_.Tensor")
 def max_device_add_(
-    self: TorchMaxTensor, other: TorchMaxTensor, alpha: float = 1.0
+    self: TorchMaxTensor, other: TorchMaxTensor | int | float, alpha: float = 1.0
 ) -> TorchMaxTensor:
-    self._max_data = aten_functions.aten_add(self._max_data, other._max_data, alpha)
+    rhs = other._max_data if isinstance(other, TorchMaxTensor) else other
+    self._max_data = aten_functions.aten_add(self._max_data, rhs, alpha)
     return self
 
 
@@ -317,6 +321,10 @@ def empty_strided(
     )
 
 
+register_aten_op("aten::empty_like")(
+    wrap_for_max_device(aten_functions.aten_empty_like)
+)
+
 register_aten_op("aten::eq")(wrap_for_max_device(aten_functions.aten_eq))
 register_aten_op("aten::eq.Scalar")(wrap_for_max_device(aten_functions.aten_eq))
 
@@ -327,6 +335,14 @@ register_aten_op("aten::expand")(wrap_for_max_device(aten_functions.aten_expand)
 register_aten_op("aten::fill.Scalar")(
     wrap_for_max_device(aten_functions.aten_fill_scalar)
 )
+
+
+@register_aten_op("aten::fill_.Scalar")
+def max_device_fill__scalar(self: TorchMaxTensor, value: float) -> TorchMaxTensor:
+    self._max_data = aten_functions.aten_fill__scalar(self._max_data, value)
+    return self
+
+
 register_aten_op("aten::floor")(wrap_for_max_device(aten_functions.aten_floor))
 register_aten_op("aten::floordiv")(wrap_for_max_device(aten_functions.aten_floordiv))
 register_aten_op("aten::full")(wrap_for_max_device(aten_functions.aten_full))
@@ -340,6 +356,7 @@ register_aten_op("aten::gelu_backward")(
     wrap_for_max_device(aten_functions.aten_gelu_backward)
 )
 register_aten_op("aten::gt")(wrap_for_max_device(aten_functions.aten_gt))
+register_aten_op("aten::gt.Scalar")(wrap_for_max_device(aten_functions.aten_gt))
 
 register_aten_op("aten::index.Tensor")(wrap_for_max_device(aten_functions.aten_index))
 register_aten_op("aten::isin.Tensor_Tensor")(
@@ -406,6 +423,23 @@ register_aten_op("aten::max_pool2d_with_indices")(
 
 register_aten_op("aten::maximum")(wrap_for_max_device(aten_functions.aten_maximum))
 register_aten_op("aten::mean")(wrap_for_max_device(aten_functions.aten_mean))
+
+
+@register_aten_op("aten::mean.out")
+def max_device_mean_out(
+    input: TorchMaxTensor,
+    dim,
+    keepdim: bool = False,
+    *,
+    dtype=None,
+    out: TorchMaxTensor,
+) -> TorchMaxTensor:
+    out._max_data = aten_functions.aten_mean_out(
+        input._max_data, dim, keepdim, dtype=dtype, out=out._max_data
+    )
+    return out
+
+
 register_aten_op("aten::min")(wrap_for_max_device(aten_functions.aten_min))
 
 
@@ -452,11 +486,21 @@ register_aten_op("aten::native_layer_norm")(
     wrap_for_max_device(aten_functions.aten_native_layer_norm)
 )
 
+
+@register_aten_op("aten::normal_")
+def max_device_normal_(
+    self: TorchMaxTensor, mean: float = 0.0, std: float = 1.0, generator=None
+) -> TorchMaxTensor:
+    self._max_data = aten_functions.aten_normal_(self._max_data, mean, std, generator)
+    return self
+
+
 register_aten_op("aten::ne")(wrap_for_max_device(aten_functions.aten_ne))
 register_aten_op("aten::neg")(wrap_for_max_device(aten_functions.aten_neg))
 
 register_aten_op("aten::nonzero")(wrap_for_max_device(aten_functions.aten_nonzero))
 register_aten_op("aten::ones")(wrap_for_max_device(aten_functions.aten_ones))
+register_aten_op("aten::ones_like")(wrap_for_max_device(aten_functions.aten_ones_like))
 
 register_aten_op("aten::permute")(wrap_for_max_device(aten_functions.aten_permute))
 
