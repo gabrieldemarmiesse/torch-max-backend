@@ -544,6 +544,9 @@ register_aten_op("aten::var.correction")(wrap_for_max_device(aten_functions.aten
 
 
 register_aten_op("aten::view")(wrap_for_max_device(aten_functions.aten_view))
+register_aten_op("aten::_unsafe_view")(
+    wrap_for_max_device(aten_functions.aten__unsafe_view)
+)
 
 register_aten_op("aten::where.self")(wrap_for_max_device(aten_functions.aten_where))
 

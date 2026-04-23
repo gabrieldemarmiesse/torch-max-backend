@@ -3136,3 +3136,26 @@ def test_aten_erf_basic(conf: Conf, dtype: torch.dtype):
 
     x = torch.randn(3, 4, dtype=dtype)
     check_outputs(fn, conf, [x])
+
+
+def test_aten__unsafe_view(conf: Conf, call_checker: CallChecker):
+    call_checker.register(aten_functions.aten__unsafe_view)
+
+    def fn(x):
+        return aten._unsafe_view(x, [2, 6])
+
+    x = torch.randn(3, 4)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_aten__unsafe_view_dtypes(
+    conf: Conf, dtype: torch.dtype, call_checker: CallChecker
+):
+    call_checker.register(aten_functions.aten__unsafe_view)
+
+    def fn(x):
+        return aten._unsafe_view(x, [4, -1])
+
+    x = torch.randn(2, 3, 4, dtype=dtype)
+    check_outputs(fn, conf, [x])
