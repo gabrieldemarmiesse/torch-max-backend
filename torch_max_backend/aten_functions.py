@@ -2999,6 +2999,14 @@ def aten_view(tensor: MaxTensor, *shape) -> MaxTensor:
     return F.reshape(tensor, target_shape)
 
 
+# _unsafe_view(Tensor self, SymInt[] size) -> Tensor
+# Same as view but skips the safety check on strides. Used internally by PyTorch
+# in decompositions (e.g. matmul 3D×2D) where the view is known to be valid.
+@map_to(aten._unsafe_view)
+def aten__unsafe_view(tensor: MaxTensor, *shape) -> MaxTensor:
+    return aten_view(tensor, *shape)
+
+
 # where.self(Tensor condition, Tensor self, Tensor other) -> Tensor
 @map_to(aten.where)
 def aten_where(input: MaxTensor, condition: MaxTensor, other: MaxTensor) -> MaxTensor:
