@@ -117,7 +117,14 @@ def wrap_for_max_device(func: Callable) -> Callable:
         print("inside wrapper for", func.__name__)
         args, kwargs = convert_all_torch_max_tensors_to_lazy((args, kwargs))
         result = func(*args, **kwargs)
-        return convert_all_lazy_to_torch_max_tensors(result)
+        converted = convert_all_lazy_to_torch_max_tensors(result)
+        if isinstance(converted, torch.Tensor) and not isinstance(
+            converted, TorchMaxTensor
+        ):
+            print(
+                f"  [WARN] {func.__name__} returned raw Tensor type={type(converted).__name__} device={converted.device}"
+            )
+        return converted
 
     return wrapper
 
