@@ -3123,6 +3123,18 @@ def test_fill_scalar_zero_dim(conf: Conf):
     check_outputs(fn, conf, [x])
 
 
+def test_fill__scalar_inplace(conf: Conf, call_checker: CallChecker):
+    """Test fill_.Scalar fills tensor in-place"""
+    call_checker.register(aten_functions.aten_fill__scalar)
+
+    def fn(x):
+        aten.fill_(x, 3.5)
+        return x
+
+    x = torch.zeros(3, 4)
+    check_outputs(fn, conf, [x])
+
+
 @pytest.mark.xfail(reason="Fixme, currently off to support eager mode")
 def test_max_pool2d_error_message_not_supported_output(conf: Conf):
     def fn(x):

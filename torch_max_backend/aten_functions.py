@@ -1792,6 +1792,12 @@ def aten_fill_scalar(input: MaxTensor, value: Scalar) -> MaxTensor:
     return F.broadcast_to(scalar, target_shape)
 
 
+# fill_.Scalar(Tensor(a!) self, Scalar value) -> Tensor(a!)
+@map_to(aten.fill_)
+def aten_fill__scalar(input: MaxTensor, value: Scalar) -> MaxTensor:
+    return aten_fill_scalar(input, value)
+
+
 # flip(Tensor self, int[] dims) -> Tensor
 
 

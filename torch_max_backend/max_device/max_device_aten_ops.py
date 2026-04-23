@@ -330,6 +330,14 @@ register_aten_op("aten::expand")(wrap_for_max_device(aten_functions.aten_expand)
 register_aten_op("aten::fill.Scalar")(
     wrap_for_max_device(aten_functions.aten_fill_scalar)
 )
+
+
+@register_aten_op("aten::fill_.Scalar")
+def max_device_fill__scalar(self: TorchMaxTensor, value: float) -> TorchMaxTensor:
+    self._max_data = aten_functions.aten_fill__scalar(self._max_data, value)
+    return self
+
+
 register_aten_op("aten::floor")(wrap_for_max_device(aten_functions.aten_floor))
 register_aten_op("aten::floordiv")(wrap_for_max_device(aten_functions.aten_floordiv))
 register_aten_op("aten::full")(wrap_for_max_device(aten_functions.aten_full))
