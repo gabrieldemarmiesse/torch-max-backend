@@ -422,6 +422,23 @@ register_aten_op("aten::max_pool2d_with_indices")(
 
 register_aten_op("aten::maximum")(wrap_for_max_device(aten_functions.aten_maximum))
 register_aten_op("aten::mean")(wrap_for_max_device(aten_functions.aten_mean))
+
+
+@register_aten_op("aten::mean.out")
+def max_device_mean_out(
+    input: TorchMaxTensor,
+    dim,
+    keepdim: bool = False,
+    *,
+    dtype=None,
+    out: TorchMaxTensor,
+) -> TorchMaxTensor:
+    out._max_data = aten_functions.aten_mean_out(
+        input._max_data, dim, keepdim, dtype=dtype, out=out._max_data
+    )
+    return out
+
+
 register_aten_op("aten::min")(wrap_for_max_device(aten_functions.aten_min))
 
 

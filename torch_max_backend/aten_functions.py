@@ -2354,6 +2354,19 @@ def aten_mean(
     return result
 
 
+# mean.out(Tensor self, int[1]? dim, bool keepdim=False, *, ScalarType? dtype=None, Tensor(a!) out) -> Tensor(a!)
+@map_to(aten.mean.out)
+def aten_mean_out(
+    input: MaxTensor,
+    dim,
+    keepdim: bool = False,
+    *,
+    dtype: torch.dtype | None = None,
+    out: MaxTensor,
+) -> MaxTensor:
+    return aten_mean(input, dim=dim, keepdim=keepdim, dtype=dtype)
+
+
 # min.dim(Tensor self, int dim, bool keepdim=False) -> (Tensor values, Tensor indices)
 @map_to(aten.min)
 def aten_min(

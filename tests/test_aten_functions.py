@@ -442,6 +442,18 @@ def test_aten_normal_multidim(conf: Conf, call_checker: CallChecker):
     assert abs(x_cpu.std().item() - 1.0) < 0.2
 
 
+@pytest.mark.parametrize("dim,keepdim", [(0, False), (1, True), ([0, 1], False)])
+def test_aten_mean_out(conf: Conf, call_checker: CallChecker, dim, keepdim: bool):
+    call_checker.register(aten_functions.aten_mean_out)
+
+    def fn(x):
+        out = x.new_empty(x.mean(dim=dim, keepdim=keepdim).shape)
+        return aten.mean(x, dim=dim, keepdim=keepdim, out=out)
+
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 def test_aten_empty_like(conf: Conf, call_checker: CallChecker, dtype: torch.dtype):
     if conf.device == "cpu" and dtype == torch.float16:
