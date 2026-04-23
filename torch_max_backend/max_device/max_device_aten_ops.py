@@ -217,9 +217,10 @@ register_aten_op("aten::add.Tensor")(wrap_for_max_device(aten_functions.aten_add
 
 @register_aten_op("aten::add_.Tensor")
 def max_device_add_(
-    self: TorchMaxTensor, other: TorchMaxTensor, alpha: float = 1.0
+    self: TorchMaxTensor, other: TorchMaxTensor | int | float, alpha: float = 1.0
 ) -> TorchMaxTensor:
-    self._max_data = aten_functions.aten_add(self._max_data, other._max_data, alpha)
+    rhs = other._max_data if isinstance(other, TorchMaxTensor) else other
+    self._max_data = aten_functions.aten_add(self._max_data, rhs, alpha)
     return self
 
 
