@@ -2717,7 +2717,6 @@ def aten_scalar_tensor(
 ) -> MaxTensor:
     if dtype is None:
         dtype = torch.float32
-    print(f"[DEBUG scalar_tensor] value={value}, dtype={dtype}, device={device}")
     if device is None:
         device = torch.get_default_device()
 
@@ -2741,9 +2740,6 @@ def aten_scaled_dot_product_attention(
     enable_gqa: bool = False,
 ) -> MaxTensor:
     if attn_mask is not None and attn_mask.dtype == DType.bool:
-        # Convert bool mask to additive float mask entirely in Python/MAX so
-        # no C++ composite kernel reads query.device() at the C++ level (which
-        # is always privateuseone:0 regardless of the logical MAX device).
         neg_inf = F.constant(float("-inf"), dtype=query.dtype, device=query.device)
         zero = F.constant(0.0, dtype=query.dtype, device=query.device)
         attn_mask = F.where(attn_mask, zero, neg_inf)
