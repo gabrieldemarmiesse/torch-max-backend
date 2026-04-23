@@ -456,6 +456,15 @@ register_aten_op("aten::native_layer_norm")(
     wrap_for_max_device(aten_functions.aten_native_layer_norm)
 )
 
+
+@register_aten_op("aten::normal_")
+def max_device_normal_(
+    self: TorchMaxTensor, mean: float = 0.0, std: float = 1.0, generator=None
+) -> TorchMaxTensor:
+    self._max_data = aten_functions.aten_normal_(self._max_data, mean, std, generator)
+    return self
+
+
 register_aten_op("aten::ne")(wrap_for_max_device(aten_functions.aten_ne))
 register_aten_op("aten::neg")(wrap_for_max_device(aten_functions.aten_neg))
 

@@ -17,6 +17,7 @@ import max.graph.type as max_type
 import torch
 from max.dtype import DType
 from max.experimental import functional as F
+from max.experimental.random import gaussian as max_gaussian
 from max.experimental.tensor import Tensor as MaxEagerTensor
 from max.experimental.torch.torch import max_device_ref, torch_dtype_to_max
 from max.graph import Dim, StaticDim
@@ -2524,6 +2525,20 @@ def aten_native_layer_norm(
 
 
 # native_layer_norm_backward(Tensor grad_out, Tensor input, SymInt[] normalized_shape, Tensor mean, Tensor rstd, Tensor? weight, Tensor? bias, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
+
+
+# normal_(Tensor(a!) self, float mean=0, float std=1, *, Generator? generator=None) -> Tensor(a!)
+@map_to(aten.normal_)
+def aten_normal_(
+    self: MaxTensor, mean: float = 0.0, std: float = 1.0, generator=None
+) -> MaxTensor:
+    if generator is not None:
+        raise NotImplementedError(
+            "aten::normal_ does not support the generator argument"
+        )
+    return max_gaussian(
+        self.shape, mean=mean, std=std, dtype=self.dtype, device=self.device
+    )
 
 
 # ne.Scalar(Tensor self, Scalar other) -> Tensor

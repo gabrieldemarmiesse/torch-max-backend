@@ -394,6 +394,54 @@ def test_aten_native_layer_norm_different_eps(
     check_outputs(fn, conf, [x, weight, bias])
 
 
+def test_aten_normal_default(conf: Conf, call_checker: CallChecker):
+    """Test aten.normal_ with default mean=0 and std=1"""
+    call_checker.register(aten_functions.aten_normal_)
+
+    x = torch.zeros(1000, dtype=torch.float32).to(conf.device)
+    aten.normal_(x)
+
+    assert x.shape == (1000,)
+    assert x.dtype == torch.float32
+    assert x.device == torch.device(conf.device)
+    x_cpu = x.to("cpu")
+    assert abs(x_cpu.mean().item()) < 0.2
+    assert abs(x_cpu.std().item() - 1.0) < 0.2
+
+
+@pytest.mark.parametrize("mean,std", [(2.0, 3.0), (-1.0, 0.5)])
+def test_aten_normal_custom_params(
+    conf: Conf, call_checker: CallChecker, mean: float, std: float
+):
+    """Test aten.normal_ with custom mean and std"""
+    call_checker.register(aten_functions.aten_normal_)
+
+    x = torch.zeros(1000, dtype=torch.float32).to(conf.device)
+    aten.normal_(x, mean, std)
+
+    assert x.shape == (1000,)
+    assert x.dtype == torch.float32
+    assert x.device == torch.device(conf.device)
+    x_cpu = x.to("cpu")
+    assert abs(x_cpu.mean().item() - mean) < 0.3 * std + 0.3
+    assert abs(x_cpu.std().item() - std) < 0.3 * std + 0.3
+
+
+def test_aten_normal_multidim(conf: Conf, call_checker: CallChecker):
+    """Test aten.normal_ with a multi-dimensional tensor"""
+    call_checker.register(aten_functions.aten_normal_)
+
+    x = torch.zeros(10, 20, 5, dtype=torch.float32).to(conf.device)
+    aten.normal_(x)
+
+    assert x.shape == (10, 20, 5)
+    assert x.dtype == torch.float32
+    assert x.device == torch.device(conf.device)
+    x_cpu = x.to("cpu")
+    assert abs(x_cpu.mean().item()) < 0.2
+    assert abs(x_cpu.std().item() - 1.0) < 0.2
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_acos_basic(conf: Conf, dtype: torch.dtype):
     """Test aten.acos basic functionality with values in valid domain [-1, 1]"""
