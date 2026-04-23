@@ -153,6 +153,54 @@ def test_scaled_dot_product_attention_math_no_mask(
     check_outputs(fn, conf, [q, k, v], atol=1e-4, rtol=1e-4)
 
 
+def test_scaled_dot_product_attention_no_mask(conf: Conf, call_checker: CallChecker):
+    call_checker.register(aten_functions.aten_scaled_dot_product_attention)
+
+    def fn(q, k, v):
+        return torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0)
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 6, 16
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    check_outputs(fn, conf, [q, k, v], atol=1e-4, rtol=1e-4)
+
+
+def test_scaled_dot_product_attention_float_mask(conf: Conf, call_checker: CallChecker):
+    call_checker.register(aten_functions.aten_scaled_dot_product_attention)
+
+    def fn(q, k, v, attn_mask):
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, dropout_p=0.0
+        )
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 6, 16
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    attn_mask = torch.tril(torch.ones(seq_len, seq_len))
+    attn_mask = attn_mask.masked_fill(attn_mask == 0, float("-inf")).masked_fill(
+        attn_mask == 1, 0.0
+    )
+    check_outputs(fn, conf, [q, k, v, attn_mask], atol=1e-4, rtol=1e-4)
+
+
+def test_scaled_dot_product_attention_bool_mask(conf: Conf, call_checker: CallChecker):
+    call_checker.register(aten_functions.aten_scaled_dot_product_attention)
+
+    def fn(q, k, v, attn_mask):
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, dropout_p=0.0
+        )
+
+    batch_size, num_heads, seq_len, head_dim = 2, 4, 6, 16
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    attn_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
+    check_outputs(fn, conf, [q, k, v, attn_mask], atol=1e-4, rtol=1e-4)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_native_batch_norm_legit_no_training_basic(device: str, dtype: torch.dtype):
     """Test basic batch normalization inference with different dtypes"""
@@ -344,6 +392,118 @@ def test_aten_native_layer_norm_different_eps(
     weight = torch.randn(10)
     bias = torch.randn(10)
     check_outputs(fn, conf, [x, weight, bias])
+
+
+def test_aten_normal_default(conf: Conf, call_checker: CallChecker):
+    """Test aten.normal_ with default mean=0 and std=1"""
+    call_checker.register(aten_functions.aten_normal_)
+
+    x = torch.zeros(1000, dtype=torch.float32).to(conf.device)
+    aten.normal_(x)
+
+    assert x.shape == (1000,)
+    assert x.dtype == torch.float32
+    assert x.device == torch.device(conf.device)
+    x_cpu = x.to("cpu")
+    assert abs(x_cpu.mean().item()) < 0.2
+    assert abs(x_cpu.std().item() - 1.0) < 0.2
+
+
+@pytest.mark.parametrize("mean,std", [(2.0, 3.0), (-1.0, 0.5)])
+def test_aten_normal_custom_params(
+    conf: Conf, call_checker: CallChecker, mean: float, std: float
+):
+    """Test aten.normal_ with custom mean and std"""
+    call_checker.register(aten_functions.aten_normal_)
+
+    x = torch.zeros(1000, dtype=torch.float32).to(conf.device)
+    aten.normal_(x, mean, std)
+
+    assert x.shape == (1000,)
+    assert x.dtype == torch.float32
+    assert x.device == torch.device(conf.device)
+    x_cpu = x.to("cpu")
+    assert abs(x_cpu.mean().item() - mean) < 0.3 * std + 0.3
+    assert abs(x_cpu.std().item() - std) < 0.3 * std + 0.3
+
+
+def test_aten_normal_multidim(conf: Conf, call_checker: CallChecker):
+    """Test aten.normal_ with a multi-dimensional tensor"""
+    call_checker.register(aten_functions.aten_normal_)
+
+    x = torch.zeros(10, 20, 5, dtype=torch.float32).to(conf.device)
+    aten.normal_(x)
+
+    assert x.shape == (10, 20, 5)
+    assert x.dtype == torch.float32
+    assert x.device == torch.device(conf.device)
+    x_cpu = x.to("cpu")
+    assert abs(x_cpu.mean().item()) < 0.2
+    assert abs(x_cpu.std().item() - 1.0) < 0.2
+
+
+@pytest.mark.parametrize("dim,keepdim", [(0, False), (1, True), ([0, 1], False)])
+def test_aten_mean_out(conf: Conf, call_checker: CallChecker, dim, keepdim: bool):
+    call_checker.register(aten_functions.aten_mean_out)
+
+    def fn(x):
+        out = x.new_empty(x.mean(dim=dim, keepdim=keepdim).shape)
+        return aten.mean(x, dim=dim, keepdim=keepdim, out=out)
+
+    x = torch.randn(3, 4, 5)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_aten_empty_like(conf: Conf, call_checker: CallChecker, dtype: torch.dtype):
+    if conf.device == "cpu" and dtype == torch.float16:
+        pytest.skip("float16 not supported on CPU in MAX")
+    call_checker.register(aten_functions.aten_empty_like)
+
+    x = torch.randn(3, 4, dtype=dtype).to(conf.device)
+    result = aten.empty_like(x)
+    call_checker.check_was_called()
+    assert result.shape == x.shape
+    assert result.dtype == x.dtype
+    assert result.device == torch.device(conf.device)
+
+
+@pytest.mark.parametrize("target_dtype", [torch.float32, torch.bfloat16])
+def test_aten_empty_like_different_dtype(
+    conf: Conf, call_checker: CallChecker, target_dtype: torch.dtype
+):
+    call_checker.register(aten_functions.aten_empty_like)
+
+    x = torch.randn(2, 5, dtype=torch.float32).to(conf.device)
+    result = aten.empty_like(x, dtype=target_dtype)
+    call_checker.check_was_called()
+    assert result.shape == x.shape
+    assert result.dtype == target_dtype
+    assert result.device == torch.device(conf.device)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_aten_ones_like(conf: Conf, call_checker: CallChecker, dtype: torch.dtype):
+    if conf.device == "cpu" and dtype == torch.float16:
+        pytest.skip("float16 not supported on CPU in MAX")
+    call_checker.register(aten_functions.aten_ones_like)
+
+    def fn(x):
+        return aten.ones_like(x)
+
+    x = torch.randn(3, 4, dtype=dtype)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("shape", [(1,), (4, 5), (2, 3, 7)])
+def test_aten_ones_like_shape(conf: Conf, call_checker: CallChecker, shape: tuple):
+    call_checker.register(aten_functions.aten_ones_like)
+
+    def fn(x):
+        return aten.ones_like(x)
+
+    x = torch.randn(*shape)
+    check_outputs(fn, conf, [x])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -3024,6 +3184,18 @@ def test_fill_scalar_zero_dim(conf: Conf):
     # Single element tensor
     x = torch.tensor(1.0)
 
+    check_outputs(fn, conf, [x])
+
+
+def test_fill__scalar_inplace(conf: Conf, call_checker: CallChecker):
+    """Test fill_.Scalar fills tensor in-place"""
+    call_checker.register(aten_functions.aten_fill__scalar)
+
+    def fn(x):
+        aten.fill_(x, 3.5)
+        return x
+
+    x = torch.zeros(3, 4)
     check_outputs(fn, conf, [x])
 
 

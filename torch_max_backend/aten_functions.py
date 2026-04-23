@@ -17,6 +17,7 @@ import max.graph.type as max_type
 import torch
 from max.dtype import DType
 from max.experimental import functional as F
+from max.experimental.random import gaussian as max_gaussian
 from max.experimental.tensor import Tensor as MaxEagerTensor
 from max.experimental.torch.torch import max_device_ref, torch_dtype_to_max
 from max.graph import Dim, StaticDim
@@ -1703,6 +1704,22 @@ def aten_empty_strided(
     )
 
 
+# empty_like(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
+@map_to(aten.empty_like)
+def aten_empty_like(
+    self: MaxTensor,
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    memory_format: torch.memory_format | None = None,
+) -> MaxTensor:
+    return aten_full_like(
+        self, 0, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )
+
+
 # empty_permuted(SymInt[] size, int[] physical_layout, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 @map_to(aten.empty_permuted)
 def aten_empty_permuted(
@@ -1791,6 +1808,12 @@ def aten_fill_scalar(input: MaxTensor, value: Scalar) -> MaxTensor:
     return F.broadcast_to(scalar, target_shape)
 
 
+# fill_.Scalar(Tensor(a!) self, Scalar value) -> Tensor(a!)
+@map_to(aten.fill_)
+def aten_fill__scalar(input: MaxTensor, value: Scalar) -> MaxTensor:
+    return aten_fill_scalar(input, value)
+
+
 # flip(Tensor self, int[] dims) -> Tensor
 
 
@@ -1829,8 +1852,6 @@ def aten_full(
 
     # Create a scalar constant with the fill value
     scalar = F.constant(fill_value, dtype=dtype, device=device)
-
-    # Broadcast the scalar to the target shape
     return F.broadcast_to(scalar, size)
 
 
@@ -1863,8 +1884,6 @@ def aten_full_like(
 
     # Create a scalar constant with the fill value
     scalar = F.constant(fill_value, dtype=target_dtype, device=target_device)
-
-    # Broadcast the scalar to the target shape
     return F.broadcast_to(scalar, target_shape)
 
 
@@ -2335,6 +2354,19 @@ def aten_mean(
     return result
 
 
+# mean.out(Tensor self, int[1]? dim, bool keepdim=False, *, ScalarType? dtype=None, Tensor(a!) out) -> Tensor(a!)
+@map_to(aten.mean.out)
+def aten_mean_out(
+    input: MaxTensor,
+    dim,
+    keepdim: bool = False,
+    *,
+    dtype: torch.dtype | None = None,
+    out: MaxTensor,
+) -> MaxTensor:
+    return aten_mean(input, dim=dim, keepdim=keepdim, dtype=dtype)
+
+
 # min.dim(Tensor self, int dim, bool keepdim=False) -> (Tensor values, Tensor indices)
 @map_to(aten.min)
 def aten_min(
@@ -2526,6 +2558,20 @@ def aten_native_layer_norm(
 # native_layer_norm_backward(Tensor grad_out, Tensor input, SymInt[] normalized_shape, Tensor mean, Tensor rstd, Tensor? weight, Tensor? bias, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
 
 
+# normal_(Tensor(a!) self, float mean=0, float std=1, *, Generator? generator=None) -> Tensor(a!)
+@map_to(aten.normal_)
+def aten_normal_(
+    self: MaxTensor, mean: float = 0.0, std: float = 1.0, generator=None
+) -> MaxTensor:
+    if generator is not None:
+        raise NotImplementedError(
+            "aten::normal_ does not support the generator argument"
+        )
+    return max_gaussian(
+        self.shape, mean=mean, std=std, dtype=self.dtype, device=self.device
+    )
+
+
 # ne.Scalar(Tensor self, Scalar other) -> Tensor
 # ne.Tensor(Tensor self, Tensor other) -> Tensor
 @map_to(aten.ne)
@@ -2567,6 +2613,22 @@ def aten_ones(
     device = torch_device_to_max_device(device)
 
     return MaxEagerTensor.ones(size, dtype=dtype, device=device)
+
+
+# ones_like(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
+@map_to(aten.ones_like)
+def aten_ones_like(
+    self: MaxTensor,
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    memory_format: torch.memory_format | None = None,
+) -> MaxTensor:
+    return aten_full_like(
+        self, 1, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )
 
 
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)
@@ -2663,6 +2725,36 @@ def aten_scalar_tensor(
         dtype=torch_dtype_to_max(dtype),
         device=torch_device_to_max_device(device),
     )
+
+
+# scaled_dot_product_attention(Tensor query, Tensor key, Tensor value, Tensor? attn_mask=None, float dropout_p=0., bool is_causal=False, *, float? scale=None, bool enable_gqa=False) -> Tensor
+@map_to(aten.scaled_dot_product_attention)
+def aten_scaled_dot_product_attention(
+    query: MaxTensor,
+    key: MaxTensor,
+    value: MaxTensor,
+    attn_mask: MaxTensor | None = None,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    scale: float | None = None,
+    enable_gqa: bool = False,
+) -> MaxTensor:
+    if attn_mask is not None and attn_mask.dtype == DType.bool:
+        neg_inf = F.constant(float("-inf"), dtype=query.dtype, device=query.device)
+        zero = F.constant(0.0, dtype=query.dtype, device=query.device)
+        attn_mask = F.where(attn_mask, zero, neg_inf)
+
+    output, _ = aten__scaled_dot_product_attention_math(
+        query,
+        key,
+        value,
+        attn_mask,
+        dropout_p,
+        is_causal,
+        scale=scale,
+        enable_gqa=enable_gqa,
+    )
+    return output
 
 
 # scatter.src(Tensor self, int dim, Tensor index, Tensor src) -> Tensor
