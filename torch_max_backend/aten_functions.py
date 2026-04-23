@@ -2717,6 +2717,7 @@ def aten_scalar_tensor(
 ) -> MaxTensor:
     if dtype is None:
         dtype = torch.float32
+    print(f"[DEBUG scalar_tensor] value={value}, dtype={dtype}, device={device}")
     if device is None:
         device = torch.get_default_device()
 

@@ -15,6 +15,7 @@ dependencies = [
     "torch>=2.10",
     "beartype>=0.17.0",
     "pytest-retry>=1.7.0",
+    "pocket-tts",
 ]
 
 [project.urls]
@@ -63,6 +64,7 @@ max-mojo-mogg-libs = [
 mojo-compiler-mojo-libs = [
     { index = "modular-nightly" },
 ]
+pocket-tts = { path = "../pocket-tts", editable = true }
 
 [[tool.uv.index]]
 name = "modular-nightly"
