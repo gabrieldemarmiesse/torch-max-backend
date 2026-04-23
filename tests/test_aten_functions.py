@@ -442,6 +442,58 @@ def test_aten_normal_multidim(conf: Conf, call_checker: CallChecker):
     assert abs(x_cpu.std().item() - 1.0) < 0.2
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_aten_empty_like(conf: Conf, call_checker: CallChecker, dtype: torch.dtype):
+    if conf.device == "cpu" and dtype == torch.float16:
+        pytest.skip("float16 not supported on CPU in MAX")
+    call_checker.register(aten_functions.aten_empty_like)
+
+    x = torch.randn(3, 4, dtype=dtype).to(conf.device)
+    result = aten.empty_like(x)
+    call_checker.check_was_called()
+    assert result.shape == x.shape
+    assert result.dtype == x.dtype
+    assert result.device == torch.device(conf.device)
+
+
+@pytest.mark.parametrize("target_dtype", [torch.float32, torch.bfloat16])
+def test_aten_empty_like_different_dtype(
+    conf: Conf, call_checker: CallChecker, target_dtype: torch.dtype
+):
+    call_checker.register(aten_functions.aten_empty_like)
+
+    x = torch.randn(2, 5, dtype=torch.float32).to(conf.device)
+    result = aten.empty_like(x, dtype=target_dtype)
+    call_checker.check_was_called()
+    assert result.shape == x.shape
+    assert result.dtype == target_dtype
+    assert result.device == torch.device(conf.device)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_aten_ones_like(conf: Conf, call_checker: CallChecker, dtype: torch.dtype):
+    if conf.device == "cpu" and dtype == torch.float16:
+        pytest.skip("float16 not supported on CPU in MAX")
+    call_checker.register(aten_functions.aten_ones_like)
+
+    def fn(x):
+        return aten.ones_like(x)
+
+    x = torch.randn(3, 4, dtype=dtype)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("shape", [(1,), (4, 5), (2, 3, 7)])
+def test_aten_ones_like_shape(conf: Conf, call_checker: CallChecker, shape: tuple):
+    call_checker.register(aten_functions.aten_ones_like)
+
+    def fn(x):
+        return aten.ones_like(x)
+
+    x = torch.randn(*shape)
+    check_outputs(fn, conf, [x])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_aten_acos_basic(conf: Conf, dtype: torch.dtype):
     """Test aten.acos basic functionality with values in valid domain [-1, 1]"""

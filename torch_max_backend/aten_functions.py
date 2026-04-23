@@ -1704,6 +1704,22 @@ def aten_empty_strided(
     )
 
 
+# empty_like(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
+@map_to(aten.empty_like)
+def aten_empty_like(
+    self: MaxTensor,
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    memory_format: torch.memory_format | None = None,
+) -> MaxTensor:
+    return aten_full_like(
+        self, 0, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )
+
+
 # empty_permuted(SymInt[] size, int[] physical_layout, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
 @map_to(aten.empty_permuted)
 def aten_empty_permuted(
@@ -1836,8 +1852,6 @@ def aten_full(
 
     # Create a scalar constant with the fill value
     scalar = F.constant(fill_value, dtype=dtype, device=device)
-
-    # Broadcast the scalar to the target shape
     return F.broadcast_to(scalar, size)
 
 
@@ -1870,8 +1884,6 @@ def aten_full_like(
 
     # Create a scalar constant with the fill value
     scalar = F.constant(fill_value, dtype=target_dtype, device=target_device)
-
-    # Broadcast the scalar to the target shape
     return F.broadcast_to(scalar, target_shape)
 
 
@@ -2588,6 +2600,22 @@ def aten_ones(
     device = torch_device_to_max_device(device)
 
     return MaxEagerTensor.ones(size, dtype=dtype, device=device)
+
+
+# ones_like(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
+@map_to(aten.ones_like)
+def aten_ones_like(
+    self: MaxTensor,
+    *,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout | None = None,
+    device: torch.device | None = None,
+    pin_memory: bool | None = None,
+    memory_format: torch.memory_format | None = None,
+) -> MaxTensor:
+    return aten_full_like(
+        self, 1, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )
 
 
 # permute(Tensor(a) self, int[] dims) -> Tensor(a)

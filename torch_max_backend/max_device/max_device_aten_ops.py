@@ -320,6 +320,10 @@ def empty_strided(
     )
 
 
+register_aten_op("aten::empty_like")(
+    wrap_for_max_device(aten_functions.aten_empty_like)
+)
+
 register_aten_op("aten::eq")(wrap_for_max_device(aten_functions.aten_eq))
 register_aten_op("aten::eq.Scalar")(wrap_for_max_device(aten_functions.aten_eq))
 
@@ -478,6 +482,7 @@ register_aten_op("aten::neg")(wrap_for_max_device(aten_functions.aten_neg))
 
 register_aten_op("aten::nonzero")(wrap_for_max_device(aten_functions.aten_nonzero))
 register_aten_op("aten::ones")(wrap_for_max_device(aten_functions.aten_ones))
+register_aten_op("aten::ones_like")(wrap_for_max_device(aten_functions.aten_ones_like))
 
 register_aten_op("aten::permute")(wrap_for_max_device(aten_functions.aten_permute))
 
