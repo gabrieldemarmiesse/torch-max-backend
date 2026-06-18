@@ -1,6 +1,6 @@
 import std.math as math
-from compiler import register
-from tensor import ElementwiseBinaryOp
+import extensibility as compiler
+from extensibility import ElementwiseBinaryOp
 
 
 @compiler.register("gelu_backward")
@@ -8,7 +8,7 @@ struct GeluBackwardNoneKernel(ElementwiseBinaryOp):
     @staticmethod
     def elementwise[
         dtype: DType,
-        width: Int,
+        width: SIMDSize,
     ](grad_output: SIMD[dtype, width], input: SIMD[dtype, width]) -> SIMD[
         dtype, width
     ]:
@@ -44,7 +44,7 @@ struct GeluBackwardTanhKernel(ElementwiseBinaryOp):
     @staticmethod
     def elementwise[
         dtype: DType,
-        width: Int,
+        width: SIMDSize,
     ](grad_output: SIMD[dtype, width], input: SIMD[dtype, width]) -> SIMD[
         dtype, width
     ]:
