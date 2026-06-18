@@ -479,6 +479,9 @@ register_aten_op("aten::mul.Tensor")(wrap_for_max_device(aten_functions.aten_mul
 
 register_aten_op("aten::mm")(wrap_for_max_device(aten_functions.aten_mm))
 
+register_aten_op("aten::native_batch_norm")(
+    wrap_for_max_device(aten_functions.aten_native_batch_norm)
+)
 register_aten_op("aten::native_group_norm")(
     wrap_for_max_device(aten_functions.aten_native_group_norm)
 )

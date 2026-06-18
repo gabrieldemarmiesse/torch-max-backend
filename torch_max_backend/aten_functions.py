@@ -1359,7 +1359,22 @@ def aten_bmm(input: MaxTensor, mat2: MaxTensor) -> MaxTensor:
 # cat(Tensor[] tensors, int dim=0) -> Tensor
 @map_to(aten.cat)
 def aten_cat(tensors: list[MaxTensor], dim: int = 0) -> MaxTensor:
-    return F.concat(tensors, axis=dim)
+    # PyTorch's cat skips the legacy "empty" tensor (1-D with static size 0),
+    # which doesn't need to match the rank of the other inputs. This shows up
+    # e.g. as uninitialized KV-caches in transformers. MAX's concat requires all
+    # inputs to share the same rank, so drop those sentinels to match PyTorch.
+    def _is_legacy_empty(t: MaxTensor) -> bool:
+        return (
+            len(t.shape) == 1
+            and isinstance(t.shape[0], StaticDim)
+            and int(t.shape[0]) == 0
+        )
+
+    filtered = [t for t in tensors if not _is_legacy_empty(t)]
+    if not filtered:
+        # Everything was a legacy-empty tensor; return one as-is (shape [0]).
+        return tensors[0]
+    return F.concat(filtered, axis=dim)
 
 
 # ceil(Tensor self) -> Tensor
@@ -1461,8 +1476,47 @@ def aten_convolution(
     output_padding: list[SymIntType],
     groups: SymIntType,
 ) -> MaxTensor:
-    if groups != 1:
-        raise NotImplementedError("Grouped convolution is not supported yet.")
+    groups = int(groups)
+    if groups != 1 and transposed:
+        # MAX's conv2d_transpose has no native `groups` support (only conv2d /
+        # conv3d do), so emulate a grouped transposed conv by splitting the
+        # input channels and the weights into `groups` independent groups,
+        # running a regular (groups=1) transposed conv on each, and
+        # concatenating the results along the channel dimension.
+        # A transposed conv weight has shape (C_in, C_out/groups, *K), so it is
+        # split along dim 0 (input channels), same as the input.
+        in_channels = int(input.shape[1])
+        if in_channels % groups != 0:
+            raise ValueError(
+                f"Input channels ({in_channels}) must be divisible by groups ({groups})."
+            )
+        weight_in = int(weight.shape[0])
+        if weight_in % groups != 0:
+            raise ValueError(
+                f"Weight dim 0 ({weight_in}) must be divisible by groups ({groups})."
+            )
+        input_groups = F.split(input, [in_channels // groups] * groups, axis=1)
+        weight_groups = F.split(weight, [weight_in // groups] * groups, axis=0)
+        partial_results = [
+            aten_convolution(
+                input_group,
+                weight_group,
+                None,
+                stride,
+                padding,
+                dilation,
+                transposed,
+                output_padding,
+                1,
+            )
+            for input_group, weight_group in zip(input_groups, weight_groups)
+        ]
+        result = F.concat(partial_results, axis=1)
+        if bias is not None:
+            shape_suffix = [1] * (len(result.shape) - 2)
+            bias_reshaped = F.reshape(bias, (1, bias.shape[0], *shape_suffix))
+            result = result + bias_reshaped
+        return result
 
     input_rank = len(input.shape)
 
@@ -1504,6 +1558,7 @@ def aten_convolution(
                 stride=stride_2d,
                 padding=padding_2d,
                 dilation=dilation_2d,
+                groups=groups,
                 input_layout=max_type.ConvInputLayout.NHWC,
                 filter_layout=max_type.FilterLayout.RSCF,
             )
@@ -1539,6 +1594,7 @@ def aten_convolution(
                 stride=stride,
                 padding=padding,
                 dilation=dilation,
+                groups=groups,
                 input_layout=max_type.ConvInputLayout.NHWC,
                 filter_layout=max_type.FilterLayout.RSCF,
             )
@@ -2442,6 +2498,88 @@ def aten_mm(x: MaxTensor, y: MaxTensor) -> MaxTensor:
 def aten_mul(input: MaxTensor, other: MaxTensor | Scalar) -> MaxTensor:
     input, other = type_promotion(input, other)
     return input * other
+
+
+# native_batch_norm(Tensor input, Tensor? weight, Tensor? bias, Tensor? running_mean, Tensor? running_var, bool training, float momentum, float eps) -> (Tensor, Tensor, Tensor)
+@map_to(aten.native_batch_norm)
+def aten_native_batch_norm(
+    input: MaxTensor,
+    weight: MaxTensor | None,
+    bias: MaxTensor | None,
+    running_mean: MaxTensor | None,
+    running_var: MaxTensor | None,
+    training: bool,
+    momentum: float,
+    eps: float,
+) -> tuple[MaxTensor, MaxTensor, MaxTensor]:
+    """
+    Implements batch normalization for both training and inference.
+
+    In inference mode (training=False) the provided running statistics are used.
+    In training mode (training=True) per-batch statistics are computed over every
+    dimension except the channel dimension (dim 1), using the biased variance,
+    exactly as PyTorch does for the normalization itself.
+
+    Args:
+        input: Input tensor of shape (N, C, ...)
+        weight: Optional gamma parameter tensor of shape (C,)
+        bias: Optional beta parameter tensor of shape (C,)
+        running_mean: Running mean of shape (C,) (used when training=False)
+        running_var: Running variance of shape (C,) (used when training=False)
+        training: Whether to compute statistics from the batch
+        momentum: Momentum factor (unused, running stats are not updated here)
+        eps: Small value for numerical stability
+
+    Returns:
+        Tuple of (normalized_output, save_mean, save_invstd). Matching PyTorch,
+        save_mean / save_invstd are the per-channel (C,) batch statistics when
+        training=True and empty (0,) tensors when training=False.
+    """
+    input_shape = input.shape
+    num_channels = int(input_shape[1])
+
+    # Broadcast shape for per-channel statistics: (1, C, 1, 1, ...)
+    broadcast_shape = [1] * len(input_shape)
+    broadcast_shape[1] = num_channels
+
+    if training:
+        # Reduce over every dimension except the channel dimension, keeping dims
+        # so the statistics broadcast back over the input.
+        reduce_axes = [i for i in range(len(input_shape)) if i != 1]
+        mean = input
+        for axis in reduce_axes:
+            mean = _reduce_mean(mean, axis=axis)
+        centered = input - mean
+        var = centered * centered
+        for axis in reduce_axes:
+            var = _reduce_mean(var, axis=axis)
+        invstd = 1.0 / F.sqrt(var + eps)
+        normalized = centered * invstd
+        # PyTorch returns the per-channel batch mean and inverse-std (shape (C,)).
+        save_mean = F.reshape(mean, [num_channels])
+        save_invstd = F.reshape(invstd, [num_channels])
+    else:
+        if running_mean is None or running_var is None:
+            raise ValueError(
+                "running_mean and running_var are required when training=False "
+                "in aten.native_batch_norm"
+            )
+        running_mean_reshaped = F.reshape(running_mean, broadcast_shape)
+        running_var_reshaped = F.reshape(running_var, broadcast_shape)
+        normalized = (input - running_mean_reshaped) / F.sqrt(
+            running_var_reshaped + eps
+        )
+        # In inference mode PyTorch returns empty (0,) tensors for the saved stats.
+        save_mean = running_mean[0:0]
+        save_invstd = running_var[0:0]
+
+    if weight is not None:
+        normalized = normalized * F.reshape(weight, broadcast_shape)
+
+    if bias is not None:
+        normalized = normalized + F.reshape(bias, broadcast_shape)
+
+    return (normalized, save_mean, save_invstd)
 
 
 # native_dropout(Tensor input, float p, bool? train) -> (Tensor, Tensor)
