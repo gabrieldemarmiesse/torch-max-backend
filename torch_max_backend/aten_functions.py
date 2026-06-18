@@ -13,6 +13,7 @@ import os
 from typing import Literal
 
 import max.driver as max_driver
+import max.graph.ops as max_ops
 import max.graph.type as max_type
 import torch
 from max.dtype import DType
@@ -34,6 +35,21 @@ from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerato
 from torch_max_backend.types import MaxTensor, Scalar, SymIntType
 
 flash_attention_gpu = F.functional(flash_attention_gpu)
+
+# MAX made the `functional` reduction helpers (mean/sum/argmax/argmin and the
+# reduction forms of max/min) eager-only: they assert their input is an eager
+# Tensor and so reject the graph TensorValues used by the torch.compile backend.
+# Re-wrap the bare graph ops with `functional` (which accepts both eager Tensors
+# and graph values) to restore dual-path support.
+_reduce_mean = F.functional(max_ops.mean)
+_reduce_sum = F.functional(max_ops.sum)
+_reduce_max = F.functional(max_ops.reduction.max)
+_reduce_min = F.functional(max_ops.reduction.min)
+_reduce_argmax = F.functional(max_ops.argmax)
+_reduce_argmin = F.functional(max_ops.argmin)
+# F.transfer_to is eager-only (reads Tensor.real); re-wrap the graph op so it
+# also works on graph TensorValues in the torch.compile backend.
+_transfer_to = F.functional(max_ops.transfer_to)
 
 
 def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
@@ -235,7 +251,7 @@ def aten_all(
     result = input_bool.cast(DType.int32)
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
-        result = F.min(result, axis=axis)
+        result = _reduce_min(result, axis=axis)
 
     # Handle keepdim=False
     if not keepdim:
@@ -759,7 +775,7 @@ def aten__to_copy(
 ):
     result = tensor
     if device is not None:
-        result = F.transfer_to(result, device=torch_device_to_max_device(device))
+        result = _transfer_to(result, torch_device_to_max_device(device))
     if dtype is not None:
         result = F.cast(result, dtype=torch_dtype_to_max(dtype))
     return result
@@ -922,7 +938,7 @@ def aten_amax(
     # Reduce each dimension one by one, similar to aten_mean
     result = input
     for axis in dim:
-        result = F.max(result, axis=axis)
+        result = _reduce_max(result, axis=axis)
 
     if not keepdim:
         # Squeeze the reduced dimensions - sort in reverse order to avoid index shifting
@@ -944,7 +960,7 @@ def aten_amin(
     # Reduce each dimension one by one, similar to aten_mean
     result = input
     for axis in dim:
-        result = F.min(result, axis=axis)
+        result = _reduce_min(result, axis=axis)
 
     if not keepdim:
         # Squeeze the reduced dimensions - sort in reverse order to avoid index shifting
@@ -986,7 +1002,7 @@ def aten_any(
 
     # Use max() to implement any() since True > False
     for axis in sorted(dim, reverse=True):
-        result = F.max(result, axis=axis)
+        result = _reduce_max(result, axis=axis)
 
     # Handle keepdim=False
     if not keepdim:
@@ -1058,7 +1074,7 @@ def aten_argmax(
     if dim is None:
         # Flatten the tensor and compute argmax along axis 0
         flattened = F.reshape(input, [-1])
-        result = F.argmax(flattened, axis=0)
+        result = _reduce_argmax(flattened, axis=0)
         if keepdim:
             # Return tensor with same number of dimensions as input, all size 1
             result_shape = [1] * len(input.shape)
@@ -1081,7 +1097,7 @@ def aten_argmax(
             transposed_input = F.transpose(input, dim, ndim - 1)
 
             # Perform argmax on last axis
-            result = F.argmax(transposed_input, axis=-1)
+            result = _reduce_argmax(transposed_input, axis=-1)
 
             # Swap back if needed
             if not keepdim:
@@ -1097,7 +1113,7 @@ def aten_argmax(
                 result = F.transpose(result, dim, ndim - 1)
         else:
             # Target axis is already the last dimension
-            result = F.argmax(input, axis=dim)
+            result = _reduce_argmax(input, axis=dim)
 
         if not keepdim:
             # Find the dimension with size 1 and squeeze it
@@ -1117,7 +1133,7 @@ def aten_argmin(
     if dim is None:
         # Flatten the tensor and compute argmin along axis 0
         flattened = F.reshape(input, [-1])
-        result = F.argmin(flattened, axis=0)
+        result = _reduce_argmin(flattened, axis=0)
         if keepdim:
             # Return tensor with same number of dimensions as input, all size 1
             result_shape = [1] * len(input.shape)
@@ -1140,7 +1156,7 @@ def aten_argmin(
             transposed_input = F.transpose(input, dim, ndim - 1)
 
             # Perform argmin on last axis
-            result = F.argmin(transposed_input, axis=-1)
+            result = _reduce_argmin(transposed_input, axis=-1)
 
             # Swap back if needed
             if not keepdim:
@@ -1156,7 +1172,7 @@ def aten_argmin(
                 result = F.transpose(result, dim, ndim - 1)
         else:
             # Target axis is already the last dimension
-            result = F.argmin(input, axis=dim)
+            result = _reduce_argmin(input, axis=dim)
 
         if not keepdim:
             # Find the dimension with size 1 and squeeze it
@@ -2117,7 +2133,7 @@ def aten_isin(
     # Any=True means at least one test element matched
     # Need to cast to numeric type first since reduce doesn't support bool
     comparisons_numeric = F.cast(comparisons, DType.int32)
-    result_flat_numeric = F.max(comparisons_numeric, axis=-1)
+    result_flat_numeric = _reduce_max(comparisons_numeric, axis=-1)
     result_flat = F.cast(result_flat_numeric, DType.bool)
 
     # Reshape back to original elements shape
@@ -2341,7 +2357,7 @@ def aten_mean(
     # Multiple dimensions reduction - reduce each dimension one by one
     # Sort dimensions in descending order to avoid index shifting issues
     for axis in dim:
-        result = F.mean(result, axis=axis)
+        result = _reduce_mean(result, axis=axis)
 
     # Handle keepdim=False - MAX's mean keeps dimensions by default, so we need to squeeze
     if not keepdim:
@@ -3001,7 +3017,7 @@ def aten_sum(
 
     # Sum over each dimension
     for axis in sorted(dim, reverse=True):
-        result = F.sum(result, axis=axis)
+        result = _reduce_sum(result, axis=axis)
 
     # Handle keepdim=False - squeeze the reduced dimensions
     if not keepdim:

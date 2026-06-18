@@ -184,6 +184,12 @@ class _GraphFactory:
         self.shape_names_to_input_dim: dict[str, tuple[str, int]] = {}
         self.graph_inputs: list[max.graph.value.TensorType] = []
         self.graph: Graph | None = None
+        # Whether the graph context manager is currently entered. MAX ties the
+        # realization context to the active graph, so a graph that is entered
+        # but never exited (e.g. graph construction raises) poisons every
+        # subsequent eager realization with "Can't realize from a graph
+        # context". We track this to guarantee the graph is always exited.
+        self._graph_open = False
         self.tensor_book = TensorsBook()
         # Link the shape expressions (names) to the node names
         self.expression_to_node_name: dict[str, str] = {}
@@ -199,6 +205,7 @@ class _GraphFactory:
             input_types=self.graph_inputs,
             kernel_library=global_max_objects().kernel_library,
         ).__enter__()
+        self._graph_open = True
         # Let's fill the tensor book
         for tensor_name, idx in self.names_to_input_idx.items():
             self.tensor_book[tensor_name] = self.graph.inputs[idx]
@@ -350,32 +357,41 @@ class _GraphFactory:
         # Store the none indices for runtime handling
         self.graph.output(*output_tensors)
         self.graph.__exit__(None, None, None)
+        self._graph_open = False
         return output_blueprint
 
     def create_graph(
         self, graph: torch.fx.Graph
     ) -> tuple[Graph, list[tuple[OutputBlueprintKind, int | None]]]:
         output_blueprint = None
-        for node_idx, node in enumerate(graph.nodes):
-            if node.op == "placeholder":
-                self.handle_placeholder(node)
-                continue
+        try:
+            for node_idx, node in enumerate(graph.nodes):
+                if node.op == "placeholder":
+                    self.handle_placeholder(node)
+                    continue
 
-            if not self.graph:
-                self.initialize_graph()
+                if not self.graph:
+                    self.initialize_graph()
 
-            if node.op in ("call_function", "call_method"):
-                self.handle_call_function(node_idx, node)
-            elif node.op == "get_attr":
-                self.handle_get_attr(node)
-            elif node.op == "output":
-                output_blueprint = self.handle_output(node)
-            else:
-                raise ValueError(f"Unsupported node type: {node.op}")
-        if output_blueprint is None:
-            raise ValueError(
-                "No output node found in the graph, this should never happen."
-            )
+                if node.op in ("call_function", "call_method"):
+                    self.handle_call_function(node_idx, node)
+                elif node.op == "get_attr":
+                    self.handle_get_attr(node)
+                elif node.op == "output":
+                    output_blueprint = self.handle_output(node)
+                else:
+                    raise ValueError(f"Unsupported node type: {node.op}")
+            if output_blueprint is None:
+                raise ValueError(
+                    "No output node found in the graph, this should never happen."
+                )
+        except BaseException:
+            # If graph construction fails after the graph was entered, exit it so
+            # the leaked graph realization context doesn't break later eager ops.
+            if self._graph_open and self.graph is not None:
+                self.graph.__exit__(None, None, None)
+                self._graph_open = False
+            raise
         return self.graph, output_blueprint
 
 
