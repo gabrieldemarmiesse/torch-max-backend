@@ -334,6 +334,44 @@ def test_native_batch_norm_legit_no_training_2d_input(device: str):
     )
 
 
+def test_aten_native_batch_norm_inference(conf: Conf, call_checker: CallChecker):
+    """Test aten.native_batch_norm in inference mode (training=False)."""
+    call_checker.register(aten_functions.aten_native_batch_norm)
+
+    def fn(input_tensor, weight, bias, running_mean, running_var):
+        return aten.native_batch_norm(
+            input_tensor, weight, bias, running_mean, running_var, False, 0.1, 1e-5
+        )[0]
+
+    batch_size, channels, height, width = 2, 3, 4, 4
+    input_tensor = torch.randn(batch_size, channels, height, width)
+    weight = torch.randn(channels)
+    bias = torch.randn(channels)
+    running_mean = torch.randn(channels)
+    running_var = torch.abs(torch.randn(channels)) + 1e-5
+
+    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
+
+
+def test_aten_native_batch_norm_training(conf: Conf, call_checker: CallChecker):
+    """Test aten.native_batch_norm in training mode (training=True, batch stats)."""
+    call_checker.register(aten_functions.aten_native_batch_norm)
+
+    def fn(input_tensor, weight, bias, running_mean, running_var):
+        return aten.native_batch_norm(
+            input_tensor, weight, bias, running_mean, running_var, True, 0.1, 1e-5
+        )[0]
+
+    batch_size, channels, height, width = 4, 3, 5, 5
+    input_tensor = torch.randn(batch_size, channels, height, width)
+    weight = torch.randn(channels)
+    bias = torch.randn(channels)
+    running_mean = torch.randn(channels)
+    running_var = torch.abs(torch.randn(channels)) + 1e-5
+
+    check_outputs(fn, conf, [input_tensor, weight, bias, running_mean, running_var])
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_aten_native_layer_norm_basic(
     conf: Conf, dtype: torch.dtype, call_checker: CallChecker

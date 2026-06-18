@@ -680,6 +680,20 @@ def test_cat(conf: Conf, tensor_shapes: tuple):
     check_outputs(fn, conf, [a, b])
 
 
+def test_cat_skips_legacy_empty(conf: Conf):
+    """torch.cat ignores the legacy 1-D empty tensor (e.g. uninitialized
+    KV-caches), even when its rank differs from the other inputs."""
+
+    def fn(empty, x, y):
+        return torch.cat([empty, x, y], dim=2)
+
+    empty = torch.empty(0)
+    x = torch.randn(1, 3, 4, 5)
+    y = torch.randn(1, 3, 6, 5)
+
+    check_outputs(fn, conf, [empty, x, y])
+
+
 def test_combination_add_mul(conf: Conf, tensor_shapes: tuple):
     def fn(x, y, z):
         return (x + y) * z
@@ -1223,6 +1237,74 @@ def test_conv_transpose1d_all_params(conf: Conf):
     b = torch.randn(out_channels)
 
     check_outputs(fn, conf, [x, w, b])
+
+
+def test_conv1d_grouped(conf: Conf):
+    """Test grouped conv1d (groups > 1)"""
+
+    def fn(x, w, b):
+        return F.conv1d(x, w, b, groups=2)
+
+    batch_size, in_channels, length = 2, 4, 16
+    out_channels, kernel_size = 6, 3
+    groups = 2
+
+    x = torch.randn(batch_size, in_channels, length)
+    w = torch.randn(out_channels, in_channels // groups, kernel_size)
+    b = torch.randn(out_channels)
+
+    check_outputs(fn, conf, [x, w, b])
+
+
+def test_conv1d_depthwise(conf: Conf):
+    """Test depthwise conv1d (groups == in_channels)"""
+
+    def fn(x, w):
+        return F.conv1d(x, w, stride=2, padding=1, groups=4)
+
+    batch_size, in_channels, length = 2, 4, 16
+    kernel_size = 3
+    groups = 4
+
+    x = torch.randn(batch_size, in_channels, length)
+    # depthwise: out_channels == in_channels, weight (C, 1, K)
+    w = torch.randn(in_channels, in_channels // groups, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
+
+
+def test_conv_transpose1d_grouped(conf: Conf):
+    """Test grouped conv_transpose1d (groups > 1)"""
+
+    def fn(x, w, b):
+        return F.conv_transpose1d(x, w, b, stride=2, groups=2)
+
+    batch_size, in_channels, length = 2, 4, 16
+    out_channels, kernel_size = 6, 3
+    groups = 2
+
+    x = torch.randn(batch_size, in_channels, length)
+    # transposed weight shape: (in_channels, out_channels // groups, K)
+    w = torch.randn(in_channels, out_channels // groups, kernel_size)
+    b = torch.randn(out_channels)
+
+    check_outputs(fn, conf, [x, w, b])
+
+
+def test_conv2d_grouped(conf: Conf):
+    """Test grouped conv2d (groups > 1)"""
+
+    def fn(x, w):
+        return F.conv2d(x, w, groups=3)
+
+    batch_size, in_channels, height, width = 2, 6, 8, 8
+    out_channels, kernel_size = 9, 3
+    groups = 3
+
+    x = torch.randn(batch_size, in_channels, height, width)
+    w = torch.randn(out_channels, in_channels // groups, kernel_size, kernel_size)
+
+    check_outputs(fn, conf, [x, w])
 
 
 def test_conv_transpose2d_basic(conf: Conf):
