@@ -77,7 +77,13 @@ Measured on this machine:
   well under 100 ms total — loading is a non-issue.
 - **Size**: ~0.15 MB of `.so` per op (all dtypes, CPU+GPU kernels).
   Full ATen coverage (~200 ops) ≈ 30–60 MB. For calibration, MAX's own
-  interpreter op set ships 58 MB of prebuilt extensions in the wheel.
+  interpreter op set is 58 MB across 25 extensions. Note the MAX wheel
+  ships only the `.mojo` *sources* (verified: no `__mojocache__` entry
+  in any dist-info RECORD): the 58 MB cache is compiled **locally on
+  first import** — measured here, 25 modules over ~10 min, silently,
+  the first time the current eager mode runs on a fresh venv. Our
+  fast path's compile-on-first-use behavior is therefore the same
+  deployment model MAX already imposes, at a smaller scale per module.
 - **Compile time** (the real cost): ~10 s fixed per module + ~2.3 s
   per op (op = ~10 kernel instantiations: 5 dtypes × CPU+GPU). An
   8-op module cold-compiles in ~30 s. Editing a module recompiles the
@@ -112,9 +118,20 @@ Consequences for the design:
   extension count by ~10×.
 - Editing one op costs one module rebuild (~30–60 s), which argues for
   keeping modules from growing past ~20 ops.
-- Ship prebuilt `__mojocache__/` in release wheels (as MAX does) so
-  users never compile; CI caches it keyed on the `.mojo` content hash
-  + toolchain version (`mojo.importer` handles invalidation).
+- **Caches are per-machine; don't plan on shipping them in wheels.**
+  Modular doesn't ship prebuilt `__mojocache__/` (sources only), and
+  for good reason: `mojo build` defaults to `-march=native` host
+  codegen and auto-detects the GPU arch at build time, so a prebuilt
+  `.so` can SIGILL on an older CPU or carry the wrong GPU target
+  (causal-conv1d-mojo keys its cache by CPU brand + GPU arch for
+  exactly this). Realistic options: per-machine compile on first use
+  (what this PoC does), an explicit warmup command for
+  container/production images, and CI caching of `__mojocache__`
+  keyed on source hash + toolchain version **+ runner hardware**.
+  Caveat to document: `mojo.importer`'s cache key covers source
+  content only — moving a venv/checkout between machines with
+  different CPUs or GPUs can load a stale-for-this-hardware `.so`;
+  wipe `__mojocache__/` when that happens.
 
 ## Follow-up work (not in this PoC)
 
