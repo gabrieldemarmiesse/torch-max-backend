@@ -1,4 +1,6 @@
+import functools
 from collections.abc import Callable
+from typing import no_type_check
 
 import max.driver
 import torch
@@ -10,9 +12,15 @@ from torch_max_backend.max_device import torch_max_device_module
 
 
 class TorchMaxTensor(torch.Tensor):
-    """Custom tensor subclass that holds MAX engine data, similar to MyDeviceTensor in trying_stuff.py"""
+    """Custom tensor subclass that holds MAX engine data, similar to MyDeviceTensor in trying_stuff.py
 
-    _max_data: MaxEagerTensor
+    The MAX data can be stored in two forms: an eager `MaxEagerTensor`
+    (`_max_data`), or — for outputs of the fast kernel path — just the
+    realized `max.driver.Buffer` (`_buffer`). The `_max_data` property
+    builds the MaxEagerTensor wrapper on first access, so the many
+    fast-path tensors that only ever feed other fast ops never pay for
+    one (~1.7 µs per construction).
+    """
 
     @staticmethod
     def __new__(cls, size, dtype, max_data=None, requires_grad=False):
@@ -21,30 +29,64 @@ class TorchMaxTensor(torch.Tensor):
         res.__class__ = TorchMaxTensor
         return res
 
-    def __init__(
-        self, size, dtype, max_data: MaxEagerTensor | None = None, requires_grad=False
-    ):
-        self._max_data = max_data
+    @no_type_check
+    def __init__(self, size, dtype, max_data=None, requires_grad=False):
+        self._max_data_ = max_data
+        self._buffer = None
+
+    @property
+    @no_type_check
+    def _max_data(self) -> MaxEagerTensor:
+        max_data = self._max_data_
+        if max_data is None and self._buffer is not None:
+            max_data = MaxEagerTensor(storage=self._buffer)
+            self._max_data_ = max_data
+        return max_data
+
+    @_max_data.setter
+    @no_type_check
+    def _max_data(self, value):
+        self._max_data_ = value
+        self._buffer = None
 
     def __repr__(self):
-        if hasattr(self, "_max_data"):
+        if hasattr(self, "_max_data_"):
             return "MaxTensor(" + repr(self._max_data) + ")"
         return super().__repr__()
 
     @property
     def device(self):
-        if hasattr(self, "_max_data"):
-            if self._max_data.device == CPU():
+        if hasattr(self, "_max_data_"):
+            if self._buffer is not None:
+                max_device = self._buffer.device
+            else:
+                max_device = self._max_data.device
+            if max_device == CPU():
                 return torch_max_device_module.cpu()
             else:
-                return torch.device(f"max_device:{self._max_data.device.id}")
+                return torch.device(f"max_device:{max_device.id}")
         return super().device
 
     @classmethod
-    def _from_max_data(cls, max_data: MaxEagerTensor) -> "TorchMaxTensor":
-        shape = tuple(max_data.shape)
+    @no_type_check
+    def _from_buffer(cls, buffer: max.driver.Buffer) -> "TorchMaxTensor":
+        """Wrap a realized contiguous driver buffer (fast path outputs)."""
+        result = TorchMaxTensor(tuple(buffer.shape), max_dtype_to_torch(buffer.dtype))
+        result._buffer = buffer
+        return result
 
-        dtype = max_dtype_to_torch(max_data.dtype)
+    @classmethod
+    @no_type_check
+    def _from_max_data(cls, max_data: MaxEagerTensor) -> "TorchMaxTensor":
+        if max_data.real:
+            # The driver buffer's shape/dtype are plain C-level values;
+            # max_data.shape would build graph Shape/Dim wrappers per call.
+            buffer = max_data.driver_tensor
+            shape = tuple(buffer.shape)
+            dtype = max_dtype_to_torch(buffer.dtype)
+        else:
+            shape = tuple(max_data.shape)
+            dtype = max_dtype_to_torch(max_data.dtype)
         return TorchMaxTensor(shape, dtype=dtype, max_data=max_data)
 
     __torch_function__ = torch._C._disabled_torch_function_impl
@@ -69,6 +111,7 @@ def get_max_equivalent(func) -> Callable:
         )
 
 
+@functools.cache
 def get_ordered_accelerators():
     """Get accelerators ordered with GPUs first, then CPU last"""
     from torch_max_backend.torch_compile_backend.compiler import get_accelerators
@@ -90,6 +133,8 @@ def find_equivalent_torch_device(device: max.driver.Device) -> torch.device:
         return torch.device(f"max_device:{device.id}")
 
 
+@functools.cache
+@no_type_check
 def find_equivalent_max_device(device: torch.device) -> max.driver.Device:
     """Find the equivalent MAX device for a given torch device
 

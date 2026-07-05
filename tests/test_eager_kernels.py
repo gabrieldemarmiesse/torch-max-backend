@@ -50,19 +50,19 @@ def test_fast_path_is_used(max_device):
     from torch_max_backend import eager_kernels
 
     calls = []
-    original = eager_kernels.binary_op
+    original = eager_kernels.elementwise_ops.Add
 
-    def spy(mojo_fn, lhs, rhs):
-        calls.append(mojo_fn)
-        return original(mojo_fn, lhs, rhs)
+    def spy(*args):
+        calls.append(args)
+        return original(*args)
 
-    eager_kernels.binary_op = spy
+    eager_kernels.elementwise_ops.Add = spy
     try:
         x = torch.randn(8, 8).to(max_device)
         y = torch.randn(8, 8).to(max_device)
         _ = x + y
     finally:
-        eager_kernels.binary_op = original
+        eager_kernels.elementwise_ops.Add = original
     assert len(calls) == 1
 
 
@@ -115,3 +115,247 @@ def test_chained_fast_ops(max_device):
     for _ in range(5):
         expected = torch.relu(expected * y + y)
     torch.testing.assert_close(device_result.cpu(), expected)
+
+
+@pytest.fixture
+def max_gpu(max_gpu_available: bool):
+    """GPU max_device only — for ops whose fast path is GPU-gated."""
+    if not max_gpu_available:
+        pytest.skip("You do not have a GPU supported by Max")
+    return "max_device:0"
+
+
+def test_fast_view_family(max_device):
+    x = torch.randn(2, 6, 768)
+    xd = x.to(max_device)
+    torch.testing.assert_close(xd.view(-1, 768).cpu(), x.view(-1, 768))
+    torch.testing.assert_close(xd.reshape(12, 768).cpu(), x.reshape(12, 768))
+    torch.testing.assert_close(xd.unsqueeze(0).cpu(), x.unsqueeze(0))
+
+
+def test_fast_view_aliases_storage(max_device):
+    """The fast view must alias, matching torch.Tensor.view semantics."""
+    x = torch.zeros(4, 4).to(max_device)
+    v = x.view(16)
+    x += torch.ones(4, 4).to(max_device)
+    torch.testing.assert_close(v.cpu(), torch.ones(16))
+
+
+@pytest.mark.parametrize("dims", [(0, 1), (1, 2), (-1, -2)])
+def test_fast_transpose(max_device, dims):
+    x = torch.randn(2, 3, 4)
+    result = x.to(max_device).transpose(*dims).contiguous().cpu()
+    torch.testing.assert_close(result, x.transpose(*dims).contiguous())
+
+
+def test_fast_t(max_device):
+    x = torch.randn(50, 30)
+    torch.testing.assert_close(
+        x.to(max_device).t().contiguous().cpu(), x.t().contiguous()
+    )
+
+
+@pytest.mark.parametrize("split_size,dim", [(768, 2), (2, 0), ([1, 2, 3], 1)])
+def test_fast_split(max_device, split_size, dim):
+    x = torch.randn(4, 6, 2304)
+    dev_parts = x.to(max_device).split(split_size, dim=dim)
+    for dev_part, ref_part in zip(dev_parts, x.split(split_size, dim=dim)):
+        torch.testing.assert_close(dev_part.cpu(), ref_part)
+
+
+def test_fast_cat_skips_legacy_empty(max_device):
+    empty = torch.empty(0)
+    x = torch.randn(1, 12, 6, 64)
+    result = torch.cat([empty.to(max_device), x.to(max_device)], dim=-2)
+    torch.testing.assert_close(result.cpu(), torch.cat([empty, x], dim=-2))
+
+
+def test_fast_batch_norm_inference(max_device):
+    x = torch.randn(2, 64, 14, 14)
+    bn = torch.nn.BatchNorm2d(64).eval()
+    bn.running_mean.normal_()
+    bn.running_var.uniform_(0.5, 2.0)
+    bn_dev = torch.nn.BatchNorm2d(64).eval()
+    bn_dev.load_state_dict(bn.state_dict())
+    bn_dev = bn_dev.to(max_device)
+    with torch.no_grad():
+        torch.testing.assert_close(
+            bn_dev(x.to(max_device)).cpu(), bn(x), atol=1e-5, rtol=1e-5
+        )
+
+
+def test_fast_layer_norm(max_device):
+    x = torch.randn(2, 6, 768)
+    ln = torch.nn.LayerNorm(768).eval()
+    with torch.no_grad():
+        ln.weight.normal_()
+        ln.bias.normal_()
+    ln_dev = torch.nn.LayerNorm(768).eval()
+    ln_dev.load_state_dict(ln.state_dict())
+    ln_dev = ln_dev.to(max_device)
+    with torch.no_grad():
+        torch.testing.assert_close(
+            ln_dev(x.to(max_device)).cpu(), ln(x), atol=1e-5, rtol=1e-5
+        )
+
+
+def test_fast_native_layer_norm_stats(max_device):
+    x = torch.randn(1, 6, 768).to(max_device)
+    w = torch.ones(768).to(max_device)
+    b = torch.zeros(768).to(max_device)
+    out, mean, rstd = torch.native_layer_norm(x, [768], w, b, 1e-5)
+    ref_out, ref_mean, ref_rstd = torch.native_layer_norm(
+        x.cpu(), [768], w.cpu(), b.cpu(), 1e-5
+    )
+    torch.testing.assert_close(out.cpu(), ref_out, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(mean.cpu(), ref_mean, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(rstd.cpu(), ref_rstd, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_fast_mean_trailing_dims(max_device, keepdim):
+    x = torch.randn(1, 512, 7, 7)
+    result = x.to(max_device).mean([-1, -2], keepdim=keepdim).cpu()
+    torch.testing.assert_close(result, x.mean([-1, -2], keepdim=keepdim))
+
+
+def test_fast_max_pool2d(max_device):
+    x = torch.randn(1, 64, 32, 32)
+    result = torch.nn.functional.max_pool2d(x.to(max_device), 3, 2, 1).cpu()
+    torch.testing.assert_close(result, torch.nn.functional.max_pool2d(x, 3, 2, 1))
+
+
+def test_fast_max_pool2d_indices(max_device):
+    x = torch.randn(1, 8, 16, 16)
+    dev_vals, dev_idx = torch.nn.functional.max_pool2d(
+        x.to(max_device), 2, 2, return_indices=True
+    )
+    ref_vals, ref_idx = torch.nn.functional.max_pool2d(x, 2, 2, return_indices=True)
+    torch.testing.assert_close(dev_vals.cpu(), ref_vals)
+    torch.testing.assert_close(dev_idx.cpu(), ref_idx)
+
+
+def test_fast_embedding(max_device):
+    weight = torch.randn(100, 32)
+    idx = torch.randint(0, 100, (2, 5))
+    result = torch.nn.functional.embedding(idx.to(max_device), weight.to(max_device))
+    torch.testing.assert_close(result.cpu(), torch.nn.functional.embedding(idx, weight))
+
+
+def test_fast_scalar_elementwise(max_device):
+    x = torch.randn(2, 6, 3072)
+    xd = x.to(max_device)
+    torch.testing.assert_close((xd * 0.5).cpu(), x * 0.5)
+    torch.testing.assert_close((xd + 1.0).cpu(), x + 1.0)
+    torch.testing.assert_close((xd**3.0).cpu(), x**3.0, atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(torch.tanh(xd).cpu(), torch.tanh(x))
+
+
+def test_fast_add_scalar_int(max_device):
+    x = torch.arange(6)
+    torch.testing.assert_close((x.to(max_device) + 3).cpu(), x + 3)
+
+
+def test_fast_add_inplace(max_device):
+    x = torch.randn(4, 4)
+    y = torch.randn(4, 4)
+    xd = x.clone().to(max_device)
+    xd += y.to(max_device)
+    torch.testing.assert_close(xd.cpu(), x + y)
+
+
+def test_fast_all_and_item(max_device):
+    ones = torch.ones(1, 6, dtype=torch.bool).to(max_device)
+    assert bool(ones.all().item()) is True
+    mixed = torch.tensor([[True, False, True]]).to(max_device)
+    assert bool(mixed.all().item()) is False
+
+
+def test_fast_arange(max_device):
+    torch.testing.assert_close(
+        torch.arange(6, device=max_device).cpu(), torch.arange(6)
+    )
+    torch.testing.assert_close(
+        torch.arange(2, 20, 3, device=max_device).cpu(), torch.arange(2, 20, 3)
+    )
+
+
+def test_fast_cast(max_device):
+    x = torch.randint(0, 3, (1, 6))
+    torch.testing.assert_close(x.to(max_device).to(torch.bool).cpu(), x.to(torch.bool))
+    f = torch.randn(3, 4)
+    torch.testing.assert_close(
+        f.to(max_device).to(torch.float16).cpu(), f.to(torch.float16)
+    )
+
+
+# ---- GPU-only fast paths (matmul / conv / attention via MAX kernel library)
+
+
+def test_fast_mm_addmm(max_gpu):
+    a = torch.randn(6, 768)
+    b = torch.randn(768, 2304)
+    bias = torch.randn(2304)
+    dev = torch.addmm(bias.to(max_gpu), a.to(max_gpu), b.to(max_gpu)).cpu()
+    # TF32-level tolerance: the MAX matmul kernels (same as graph mode) use
+    # tensor cores for float32.
+    torch.testing.assert_close(dev, torch.addmm(bias, a, b), atol=5e-2, rtol=5e-2)
+    dev = (a.to(max_gpu) @ b.to(max_gpu)).cpu()
+    torch.testing.assert_close(dev, a @ b, atol=5e-2, rtol=5e-2)
+
+
+def test_fast_bmm(max_gpu):
+    a = torch.randn(12, 6, 64)
+    b = torch.randn(12, 64, 6)
+    dev = torch.bmm(a.to(max_gpu), b.to(max_gpu)).cpu()
+    torch.testing.assert_close(dev, torch.bmm(a, b), atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "in_c,out_c,k,stride,padding,dilation,groups",
+    [
+        (3, 64, 7, 2, 3, 1, 1),
+        (64, 64, 3, 1, 1, 1, 1),
+        (64, 128, 1, 2, 0, 1, 1),
+        (8, 12, 3, 1, 1, 2, 1),
+        (8, 12, 3, 1, 1, 1, 2),
+    ],
+)
+def test_fast_conv2d(max_gpu, in_c, out_c, k, stride, padding, dilation, groups):
+    x = torch.randn(1, in_c, 32, 32)
+    w = torch.randn(out_c, in_c // groups, k, k)
+    b = torch.randn(out_c)
+    dev = torch.nn.functional.conv2d(
+        x.to(max_gpu),
+        w.to(max_gpu),
+        b.to(max_gpu),
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+    ).cpu()
+    ref = torch.nn.functional.conv2d(
+        x, w, b, stride=stride, padding=padding, dilation=dilation, groups=groups
+    )
+    torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+
+
+def test_fast_conv2d_batched_falls_back_correctly(max_gpu):
+    x = torch.randn(3, 8, 16, 16)
+    w = torch.randn(12, 8, 3, 3)
+    dev = torch.nn.functional.conv2d(x.to(max_gpu), w.to(max_gpu), padding=1).cpu()
+    ref = torch.nn.functional.conv2d(x, w, padding=1)
+    torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+
+
+@pytest.mark.parametrize("is_causal", [True, False])
+@pytest.mark.parametrize("kv_len", [6, 10])
+def test_fast_sdpa(max_gpu, is_causal, kv_len):
+    q = torch.randn(1, 12, 6, 64)
+    k = torch.randn(1, 12, kv_len, 64)
+    v = torch.randn(1, 12, kv_len, 64)
+    dev = torch.nn.functional.scaled_dot_product_attention(
+        q.to(max_gpu), k.to(max_gpu), v.to(max_gpu), is_causal=is_causal
+    ).cpu()
+    ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+    torch.testing.assert_close(dev, ref, atol=1e-2, rtol=1e-2)

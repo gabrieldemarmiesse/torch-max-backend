@@ -8,24 +8,35 @@ from torch_max_backend import max_backend
 
 
 class CallChecker:
-    def __init__(self):
-        self._function_to_check = None
-        self._count_before_starting_to_check = None
+    """Asserts that at least one of the registered implementations ran.
 
-    def register(self, func: Callable):
-        self._function_to_check = func
-        self._count_before_starting_to_check = func.call_count
+    Ops covered by the max_device fast eager path have two implementations
+    (the graph one in `aten_functions` and the kernel one in `aten_fast`);
+    register both to accept whichever the inputs routed to.
+    """
+
+    def __init__(self):
+        self._functions_to_check = None
+        self._counts_before_starting_to_check = None
+
+    def register(self, *funcs: Callable):
+        self._functions_to_check = funcs
+        self._counts_before_starting_to_check = [f.call_count for f in funcs]
 
     def check_was_called(self):
-        if self._function_to_check is None:
+        if self._functions_to_check is None:
             raise ValueError(
                 "No function to check was set, call call_checker.register first"
             )
-        if not (
-            self._function_to_check.call_count > self._count_before_starting_to_check
+        if not any(
+            func.call_count > count_before
+            for func, count_before in zip(
+                self._functions_to_check, self._counts_before_starting_to_check
+            )
         ):
+            names = ", ".join(f.__name__ for f in self._functions_to_check)
             raise AssertionError(
-                f"Expected {self._function_to_check.__name__} to be called at least once in the test, but it was not"
+                f"Expected one of [{names}] to be called at least once in the test, but none was"
             )
 
 

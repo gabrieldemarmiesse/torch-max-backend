@@ -133,6 +133,130 @@ Consequences for the design:
   different CPUs or GPUs can load a stale-for-this-hardware `.so`;
   wipe `__mojocache__/` when that happens.
 
+## Milestone 2: full models (resnet-18, gpt2) at CUDA-comparable latency
+
+The op set was extended until `microsoft/resnet-18` and `gpt2` (stock
+transformers models) run their full forward on the fast path. Measured on
+an H100 PCIe (batch 1, fp32, end-to-end incl. bringing logits to host):
+
+| model | graph-based eager (before) | fast eager | torch CUDA | ratio vs CUDA |
+|---|---|---|---|---|
+| resnet-18 | ~530 ms | **3.25 ms** | 3.03 ms | **0.93×** |
+| gpt2 (6 tokens) | ~3,216 ms | **16.6 ms** | 6.75 ms | 2.5× |
+| gpt2 (504 tokens) | — | **82.6 ms** | 74.2 ms | **1.11×** |
+
+resnet-18 and long-sequence gpt2 are at CUDA parity. Short-sequence gpt2
+is a pure dispatch-overhead benchmark (475 tiny-tensor aten calls); its
+remaining gap is per-op Python cost plus materializing copies where CUDA
+uses free strided views (transpose/split/kv-cat) — closing it needs
+stride-aware tensors or C++-level registrations, not faster kernels.
+
+Both models pass `run_hf_max.py`'s comparison against CPU with argmax
+agreement. Numerics for float32: matmul/conv call cuBLAS with
+`use_tf32=False` (full fp32, matching torch's CUDA matmul default and
+*more* precise than the graph path, whose matmul dispatch hardcodes TF32).
+For float16/bfloat16 the fast kernels deliberately diverge from the graph
+path where torch itself does: scalar ops / exp / tanh / batch norm
+accumulate in float32 (adversarial review verified the fast results match
+real torch closely while the graph path's native-fp16 arithmetic is the
+outlier, e.g. exp off by ~0.5% relative), `native_layer_norm` returns
+float32 mean/rstd like torch CUDA, `view` aliases storage like torch
+(the graph path copies), and `max_pool2d_with_indices` returns real
+indices (the graph path duplicates the values).
+
+### How the op set is organized
+
+Five lazily-imported extension modules under `eager_kernels/` (a module
+only compiles on the first call of an op in its category), plus an
+`op_utils` Mojo sibling package mirroring `max/_interpreter_ops/op_utils`:
+
+- `elementwise_ops.mojo` — binary/unary ops + Python-scalar variants
+  (`x * 0.5`, `x ** 3`, int `x + 1`), tanh; contiguous, dtype dispatch at
+  runtime.
+- `nn_ops.mojo` — batch-norm inference (NCHW), layer-norm (last dim, also
+  emits float32 mean/rstd like `aten.native_layer_norm`), row softmax with
+  fused scale + causal mask, trailing-dims mean, max-pool2d with torch
+  indices, embedding gather, bool `all()`. All hand-rolled as parallel-for
+  kernels (one task per output element/row), CPU + GPU.
+- `data_movement_ops.mojo` — permute-copy (rank ≤ 4), narrow-copy
+  (split/slice), dtype cast. Dispatch on element *size*, not dtype.
+- `matmul_ops.mojo` — binds `linalg`'s `_matmul_gpu` / `batched_matmul`
+  (the same kernels the graph compiler uses, including the cuBLAS vendor
+  path with a globally cached handle) + a bias-add epilogue kernel.
+  The precompiled kernel packages (`.mojoc` under `modular/lib/mojo/`) are
+  importable from any `mojo.importer` module out of the box — the importer
+  sets `MODULAR_MOJO_MAX_IMPORT_PATH` on every `mojo build`.
+- `conv_ops.mojo` — two strategies: batch-1/groups-1 conv runs as
+  im2col + cuBLAS matmul, arranged so the torch `(K,C,R,S)` weight is used
+  as-is (viewed `(K, C·R·S)`) and the matmul output is already NCHW —
+  zero layout permutes, and 1×1 stride-1 convs skip im2col entirely
+  (pure matmul on buffer views). Everything else calls `nn.conv.conv_gpu`
+  with `filter_is_fcrs=True` (torch weight layout unchanged), which routes
+  to cuDNN on NVIDIA GPUs, with NHWC permutes around the call.
+
+Some ops need no kernel at all (Python-only fast paths):
+
+- `view` / `_unsafe_view` / `unsqueeze` alias the driver buffer via
+  `Buffer.view` (zero copy — and unlike the graph path, actually matches
+  torch's aliasing semantics for in-place ops after a view).
+- `empty` / `empty_strided` are a bare `driver.Buffer` allocation (the old
+  path launched a zeros kernel through the graph).
+- `_to_copy` to CPU uses a driver-level D2H copy (`Buffer.to_numpy`),
+  stream-ordered with the enqueued kernels — the graph-based
+  `Tensor.to(CPU())` costs a flat ~2.2 ms.
+- `arange` builds on host with exact torch semantics and does one H2D copy.
+- `cat` where all-but-one input is the legacy 1-D empty (uninitialized KV
+  caches) is a single narrow-copy.
+- `scaled_dot_product_attention` decomposes into `bmm(q, kᵀ)` → fused
+  scale+causal softmax → `bmm(probs, v)` on buffer views (4 enqueues,
+  ~186 ms/call on the graph path → ~50 µs).
+
+### How the per-op overhead was brought to CUDA level
+
+Three structural changes, in order of impact:
+
+1. **Fast ops receive `TorchMaxTensor` arguments directly** and return
+   wrapped results (`aten_fast.NOT_HANDLED` sentinel triggers the generic
+   fallback), skipping the recursive argument-conversion walk both ways.
+2. **`TorchMaxTensor` stores the raw driver buffer** (`_from_buffer`) and
+   only builds the `MaxEagerTensor` wrapper lazily on first `_max_data`
+   access. Fast-path tensors that only ever feed other fast ops (the vast
+   majority) never construct one (~1.7 µs + a sharding-mesh init each);
+   slow-path fallbacks materialize it on demand.
+3. **Hot functions opt out of beartype** with `@typing.no_type_check`
+   (the claw hook honors it), and the device lookup is `functools.cache`d.
+
+Resulting per-op end-to-end costs at the torch level (H100 box): view
+~8 µs, relu ~10 µs, addmm ~20 µs, conv ~35 µs — at which point resnet-18
+matches torch CUDA. The bare `linalg` vendor matmul call is 8.8 µs.
+Remaining short-gpt2 overhead: two unavoidable sync points (the HF mask
+`.all().item()` check and the final D2H) each drain the ~600-kernel-deep
+queue, and transpose/split/cat run as real copy kernels where CUDA has
+zero-cost strided views.
+
+### Gotchas discovered (worth keeping in mind)
+
+- `PythonModuleBuilder.def_function` supports at most **8 positional
+  args**; pack extra scalars into a tuple (the interpreter does the same).
+- A GPU kernel closure must only capture **parameters of the enclosing
+  generic function** (plus pointers via `@__copy_capture`). Capturing a
+  dispatcher-level `var` produced garbage on GPU (the `AllBool` bug: reads
+  of a captured size ran off the buffer).
+- `torch.library.impl("aten::mean", ...)` only covers the *default*
+  overload: `mean.dim` silently decomposed into a chain of graph-path
+  sum/div ops (~12 ms). Overloads must be registered explicitly.
+- torch's `is_causal=True` means the **top-left aligned**
+  `tril(ones(L, S))` mask, not the bottom-right alignment generation code
+  usually wants.
+- The runtime `DType` value has no size accessor in current nightlies —
+  map dtypes to like-sized unsigned ints by hand for copy kernels.
+- MAX's matmul dispatchers (`_matmul_gpu`, `matmul_vendor` wrapper) force
+  TF32 for fp32 (max abs diff ~3e-2 vs CPU at K=768), and the graph path
+  inherits that. Calling `linalg.matmul.vendor.blas.matmul` directly with
+  its `use_tf32=False` default gives full-fp32 cuBLAS GEMM — and measured
+  *lower* per-call overhead (8.8 µs vs 17 µs) than going through the
+  dispatch heuristics.
+
 ## Follow-up work (not in this PoC)
 
 - Scalar (tensor ⊕ python number) variants — one extra kernel per op

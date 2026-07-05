@@ -336,7 +336,11 @@ def test_native_batch_norm_legit_no_training_2d_input(device: str):
 
 def test_aten_native_batch_norm_inference(conf: Conf, call_checker: CallChecker):
     """Test aten.native_batch_norm in inference mode (training=False)."""
-    call_checker.register(aten_functions.aten_native_batch_norm)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten_native_batch_norm, aten_fast.fast_aten_native_batch_norm
+    )
 
     def fn(input_tensor, weight, bias, running_mean, running_var):
         return aten.native_batch_norm(
@@ -377,7 +381,11 @@ def test_aten_native_layer_norm_basic(
     conf: Conf, dtype: torch.dtype, call_checker: CallChecker
 ):
     """Test aten.native_layer_norm returns (output, mean, rstd)"""
-    call_checker.register(aten_functions.aten_native_layer_norm)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten_native_layer_norm, aten_fast.fast_aten_native_layer_norm
+    )
 
     def fn(x, weight, bias):
         out, mean, rstd = aten.native_layer_norm(x, [10], weight, bias, 1e-5)
@@ -420,7 +428,11 @@ def test_aten_native_layer_norm_different_eps(
     conf: Conf, eps: float, call_checker: CallChecker
 ):
     """Test aten.native_layer_norm with different epsilon values"""
-    call_checker.register(aten_functions.aten_native_layer_norm)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten_native_layer_norm, aten_fast.fast_aten_native_layer_norm
+    )
 
     def fn(x, weight, bias):
         out, mean, rstd = aten.native_layer_norm(x, [10], weight, bias, eps)
@@ -3349,7 +3361,11 @@ def test_aten_erf_basic(conf: Conf, dtype: torch.dtype):
 
 
 def test_aten__unsafe_view(conf: Conf, call_checker: CallChecker):
-    call_checker.register(aten_functions.aten__unsafe_view)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten__unsafe_view, aten_fast.fast_aten__unsafe_view
+    )
 
     def fn(x):
         return aten._unsafe_view(x, [2, 6])
@@ -3362,7 +3378,11 @@ def test_aten__unsafe_view(conf: Conf, call_checker: CallChecker):
 def test_aten__unsafe_view_dtypes(
     conf: Conf, dtype: torch.dtype, call_checker: CallChecker
 ):
-    call_checker.register(aten_functions.aten__unsafe_view)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten__unsafe_view, aten_fast.fast_aten__unsafe_view
+    )
 
     def fn(x):
         return aten._unsafe_view(x, [4, -1])
