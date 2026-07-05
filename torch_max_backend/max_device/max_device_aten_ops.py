@@ -129,12 +129,26 @@ def _eager_impl(fast_name: str, default: Callable) -> Callable:
     the inputs don't qualify for the fast path, so registering them is
     always behavior-preserving. Only the eager (max_device) registrations
     use this — the torch.compile backend is untouched.
+
+    The import of the Mojo extensions (which compiles them on a cold
+    cache, ~30s) is deferred to the first call of a fast-path op, so
+    `import torch_max_backend` and torch.compile-only workloads never
+    pay for it.
     """
     if not fast_eager_enabled():
         return default
-    from torch_max_backend.eager_kernels import aten_fast
 
-    return getattr(aten_fast, fast_name)
+    fast_fn: Callable | None = None
+
+    def lazy_dispatcher(*args, **kwargs):
+        nonlocal fast_fn
+        if fast_fn is None:
+            from torch_max_backend.eager_kernels import aten_fast
+
+            fast_fn = getattr(aten_fast, fast_name)
+        return fast_fn(*args, **kwargs)
+
+    return lazy_dispatcher
 
 
 # ----------------------------------------------------------------------------------

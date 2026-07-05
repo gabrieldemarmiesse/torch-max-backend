@@ -22,7 +22,6 @@ import sys
 from pathlib import Path
 
 import mojo.importer  # noqa: F401  — installs the .mojo meta-path importer
-
 from max import driver
 from max.experimental.tensor import Tensor as MaxEagerTensor
 
@@ -98,9 +97,7 @@ def _driver_buffer(tensor: MaxEagerTensor) -> driver.Buffer:
     return buffer
 
 
-def binary_op(
-    mojo_fn, lhs: MaxEagerTensor, rhs: MaxEagerTensor
-) -> MaxEagerTensor:
+def binary_op(mojo_fn, lhs: MaxEagerTensor, rhs: MaxEagerTensor) -> MaxEagerTensor:
     """Run an elementwise binary kernel on two identically-shaped tensors."""
     lhs_buffer = _driver_buffer(lhs)
     rhs_buffer = _driver_buffer(rhs)

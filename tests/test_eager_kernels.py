@@ -14,14 +14,7 @@ def setup_max_device():
     register_max_devices()
 
 
-BINARY_OPS = [
-    torch.add,
-    torch.sub,
-    torch.mul,
-    torch.div,
-    torch.maximum,
-    torch.minimum,
-]
+BINARY_OPS = [torch.add, torch.sub, torch.mul, torch.div, torch.maximum, torch.minimum]
 UNARY_OPS = [torch.relu, torch.exp]
 
 

@@ -109,7 +109,7 @@ def _bin_elementwise[
                 out_ptr.store[width=width](i, min(a, b))
 
         if ctx.api() == "cpu":
-            elementwise[func, simd_width = simd_width_of[dtype]()](
+            elementwise[func, simd_width=simd_width_of[dtype]()](
                 Coord(size), ctx
             )
         else:
@@ -215,8 +215,7 @@ def _bin_dispatcher[
         )
     else:
         raise Error(
-            "unsupported dtype for fast binary elementwise op: "
-            + String(dtype)
+            "unsupported dtype for fast binary elementwise op: " + String(dtype)
         )
 
 
@@ -263,7 +262,7 @@ def _unary_elementwise[
                     out_ptr.store[width=width](i, exp(a))
 
         if ctx.api() == "cpu":
-            elementwise[func, simd_width = simd_width_of[dtype]()](
+            elementwise[func, simd_width=simd_width_of[dtype]()](
                 Coord(size), ctx
             )
         else:
@@ -312,8 +311,7 @@ def _unary_dispatcher[
         )
     else:
         raise Error(
-            "unsupported dtype for fast unary elementwise op: "
-            + String(dtype)
+            "unsupported dtype for fast unary elementwise op: " + String(dtype)
         )
 
 

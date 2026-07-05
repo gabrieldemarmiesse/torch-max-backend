@@ -30,9 +30,7 @@ def _is_float_tensor(x) -> bool:
 
 
 def _try_binary(mojo_fn, lhs, rhs) -> MaxEagerTensor | None:
-    if not (
-        isinstance(lhs, MaxEagerTensor) and isinstance(rhs, MaxEagerTensor)
-    ):
+    if not (isinstance(lhs, MaxEagerTensor) and isinstance(rhs, MaxEagerTensor)):
         return None
     try:
         return eager_kernels.binary_op(mojo_fn, lhs, rhs)

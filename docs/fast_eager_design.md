@@ -30,7 +30,11 @@ itself already uses internally for its eager interpreter
 - The module is imported through `mojo.importer` (official Mojo import
   hook): first import runs `mojo build --emit shared-lib`, caches under
   `__mojocache__/elementwise_ops.hash-<h>.so`, and every later import
-  (any process) just dlopens it.
+  (any process) just dlopens it. The import itself is **deferred to the
+  first fast-path op call** (`_eager_impl` in `max_device_aten_ops.py`),
+  so `import torch_max_backend` and torch.compile-only workloads never
+  pay the compile; a process that never touches max_device eager mode
+  compiles nothing.
 - Python-visible functions receive the `max.driver.Buffer` objects
   directly plus `device._device_context_ptr()`. The kernel is enqueued
   on **MAX's own DeviceContext** (same device queue the MAX driver
@@ -82,12 +86,27 @@ Measured on this machine:
 
 Consequences for the design:
 
+- **Compile on first use, but at module granularity, not per-variant.**
+  causal-conv1d-mojo compiles one `.so` per comptime config on first
+  use because its variant space is combinatorial (dtype × width × 8
+  bools) and sparsely used. Our variant space is the opposite — small
+  (op × dtype) and dense — and the fixed cost dominates: a single
+  (op, dtype, GPU-only) variant compiles in **8.5 s** on this machine,
+  while the 8-op × 9-dtype × CPU+GPU module compiles ~150 kernel
+  instantiations in 31 s. Per-variant lazy compilation would multiply
+  total compile time ~40× (full coverage: hours instead of ~10 min)
+  and re-pay ~8.5 s every time a new (op, dtype) pair first appears.
+  First-use compilation at module granularity (what `_eager_impl`'s
+  lazy import does) keeps the lazy behavior with none of that cost.
 - **Don't do one extension per op** (200 modules × 10 s fixed ≈ +30 min
   of avoidable fixed compile cost, and 200 files to manage). Group ops
   by category into modules of ~10–20 ops (elementwise_binary,
   elementwise_unary, reductions, matmul, data_movement, ...) exactly
   like `max/_interpreter_ops` does (~25 modules). Full cold build of
-  ~20 modules ≈ 10 min sequential, parallelizable across modules.
+  ~20 modules ≈ 10 min sequential, parallelizable across modules. With
+  multiple category modules, import each lazily on the first call of an
+  op in that category, so a given workload only compiles the categories
+  it actually uses.
 - **Don't do one extension per dtype** — dtype dispatch at runtime in
   Mojo costs one branch chain per call (~ns) and collapses the
   extension count by ~10×.
