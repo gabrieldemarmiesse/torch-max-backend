@@ -8,6 +8,7 @@ from max.experimental.tensor import Tensor as MaxEagerTensor
 from max.experimental.torch.torch import torch_dtype_to_max
 
 from torch_max_backend import aten_functions
+from torch_max_backend.flags import fast_eager_enabled
 from torch_max_backend.max_device.torch_max_tensor import (
     TorchMaxTensor,
     find_equivalent_max_device,
@@ -114,12 +115,26 @@ def convert_all_lazy_to_torch_max_tensors(x: Any) -> Any:
 
 def wrap_for_max_device(func: Callable) -> Callable:
     def wrapper(*args, **kwargs):
-        print("inside wrapper for", func.__name__)
         args, kwargs = convert_all_torch_max_tensors_to_lazy((args, kwargs))
         result = func(*args, **kwargs)
         return convert_all_lazy_to_torch_max_tensors(result)
 
     return wrapper
+
+
+def _eager_impl(fast_name: str, default: Callable) -> Callable:
+    """Use the Mojo-extension fast implementation for eager mode if enabled.
+
+    The fast implementations fall back to `default` at call time whenever
+    the inputs don't qualify for the fast path, so registering them is
+    always behavior-preserving. Only the eager (max_device) registrations
+    use this — the torch.compile backend is untouched.
+    """
+    if not fast_eager_enabled():
+        return default
+    from torch_max_backend.eager_kernels import aten_fast
+
+    return getattr(aten_fast, fast_name)
 
 
 # ----------------------------------------------------------------------------------
@@ -212,7 +227,9 @@ register_aten_op("aten::_softmax")(wrap_for_max_device(aten_functions.aten__soft
 
 register_aten_op("aten::abs")(wrap_for_max_device(aten_functions.aten_abs))
 register_aten_op("aten::acos")(wrap_for_max_device(aten_functions.aten_acos))
-register_aten_op("aten::add.Tensor")(wrap_for_max_device(aten_functions.aten_add))
+register_aten_op("aten::add.Tensor")(
+    wrap_for_max_device(_eager_impl("fast_aten_add", aten_functions.aten_add))
+)
 
 
 @register_aten_op("aten::add_.Tensor")
@@ -287,7 +304,9 @@ register_aten_op("aten::cumsum")(wrap_for_max_device(aten_functions.aten_cumsum)
 
 register_aten_op("aten::detach")(wrap_for_max_device(aten_functions.aten_detach))
 
-register_aten_op("aten::div.Tensor")(wrap_for_max_device(aten_functions.aten_div))
+register_aten_op("aten::div.Tensor")(
+    wrap_for_max_device(_eager_impl("fast_aten_div", aten_functions.aten_div))
+)
 
 register_aten_op("aten::embedding")(wrap_for_max_device(aten_functions.aten_embedding))
 
@@ -329,7 +348,9 @@ register_aten_op("aten::eq")(wrap_for_max_device(aten_functions.aten_eq))
 register_aten_op("aten::eq.Scalar")(wrap_for_max_device(aten_functions.aten_eq))
 
 register_aten_op("aten::erf")(wrap_for_max_device(aten_functions.aten_erf))
-register_aten_op("aten::exp")(wrap_for_max_device(aten_functions.aten_exp))
+register_aten_op("aten::exp")(
+    wrap_for_max_device(_eager_impl("fast_aten_exp", aten_functions.aten_exp))
+)
 register_aten_op("aten::expand")(wrap_for_max_device(aten_functions.aten_expand))
 
 register_aten_op("aten::fill.Scalar")(
@@ -421,7 +442,9 @@ register_aten_op("aten::max_pool2d_with_indices")(
     wrap_for_max_device(aten_functions.aten_max_pool2d_with_indices)
 )
 
-register_aten_op("aten::maximum")(wrap_for_max_device(aten_functions.aten_maximum))
+register_aten_op("aten::maximum")(
+    wrap_for_max_device(_eager_impl("fast_aten_maximum", aten_functions.aten_maximum))
+)
 register_aten_op("aten::mean")(wrap_for_max_device(aten_functions.aten_mean))
 
 
@@ -473,9 +496,13 @@ def max_device_min_dim_min(
     return (min, min_indices)
 
 
-register_aten_op("aten::minimum")(wrap_for_max_device(aten_functions.aten_minimum))
+register_aten_op("aten::minimum")(
+    wrap_for_max_device(_eager_impl("fast_aten_minimum", aten_functions.aten_minimum))
+)
 
-register_aten_op("aten::mul.Tensor")(wrap_for_max_device(aten_functions.aten_mul))
+register_aten_op("aten::mul.Tensor")(
+    wrap_for_max_device(_eager_impl("fast_aten_mul", aten_functions.aten_mul))
+)
 
 register_aten_op("aten::mm")(wrap_for_max_device(aten_functions.aten_mm))
 
@@ -515,7 +542,9 @@ register_aten_op("aten::pow.Tensor_Tensor")(
     wrap_for_max_device(aten_functions.aten_pow)
 )
 
-register_aten_op("aten::relu")(wrap_for_max_device(aten_functions.aten_relu))
+register_aten_op("aten::relu")(
+    wrap_for_max_device(_eager_impl("fast_aten_relu", aten_functions.aten_relu))
+)
 
 
 @register_aten_op("aten::relu_")
@@ -567,7 +596,9 @@ register_aten_op("aten::squeeze.dim")(wrap_for_max_device(aten_functions.aten_sq
 
 register_aten_op("aten::stack")(wrap_for_max_device(aten_functions.aten_stack))
 
-register_aten_op("aten::sub.Tensor")(wrap_for_max_device(aten_functions.aten_sub))
+register_aten_op("aten::sub.Tensor")(
+    wrap_for_max_device(_eager_impl("fast_aten_sub", aten_functions.aten_sub))
+)
 register_aten_op("aten::sum.dim_IntList")(wrap_for_max_device(aten_functions.aten_sum))
 register_aten_op("aten::t")(wrap_for_max_device(aten_functions.aten_t))
 register_aten_op("aten::tan")(wrap_for_max_device(aten_functions.aten_tan))
