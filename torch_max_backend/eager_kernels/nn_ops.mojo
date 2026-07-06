@@ -28,7 +28,7 @@ from op_utils import _get_ctx, _get_dtype, _make_ptr
 
 @always_inline
 def _parallel_for[
-    func: def[width: Int, alignment: Int = 1] (Coord) capturing [_] -> None
+    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None
 ](count: Int, ctx: DeviceContext) raises:
     """Run `func` once per index in [0, count) on the device queue."""
     if ctx.api() == "cpu":
@@ -111,18 +111,45 @@ def _batch_norm_dispatcher(
 
     if dtype == DType.float32:
         _batch_norm[DType.float32](
-            out_addr, in_addr, mean_addr, var_addr, gamma_addr, beta_addr,
-            eps_val, channels_val, inner_val, total, ctx,
+            out_addr,
+            in_addr,
+            mean_addr,
+            var_addr,
+            gamma_addr,
+            beta_addr,
+            eps_val,
+            channels_val,
+            inner_val,
+            total,
+            ctx,
         )
     elif dtype == DType.float16:
         _batch_norm[DType.float16](
-            out_addr, in_addr, mean_addr, var_addr, gamma_addr, beta_addr,
-            eps_val, channels_val, inner_val, total, ctx,
+            out_addr,
+            in_addr,
+            mean_addr,
+            var_addr,
+            gamma_addr,
+            beta_addr,
+            eps_val,
+            channels_val,
+            inner_val,
+            total,
+            ctx,
         )
     elif dtype == DType.bfloat16:
         _batch_norm[DType.bfloat16](
-            out_addr, in_addr, mean_addr, var_addr, gamma_addr, beta_addr,
-            eps_val, channels_val, inner_val, total, ctx,
+            out_addr,
+            in_addr,
+            mean_addr,
+            var_addr,
+            gamma_addr,
+            beta_addr,
+            eps_val,
+            channels_val,
+            inner_val,
+            total,
+            ctx,
         )
     else:
         raise Error("unsupported dtype for fast batch_norm: " + String(dtype))
@@ -158,7 +185,9 @@ def _layer_norm[
 
     @always_inline
     @parameter
-    @__copy_capture(out_ptr, mean_out_ptr, rstd_out_ptr, in_ptr, gamma_ptr, beta_ptr)
+    @__copy_capture(
+        out_ptr, mean_out_ptr, rstd_out_ptr, in_ptr, gamma_ptr, beta_ptr
+    )
     def func[width: Int, alignment: Int = 1](idx: Coord):
         var r = Int(idx[0].value())
         var base = r * cols
@@ -206,18 +235,42 @@ def _layer_norm_dispatcher(
 
     if dtype == DType.float32:
         _layer_norm[DType.float32](
-            out_addr, mean_out_addr, rstd_out_addr, in_addr, gamma_addr,
-            beta_addr, eps_val, rows_val, cols_val, ctx,
+            out_addr,
+            mean_out_addr,
+            rstd_out_addr,
+            in_addr,
+            gamma_addr,
+            beta_addr,
+            eps_val,
+            rows_val,
+            cols_val,
+            ctx,
         )
     elif dtype == DType.float16:
         _layer_norm[DType.float16](
-            out_addr, mean_out_addr, rstd_out_addr, in_addr, gamma_addr,
-            beta_addr, eps_val, rows_val, cols_val, ctx,
+            out_addr,
+            mean_out_addr,
+            rstd_out_addr,
+            in_addr,
+            gamma_addr,
+            beta_addr,
+            eps_val,
+            rows_val,
+            cols_val,
+            ctx,
         )
     elif dtype == DType.bfloat16:
         _layer_norm[DType.bfloat16](
-            out_addr, mean_out_addr, rstd_out_addr, in_addr, gamma_addr,
-            beta_addr, eps_val, rows_val, cols_val, ctx,
+            out_addr,
+            mean_out_addr,
+            rstd_out_addr,
+            in_addr,
+            gamma_addr,
+            beta_addr,
+            eps_val,
+            rows_val,
+            cols_val,
+            ctx,
         )
     else:
         raise Error("unsupported dtype for fast layer_norm: " + String(dtype))
@@ -298,18 +351,36 @@ def _softmax_rows_dispatcher(
 
     if dtype == DType.float32:
         _softmax_rows[DType.float32](
-            out_addr, in_addr, rows_val, cols_val, scale_val, causal_val,
-            q_len_val, ctx,
+            out_addr,
+            in_addr,
+            rows_val,
+            cols_val,
+            scale_val,
+            causal_val,
+            q_len_val,
+            ctx,
         )
     elif dtype == DType.float16:
         _softmax_rows[DType.float16](
-            out_addr, in_addr, rows_val, cols_val, scale_val, causal_val,
-            q_len_val, ctx,
+            out_addr,
+            in_addr,
+            rows_val,
+            cols_val,
+            scale_val,
+            causal_val,
+            q_len_val,
+            ctx,
         )
     elif dtype == DType.bfloat16:
         _softmax_rows[DType.bfloat16](
-            out_addr, in_addr, rows_val, cols_val, scale_val, causal_val,
-            q_len_val, ctx,
+            out_addr,
+            in_addr,
+            rows_val,
+            cols_val,
+            scale_val,
+            causal_val,
+            q_len_val,
+            ctx,
         )
     else:
         raise Error("unsupported dtype for fast softmax: " + String(dtype))
@@ -456,18 +527,63 @@ def _max_pool2d_dispatcher(
 
     if dtype == DType.float32:
         _max_pool2d[DType.float32](
-            out_addr, idx_addr, in_addr, in_h, in_w, out_h, out_w, kh, kw,
-            stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, planes, ctx,
+            out_addr,
+            idx_addr,
+            in_addr,
+            in_h,
+            in_w,
+            out_h,
+            out_w,
+            kh,
+            kw,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            dil_h,
+            dil_w,
+            planes,
+            ctx,
         )
     elif dtype == DType.float16:
         _max_pool2d[DType.float16](
-            out_addr, idx_addr, in_addr, in_h, in_w, out_h, out_w, kh, kw,
-            stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, planes, ctx,
+            out_addr,
+            idx_addr,
+            in_addr,
+            in_h,
+            in_w,
+            out_h,
+            out_w,
+            kh,
+            kw,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            dil_h,
+            dil_w,
+            planes,
+            ctx,
         )
     elif dtype == DType.bfloat16:
         _max_pool2d[DType.bfloat16](
-            out_addr, idx_addr, in_addr, in_h, in_w, out_h, out_w, kh, kw,
-            stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, planes, ctx,
+            out_addr,
+            idx_addr,
+            in_addr,
+            in_h,
+            in_w,
+            out_h,
+            out_w,
+            kh,
+            kw,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            dil_h,
+            dil_w,
+            planes,
+            ctx,
         )
     else:
         raise Error("unsupported dtype for fast max_pool2d: " + String(dtype))
@@ -552,13 +668,23 @@ def _gather0_dispatcher(
 
     if idx_dtype == DType.int64:
         _gather0_data_dispatch[DType.int64](
-            dtype, out_addr, weight_addr, indices_addr, num_indices_val,
-            row_len_val, ctx,
+            dtype,
+            out_addr,
+            weight_addr,
+            indices_addr,
+            num_indices_val,
+            row_len_val,
+            ctx,
         )
     elif idx_dtype == DType.int32:
         _gather0_data_dispatch[DType.int32](
-            dtype, out_addr, weight_addr, indices_addr, num_indices_val,
-            row_len_val, ctx,
+            dtype,
+            out_addr,
+            weight_addr,
+            indices_addr,
+            num_indices_val,
+            row_len_val,
+            ctx,
         )
     else:
         raise Error(
@@ -618,22 +744,32 @@ def PyInit_nn_ops() abi("C") -> PythonObject:
         var b = PythonModuleBuilder("nn_ops")
         b.def_function[_batch_norm_dispatcher](
             "BatchNormInference",
-            docstring="out = (x - mean[c]) * gamma[c] / sqrt(var[c] + eps) + beta[c] (NC..., contiguous)",
+            docstring=(
+                "out = (x - mean[c]) * gamma[c] / sqrt(var[c] + eps) + beta[c]"
+                " (NC..., contiguous)"
+            ),
         )
         b.def_function[_layer_norm_dispatcher](
             "LayerNorm",
-            docstring="layer norm over the last dim; also writes float32 mean/rstd per row",
+            docstring=(
+                "layer norm over the last dim; also writes float32 mean/rstd"
+                " per row"
+            ),
         )
         b.def_function[_softmax_rows_dispatcher](
             "SoftmaxRows",
             docstring="row softmax of scale*x with optional causal mask",
         )
         b.def_function[_mean_rows_dispatcher](
-            "MeanRows", docstring="mean over the trailing dims (rows, cols) -> (rows,)"
+            "MeanRows",
+            docstring="mean over the trailing dims (rows, cols) -> (rows,)",
         )
         b.def_function[_max_pool2d_dispatcher](
             "MaxPool2dWithIndices",
-            docstring="max pool over NCHW contiguous input, returns values and int64 plane indices",
+            docstring=(
+                "max pool over NCHW contiguous input, returns values and int64"
+                " plane indices"
+            ),
         )
         b.def_function[_gather0_dispatcher](
             "Gather0", docstring="embedding lookup: gather rows of a 2D table"

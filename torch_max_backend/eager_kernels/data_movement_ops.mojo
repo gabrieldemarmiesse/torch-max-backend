@@ -23,11 +23,7 @@ from op_utils import _get_ctx, _get_dtype, _make_ptr
 @always_inline
 def _element_size(dtype: DType) raises -> Int:
     """Element size in bytes; copies dispatch on size, not dtype."""
-    if (
-        dtype == DType.float32
-        or dtype == DType.int32
-        or dtype == DType.uint32
-    ):
+    if dtype == DType.float32 or dtype == DType.int32 or dtype == DType.uint32:
         return 4
     if (
         dtype == DType.float16
@@ -36,11 +32,7 @@ def _element_size(dtype: DType) raises -> Int:
         or dtype == DType.uint16
     ):
         return 2
-    if (
-        dtype == DType.float64
-        or dtype == DType.int64
-        or dtype == DType.uint64
-    ):
+    if dtype == DType.float64 or dtype == DType.int64 or dtype == DType.uint64:
         return 8
     if dtype == DType.int8 or dtype == DType.uint8 or dtype == DType.bool:
         return 1
@@ -49,7 +41,7 @@ def _element_size(dtype: DType) raises -> Int:
 
 @always_inline
 def _parallel_for[
-    func: def[width: Int, alignment: Int = 1] (Coord) capturing [_] -> None
+    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None
 ](count: Int, ctx: DeviceContext) raises:
     if ctx.api() == "cpu":
         elementwise[func, simd_width=1](Coord(count), ctx)
@@ -200,23 +192,43 @@ def _narrow_copy_dispatcher(
     var size = _element_size(dtype)
     if size == 4:
         _narrow_copy[DType.uint32](
-            out_addr, in_addr, outer_val, src_stride_val, copy_len_val,
-            src_offset_val, ctx,
+            out_addr,
+            in_addr,
+            outer_val,
+            src_stride_val,
+            copy_len_val,
+            src_offset_val,
+            ctx,
         )
     elif size == 2:
         _narrow_copy[DType.uint16](
-            out_addr, in_addr, outer_val, src_stride_val, copy_len_val,
-            src_offset_val, ctx,
+            out_addr,
+            in_addr,
+            outer_val,
+            src_stride_val,
+            copy_len_val,
+            src_offset_val,
+            ctx,
         )
     elif size == 8:
         _narrow_copy[DType.uint64](
-            out_addr, in_addr, outer_val, src_stride_val, copy_len_val,
-            src_offset_val, ctx,
+            out_addr,
+            in_addr,
+            outer_val,
+            src_stride_val,
+            copy_len_val,
+            src_offset_val,
+            ctx,
         )
     elif size == 1:
         _narrow_copy[DType.uint8](
-            out_addr, in_addr, outer_val, src_stride_val, copy_len_val,
-            src_offset_val, ctx,
+            out_addr,
+            in_addr,
+            outer_val,
+            src_stride_val,
+            copy_len_val,
+            src_offset_val,
+            ctx,
         )
     else:
         raise Error("unsupported element size for fast narrow copy")
@@ -269,7 +281,9 @@ def _cast_to[
     elif dst == DType.bool:
         _cast[src, DType.bool](out_addr, in_addr, size, ctx)
     else:
-        raise Error("unsupported destination dtype for fast cast: " + String(dst))
+        raise Error(
+            "unsupported destination dtype for fast cast: " + String(dst)
+        )
 
 
 def _cast_dispatcher(
@@ -313,14 +327,20 @@ def PyInit_data_movement_ops() abi("C") -> PythonObject:
         var b = PythonModuleBuilder("data_movement_ops")
         b.def_function[_permute_copy_dispatcher](
             "PermuteCopy",
-            docstring="materialize a permutation of a contiguous tensor (rank <= 4)",
+            docstring=(
+                "materialize a permutation of a contiguous tensor (rank <= 4)"
+            ),
         )
         b.def_function[_narrow_copy_dispatcher](
             "NarrowCopy",
-            docstring="copy `outer` blocks of `copy_len` elements with a source stride/offset",
+            docstring=(
+                "copy `outer` blocks of `copy_len` elements with a source"
+                " stride/offset"
+            ),
         )
         b.def_function[_cast_dispatcher](
-            "Cast", docstring="elementwise dtype cast between contiguous buffers"
+            "Cast",
+            docstring="elementwise dtype cast between contiguous buffers",
         )
         return b.finalize()
     except e:

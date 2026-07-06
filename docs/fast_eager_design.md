@@ -180,19 +180,19 @@ only compiles on the first call of an op in its category), plus an
   kernels (one task per output element/row), CPU + GPU.
 - `data_movement_ops.mojo` — permute-copy (rank ≤ 4), narrow-copy
   (split/slice), dtype cast. Dispatch on element *size*, not dtype.
-- `matmul_ops.mojo` — binds `linalg`'s `_matmul_gpu` / `batched_matmul`
-  (the same kernels the graph compiler uses, including the cuBLAS vendor
-  path with a globally cached handle) + a bias-add epilogue kernel.
-  The precompiled kernel packages (`.mojoc` under `modular/lib/mojo/`) are
-  importable from any `mojo.importer` module out of the box — the importer
-  sets `MODULAR_MOJO_MAX_IMPORT_PATH` on every `mojo build`.
-- `conv_ops.mojo` — two strategies: batch-1/groups-1 conv runs as
-  im2col + cuBLAS matmul, arranged so the torch `(K,C,R,S)` weight is used
-  as-is (viewed `(K, C·R·S)`) and the matmul output is already NCHW —
-  zero layout permutes, and 1×1 stride-1 convs skip im2col entirely
-  (pure matmul on buffer views). Everything else calls `nn.conv.conv_gpu`
-  with `filter_is_fcrs=True` (torch weight layout unchanged), which routes
-  to cuDNN on NVIDIA GPUs, with NHWC permutes around the call.
+- `matmul_ops.mojo` — hand-written pure-Mojo GEMM kernels since
+  Milestone 3 (see below); originally bound `linalg`'s vendor cuBLAS
+  path, which is still exported as `MatmulVendor`/`BmmVendor` for A/B
+  benchmarking only. The precompiled kernel packages (`.mojoc` under
+  `modular/lib/mojo/`) are importable from any `mojo.importer` module
+  out of the box — the importer sets `MODULAR_MOJO_MAX_IMPORT_PATH` on
+  every `mojo build`.
+- `conv_ops.mojo` — batched im2col + the pure GEMM since Milestone 3,
+  arranged so the torch `(K,C,R,S)` weight is used as-is (viewed
+  `(K, C·R·S)`) and the matmul output is already NCHW — zero layout
+  permutes, and 1×1 stride-1 convs skip im2col entirely (pure matmul on
+  buffer views). Originally batch>1 or grouped convs fell back to
+  `nn.conv.conv_gpu` with `filter_is_fcrs=True`, which routes to cuDNN.
 
 Some ops need no kernel at all (Python-only fast paths):
 
@@ -256,6 +256,144 @@ zero-cost strided views.
   its `use_tf32=False` default gives full-fp32 cuBLAS GEMM — and measured
   *lower* per-call overhead (8.8 µs vs 17 µs) than going through the
   dispatch heuristics.
+
+## Milestone 3: pure-Mojo GEMM/conv — GPU eager mode with zero NVIDIA libraries
+
+### Why
+
+MAX's own kernels quietly depend on NVIDIA userspace libraries in exactly
+the situations eager mode produces. The GPU matmul dispatch
+(`linalg/matmul/gpu`) only engages Modular's native kernels when N/K are
+compile-time constants (`has_static_NK`) *and* `transpose_b=True` — on
+every NVIDIA arch including Blackwell. Eager ops have runtime shapes and
+`transpose_b=False`, so every `m>1, n>1` matmul lands on the cuBLAS
+fallback (only gemv and a naive kernel are pure Mojo). Convolution routes
+to cuDNN whenever the filter is in torch's FCRS layout, which is what our
+fast path uses. Neither library ships with MAX: they are found by
+dlopen-by-soname only because *CUDA torch* loads them into the process
+from its `nvidia/*` wheels. A pure-MAX process — or one with CPU-only
+torch — hard-aborts (`std/ffi`: `symbol not found: cublasCreate_v2`,
+uncatchable) on the first matmul. `MODULAR_DISABLE_VENDOR_FALLBACK` is a
+compile-time `-D` define and is not honored by the runtime JIT.
+
+The goal: run the GPU eager mode against a **CPU-only torch wheel** —
+~200 MB installed instead of ~4 GB of CUDA torch + NVIDIA wheels, no
+CUDA-version matching — with nothing but the kernel driver
+(`libcuda.so.1`) on the NVIDIA side.
+
+### What replaced cuBLAS/cuDNN
+
+Three GEMM kernels in `matmul_ops.mojo`, all dynamic-shape, exact fp32
+(FFMA, no TF32), fp32 accumulation, batched via `grid.z`, with edge
+guards on every dimension:
+
+- **`_gemm_pipe_kernel`** (2-stage) — 128×128 block tile, 8×8 register
+  tile per thread, 256 threads. A is staged through registers and stored
+  transposed in shared memory so compute reads both fragments as vectors;
+  B goes straight to shared memory via `cp.async`. Used for compute-bound
+  shapes (grid ≥ one wave) and all `transpose_b=True` shapes.
+- **`_gemm_pipe3_kernel`** (4-stage, `cp.async` only) — 64×64 and 64×32
+  tiles. Both operands are fetched with `cp.async` two-to-three slabs
+  ahead of compute — enough in-flight distance to cover L2 latency on the
+  L2-resident deep-K shapes convolution lowers to (A is stored row-major
+  since `cp.async` cannot transpose; compute reads it as per-row scalar
+  broadcasts, which warp-level broadcast makes free).
+- **`_gemm_smallm_kernel`** — for `m ≤ 8` (skinny transformer GEMMs,
+  gemv): one thread per output column streaming B at full bandwidth with
+  8 row accumulators, k-unrolled ×4 for memory-level parallelism.
+
+Plus **split-K with a workspace**: when the natural grid is under ~half a
+wave (K-rich/MN-poor shapes like `512×49 @ k=4608`), the dispatch splits
+K across up to 32 grid.z slices targeting ~3 blocks/SM. Each split writes
+its own `[m, n]` slice of a stream-ordered scratch buffer
+(`ctx.enqueue_create_buffer`), and a trivial reduce kernel sums the
+slices into C — deterministic, no atomics. Convolution reuses all of
+this: batched im2col (`(N, C·KH·KW, OH·OW)`, channel-major rows) feeds a
+shared-A `Bmm` (weights broadcast across the batch), and grouped convs
+run one GEMM per (sample, group) using element offsets into the same
+buffers.
+
+### Measured results (H100 PCIe, fp32)
+
+Microbenchmark over all 22 shapes resnet-18/gpt2 actually produce plus
+2048²/4096² references, against exact-fp32 cuBLAS in the same harness:
+**geomean 1.02×**. Several shapes are faster than cuBLAS (skinny lm-head
+0.80×, batched attention matmuls 0.12–0.32× — the vendor's strided-batch
+dispatch is poor there); the only remaining >1.4× shapes are the big
+compute-bound GEMMs (squares and the 504-token lm-head at ~10–12 TF/s vs
+cuBLAS ~15–17 TF/s FFMA).
+
+End-to-end (batch 1, incl. D2H), CUDA-torch environment:
+
+| model | pure Mojo | torch CUDA | cuBLAS-backed fast path (M2) |
+|---|---|---|---|
+| resnet-18 | **3.43 ms** | 3.01 ms | 3.25 ms |
+| gpt2 (7 tokens) | **14.3 ms** | 6.7 ms | 16.6 ms |
+| gpt2 (504 tokens) | **70.4 ms** | 73.3 ms | 82.6 ms |
+
+gpt2 at 504 tokens is now *faster than torch CUDA*, and both gpt2 rows
+improved over the cuBLAS-backed path — the cached-DeviceFunction enqueue
+(~2 µs) is cheaper than the vendor call's per-call handle lookup +
+`cublasSetStream` (~9–16 µs).
+
+The demo itself — `torch==2.11.0+cpu` from the PyTorch CPU index, zero
+NVIDIA packages on disk, no CUDA toolkit:
+
+```
+resnet-18  MAX GPU: 3.42 ms | torch CPU: 718 ms  -> 210x
+gpt2-504   MAX GPU: 70.3 ms | torch CPU: 1761 ms -> 25x
+NVIDIA userspace libs mapped in the process: []
+```
+
+Same GPU numbers as with CUDA torch, correctness preserved (resnet
+max_abs 3.8e-6 vs CPU, argmax match on both models).
+
+### Performance findings (ncu-driven, worth remembering)
+
+- **`ctx.enqueue_function[func]` re-runs `compile_function` on every
+  call** (`device_context.mojo`), which costs ~60–180 µs for large
+  kernels even when the runtime's module cache hits. Compile once and
+  cache the `DeviceFunction` in the process-global registry
+  (`_get_global_or_null` / `KGEN_CompilerRT_InsertGlobal` — the same
+  pattern the vendor BLAS handle uses): `op_utils._enqueue_cached`
+  brings enqueue to ~2 µs. (When benchmarking enqueue cost, beware
+  stream backpressure: past ~1000 queued launches the enqueue rate
+  degrades to the kernel rate and masquerades as CPU cost.)
+- **Fully comptime-unrolled GEMM inner loops explode register pressure**
+  (~190 regs/thread → 1 block/SM → 12.5% occupancy). Keep the K-slab
+  loop a runtime loop (register-tile indexing stays comptime) and set
+  launch bounds via
+  `@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=..., `nvvm.minctasm`=...)`
+  — the Mojo equivalent of `__launch_bounds__(threads, min_blocks)`;
+  ptxas then fits the register budget (128/thread at 2 blocks/SM).
+- **`Atomic.fetch_add` defaults to sequentially-consistent ordering**,
+  which serializes the memory system (a split-K epilogue got 30–800×
+  slower). Even `Ordering.RELAXED` atomics serialize per-address on
+  small outputs (22 splits × 32K-element tiles ≈ 150 µs of pure atomic
+  traffic). The workspace + reduce-kernel design is 3–10× faster on
+  deep-K shapes, needs no zero-fill pass, and is deterministic.
+- **`cp.async` requires size-aligned source addresses.** Split-K chunk
+  starts must be rounded to a BK multiple or 16-byte copies silently
+  corrupt (relerr ~1.0 on any shape whose K-chunk wasn't a multiple of
+  BK). The `fill=0` + `src_size` form handles all shape edges in one
+  instruction; 4-byte chunks are the fallback when a leading dimension
+  isn't divisible by 4.
+- **Latency-bound vs compute-bound shapes want different kernels.**
+  Deep-K, small-MN shapes (im2col output) are L2-resident and
+  long-scoreboard-stalled: they want thin tiles, deep `cp.async`
+  pipelines, and split-K for block count. Big GEMMs want fat tiles and
+  vector fragment loads. One kernel tuned for both loses ~30% on each.
+
+### Remaining gaps
+
+- Big compute-bound GEMMs sit at ~65–75% of cuBLAS's FFMA throughput
+  (fragment double-buffering in the inner loop and smarter block
+  swizzling for L2 are the known next steps).
+- float16/bfloat16 matmuls still use the simple single-buffer tiled
+  kernel (fp32 accumulation) without split-K — fine for the fallback
+  role they play today.
+- `conv_transpose` upstream is cuDNN-only in MAX; nothing on the fast
+  path uses it.
 
 ## Follow-up work (not in this PoC)
 

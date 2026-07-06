@@ -791,10 +791,10 @@ def fast_aten_bmm(input, mat2):
 
 
 # ---------------------------------------------------------------------------
-# Convolution (GPU only). Batch-1/groups-1 runs as im2col + cuBLAS matmul
-# with the torch (K,C,R,S) weight used as-is and NCHW output — no layout
-# permutes; everything else calls the MAX conv kernel (cuDNN path for
-# torch's filter layout) with NHWC permutes around it.
+# Convolution (GPU only), pure Mojo: batched im2col + the pure GEMM with
+# the torch (K,C,R,S) weight used as-is and NCHW output — no layout
+# permutes and no cuDNN. Grouped convolutions slice the channel-major
+# im2col rows and weights per group with element offsets.
 # ---------------------------------------------------------------------------
 
 
@@ -836,61 +836,54 @@ def fast_aten_convolution(
             ):
                 return NOT_HANDLED
             ctx = _ctx_ptr(in_buf.device)
-            if n == 1 and groups == 1:
-                cols = out_h * out_w
-                crs = c * kh * kw
-                if (kh, kw, sh, sw, ph, pw, dh, dw) == (1, 1, 1, 1, 0, 0, 1, 1):
-                    col = in_buf.view(in_buf.dtype, (crs, cols))
-                else:
-                    col = _new_buffer(in_buf.dtype, (crs, cols), in_buf.device)
-                    eager_kernels.conv_ops.Im2col(
-                        col,
-                        in_buf,
-                        (in_h, in_w, out_h, out_w, kh, kw, sh, sw, ph, pw, dh, dw, c),
-                        ctx,
-                    )
-                out = _new_buffer(in_buf.dtype, (out_c, cols), in_buf.device)
-                eager_kernels.matmul_ops.Matmul(
-                    out,
-                    w_buf.view(w_buf.dtype, (out_c, crs)),
+            cols = out_h * out_w
+            ckk = c * kh * kw
+            if (kh, kw, sh, sw, ph, pw, dh, dw) == (1, 1, 1, 1, 0, 0, 1, 1):
+                # 1x1 stride-1 conv: NCHW input already is the col matrix.
+                col = in_buf.view(in_buf.dtype, (n, ckk, cols))
+            else:
+                col = _new_buffer(in_buf.dtype, (n, ckk, cols), in_buf.device)
+                eager_kernels.conv_ops.Im2col(
                     col,
-                    (out_c, cols, crs, 0),
+                    in_buf,
+                    (in_h, in_w, out_h, out_w, kh, kw, sh, sw, ph, pw, dh, dw, c, n),
                     ctx,
                 )
-                if bias_buf is not None:
-                    eager_kernels.conv_ops.BiasAddChan(out, bias_buf, cols, ctx)
-                return _wrap(out.view(out.dtype, (1, out_c, out_h, out_w)))
-            in_nhwc = _permute_buffer(in_buf, [0, 2, 3, 1])
-            out_nhwc = _new_buffer(
-                in_buf.dtype, (n, out_h, out_w, out_c), in_buf.device
-            )
-            eager_kernels.conv_ops.Conv2d(
-                out_nhwc,
-                in_nhwc,
-                w_buf,
-                (
-                    n,
-                    in_h,
-                    in_w,
-                    c,
-                    out_c,
-                    kh,
-                    kw,
-                    out_h,
-                    out_w,
-                    sh,
-                    sw,
-                    dh,
-                    dw,
-                    ph,
-                    pw,
-                    groups,
-                ),
-                ctx,
-            )
+            out = _new_buffer(in_buf.dtype, (n, out_c, cols), in_buf.device)
+            if groups == 1:
+                eager_kernels.matmul_ops.Bmm(
+                    out,
+                    w_buf.view(w_buf.dtype, (out_c, ckk)),
+                    col,
+                    (n, out_c, cols, ckk, 0, 1),  # a_shared=1: broadcast weights
+                    ctx,
+                )
+            else:
+                # Channel-major im2col rows make each group a contiguous
+                # (crs_g, cols) slice; run one offset GEMM per (sample, group).
+                crs_g = c_per_group * kh * kw
+                oc_g = out_c // groups
+                w_view = w_buf.view(w_buf.dtype, (out_c, crs_g))
+                for s in range(n):
+                    for g in range(groups):
+                        eager_kernels.matmul_ops.Matmul(
+                            out,
+                            w_view,
+                            col,
+                            (
+                                oc_g,
+                                cols,
+                                crs_g,
+                                0,
+                                (s * out_c + g * oc_g) * cols,
+                                g * oc_g * crs_g,
+                                (s * c + g * c_per_group) * kh * kw * cols,
+                            ),
+                            ctx,
+                        )
             if bias_buf is not None:
-                eager_kernels.matmul_ops.BiasAddRow(out_nhwc, bias_buf, out_c, ctx)
-            return _wrap(_permute_buffer(out_nhwc, [0, 3, 1, 2]))
+                eager_kernels.conv_ops.BiasAddChan(out, bias_buf, (cols, out_c), ctx)
+            return _wrap(out.view(out.dtype, (n, out_c, out_h, out_w)))
     return NOT_HANDLED
 
 
