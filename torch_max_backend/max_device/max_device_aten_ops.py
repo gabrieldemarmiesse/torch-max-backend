@@ -1,7 +1,9 @@
+import math
 from collections.abc import Callable
 from typing import Any, no_type_check
 
 import max.driver
+import numpy as np
 import torch
 from max.driver import CPU
 from max.dtype import DType
@@ -17,6 +19,11 @@ from torch_max_backend.max_device.torch_max_tensor import (
 
 # Global registry for functions to register
 _aten_ops_registry: list[tuple[str, Callable]] = []
+
+# The flag is env-var driven and constant for the process lifetime;
+# per-call ops (view, factories) are hot enough that re-reading os.environ
+# on each call shows up in profiles.
+_FAST_EAGER = fast_eager_enabled()
 
 
 def register_aten_op(op_name: str):
@@ -134,7 +141,7 @@ def _eager_impl(fast_name: str, default: Callable) -> Callable:
     pay for it.
     """
     slow = wrap_for_max_device(default)
-    if not fast_eager_enabled():
+    if not _FAST_EAGER:
         return slow
 
     fast_fn: Callable | None = None
@@ -158,17 +165,26 @@ def _eager_impl(fast_name: str, default: Callable) -> Callable:
 # ----------------------------------------------------------------------------------
 # List of registered aten ops for max_device
 # ----------------------------------------------------------------------------------
+_aten_fast_module = None
+
+
 def _fast_module():
     """The aten_fast module when the fast eager path is enabled, else None.
 
     Imported lazily: the first import triggers the (cached) Mojo kernel
     compilation, which pure torch.compile workloads should never pay for.
+    The module is cached in a global afterwards; per-call `import` of an
+    already-loaded module still costs ~1µs, which the hottest ops (view)
+    pay hundreds of times per generated token.
     """
-    if not fast_eager_enabled():
-        return None
-    from torch_max_backend.eager_kernels import aten_fast
+    global _aten_fast_module
+    if _aten_fast_module is None:
+        if not _FAST_EAGER:
+            return None
+        from torch_max_backend.eager_kernels import aten_fast
 
-    return aten_fast
+        _aten_fast_module = aten_fast
+    return _aten_fast_module
 
 
 register_aten_op("aten::_local_scalar_dense")(
@@ -331,10 +347,39 @@ register_aten_op("aten::addmm")(
 register_aten_op("aten::alias")(wrap_for_max_device(aten_functions.aten_alias))
 register_aten_op("aten::amax")(wrap_for_max_device(aten_functions.aten_amax))
 register_aten_op("aten::amin")(wrap_for_max_device(aten_functions.aten_amin))
-register_aten_op("aten::any")(wrap_for_max_device(aten_functions.aten_any))
+register_aten_op("aten::any")(_eager_impl("fast_aten_any", aten_functions.aten_any))
 register_aten_op("aten::all")(_eager_impl("fast_aten_all", aten_functions.aten_all))
 register_aten_op("aten::all.dim")(wrap_for_max_device(aten_functions.aten_all))
 register_aten_op("aten::all.dims")(wrap_for_max_device(aten_functions.aten_all))
+
+
+def _host_arange_array(start, end, step, dtype: torch.dtype | None):
+    """torch.arange(start, end, step, dtype=dtype) built as a numpy array.
+
+    torch's CPU arange opens an OpenMP parallel region, which costs
+    milliseconds per call on machines where the OMP pool is oversubscribed;
+    numpy stays single-threaded and takes microseconds. Returns None when
+    the result can't be built with numpy (bfloat16, step of 0, ...) so
+    callers can fall back to torch.
+    """
+    if dtype is None:
+        any_float = any(isinstance(v, float) for v in (start, end, step))
+        dtype = torch.get_default_dtype() if any_float else torch.int64
+    try:
+        np_dtype = torch.empty(0, dtype=dtype).numpy().dtype
+    except TypeError:
+        return None
+    if step == 0:
+        return None
+    if all(isinstance(v, int) for v in (start, end, step)):
+        n = -((start - end) // step)  # exact ceil((end - start) / step)
+        values = np.arange(n, dtype=np.int64)
+    else:
+        n = math.ceil((float(end) - float(start)) / float(step))
+        values = np.arange(n, dtype=np.float64)
+    if n <= 0:
+        return None
+    return (values * step + start).astype(np_dtype, copy=False)
 
 
 @register_aten_op("aten::arange")
@@ -342,13 +387,18 @@ register_aten_op("aten::all.dims")(wrap_for_max_device(aten_functions.aten_all))
 def max_device_arange(
     start, end=None, step=1, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMaxTensor:
-    if fast_eager_enabled():
+    if _FAST_EAGER:
         # Build on the host with exact torch semantics, then one H2D copy.
-        # Buffer.to() completes before returning, so cpu_tensor (whose
+        # Buffer.to() completes before returning, so the host array (whose
         # memory the dlpack buffer aliases) may safely die afterwards; an
         # async copy (e.g. inplace_copy_from) would race its free.
-        args = (start,) if end is None else (start, end, step)
-        cpu_tensor = torch.arange(*args, dtype=dtype)
+        if end is None:
+            start, end = 0, start
+        arr = _host_arange_array(start, end, step, dtype)
+        if arr is None:
+            cpu_tensor = torch.arange(start, end, step, dtype=dtype)
+        else:
+            cpu_tensor = arr
         host = max.driver.Buffer.from_dlpack(cpu_tensor)
         out = host.to(find_equivalent_max_device(device))
         return TorchMaxTensor._from_buffer(out)
@@ -368,7 +418,11 @@ def max_device_arange(
 def max_device_arange_start_out(start, end, step=1, *, out) -> TorchMaxTensor:
     # torch.arange(start, end, step, device=...) dispatches to the out
     # variant with a pre-allocated `out` of the right size and dtype.
-    cpu_tensor = torch.arange(start, end, step, dtype=out.dtype)
+    arr = _host_arange_array(start, end, step, out.dtype)
+    if arr is None:
+        cpu_tensor = torch.arange(start, end, step, dtype=out.dtype)
+    else:
+        cpu_tensor = arr
     host = max.driver.Buffer.from_dlpack(cpu_tensor)
     out._max_data = MaxEagerTensor(
         storage=host.to(find_equivalent_max_device(out.device))
@@ -376,7 +430,9 @@ def max_device_arange_start_out(start, end, step=1, *, out) -> TorchMaxTensor:
     return out
 
 
-register_aten_op("aten::argmax")(wrap_for_max_device(aten_functions.aten_argmax))
+register_aten_op("aten::argmax")(
+    _eager_impl("fast_aten_argmax", aten_functions.aten_argmax)
+)
 register_aten_op("aten::argmin")(wrap_for_max_device(aten_functions.aten_argmin))
 register_aten_op("aten::asinh")(wrap_for_max_device(aten_functions.aten_asinh))
 register_aten_op("aten::atanh")(wrap_for_max_device(aten_functions.aten_atanh))
@@ -386,25 +442,25 @@ register_aten_op("aten::avg_pool2d")(
 )
 
 register_aten_op("aten::bitwise_and.Scalar")(
-    wrap_for_max_device(aten_functions.aten_bitwise_and_scalar)
+    _eager_impl("fast_aten_bitwise_and", aten_functions.aten_bitwise_and_scalar)
 )
 register_aten_op("aten::bitwise_and.Tensor")(
-    wrap_for_max_device(aten_functions.aten_bitwise_and)
+    _eager_impl("fast_aten_bitwise_and", aten_functions.aten_bitwise_and)
 )
 register_aten_op("aten::bitwise_not")(
-    wrap_for_max_device(aten_functions.aten_bitwise_not)
+    _eager_impl("fast_aten_bitwise_not", aten_functions.aten_bitwise_not)
 )
 register_aten_op("aten::bitwise_or.Scalar")(
-    wrap_for_max_device(aten_functions.aten_bitwise_or_scalar)
+    _eager_impl("fast_aten_bitwise_or", aten_functions.aten_bitwise_or_scalar)
 )
 register_aten_op("aten::bitwise_or.Tensor")(
-    wrap_for_max_device(aten_functions.aten_bitwise_or)
+    _eager_impl("fast_aten_bitwise_or", aten_functions.aten_bitwise_or)
 )
 register_aten_op("aten::bitwise_xor.Scalar")(
-    wrap_for_max_device(aten_functions.aten_bitwise_xor_scalar)
+    _eager_impl("fast_aten_bitwise_xor", aten_functions.aten_bitwise_xor_scalar)
 )
 register_aten_op("aten::bitwise_xor.Tensor")(
-    wrap_for_max_device(aten_functions.aten_bitwise_xor)
+    _eager_impl("fast_aten_bitwise_xor", aten_functions.aten_bitwise_xor)
 )
 register_aten_op("aten::bmm")(_eager_impl("fast_aten_bmm", aten_functions.aten_bmm))
 
@@ -421,7 +477,9 @@ register_aten_op("aten::convolution")(
 register_aten_op("aten::cos")(wrap_for_max_device(aten_functions.aten_cos))
 register_aten_op("aten::cosh")(wrap_for_max_device(aten_functions.aten_cosh))
 
-register_aten_op("aten::cumsum")(wrap_for_max_device(aten_functions.aten_cumsum))
+register_aten_op("aten::cumsum")(
+    _eager_impl("fast_aten_cumsum", aten_functions.aten_cumsum)
+)
 
 register_aten_op("aten::detach")(wrap_for_max_device(aten_functions.aten_detach))
 
@@ -446,7 +504,7 @@ def max_device_empty_memory_format(
     dtype = torch.float32 if dtype is None else dtype
     dtype = torch_dtype_to_max(dtype)
     device = find_equivalent_max_device(device)
-    if fast_eager_enabled():
+    if _FAST_EAGER:
         # torch.empty is uninitialized memory: a bare allocation, no kernel.
         return TorchMaxTensor._from_buffer(
             max.driver.Buffer(dtype, tuple(size), device)
@@ -465,7 +523,7 @@ def empty_strided(
     dtype = torch.float32 if dtype is None else dtype
     dtype = torch_dtype_to_max(dtype)
     device = find_equivalent_max_device(device)
-    if fast_eager_enabled():
+    if _FAST_EAGER:
         return TorchMaxTensor._from_buffer(
             max.driver.Buffer(dtype, tuple(size), device)
         )
@@ -478,51 +536,108 @@ register_aten_op("aten::empty_like")(
     wrap_for_max_device(aten_functions.aten_empty_like)
 )
 
-register_aten_op("aten::eq")(wrap_for_max_device(aten_functions.aten_eq))
-register_aten_op("aten::eq.Scalar")(wrap_for_max_device(aten_functions.aten_eq))
+register_aten_op("aten::eq")(_eager_impl("fast_aten_eq", aten_functions.aten_eq))
+register_aten_op("aten::eq.Scalar")(_eager_impl("fast_aten_eq", aten_functions.aten_eq))
+register_aten_op("aten::eq.Tensor")(_eager_impl("fast_aten_eq", aten_functions.aten_eq))
 
 register_aten_op("aten::erf")(wrap_for_max_device(aten_functions.aten_erf))
 register_aten_op("aten::exp")(_eager_impl("fast_aten_exp", aten_functions.aten_exp))
 register_aten_op("aten::expand")(wrap_for_max_device(aten_functions.aten_expand))
 
 register_aten_op("aten::fill.Scalar")(
-    wrap_for_max_device(aten_functions.aten_fill_scalar)
+    _eager_impl("fast_aten_fill_scalar", aten_functions.aten_fill_scalar)
 )
 
 
 @register_aten_op("aten::fill_.Scalar")
 @no_type_check
 def max_device_fill__scalar(self: TorchMaxTensor, value: float) -> TorchMaxTensor:
+    if _FAST_EAGER:
+        from torch_max_backend.eager_kernels import aten_fast
+
+        result = aten_fast.fast_aten_fill__scalar(self, value)
+        if result is not None:
+            return result
     self._max_data = aten_functions.aten_fill__scalar(self._max_data, value)
     return self
 
 
 register_aten_op("aten::floor")(wrap_for_max_device(aten_functions.aten_floor))
 register_aten_op("aten::floordiv")(wrap_for_max_device(aten_functions.aten_floordiv))
-register_aten_op("aten::full")(wrap_for_max_device(aten_functions.aten_full))
+
+
+@no_type_check
+def _fast_filled_tensor(size, value, dtype, device):
+    """Filled-tensor factory on the fast path (alloc + Fill), or None."""
+    fast = _fast_module()
+    if fast is None:
+        return None
+    try:
+        max_dtype = torch_dtype_to_max(dtype)
+    except (KeyError, ValueError):
+        return None
+    return fast.fast_filled(size, value, max_dtype, find_equivalent_max_device(device))
+
+
+_slow_full = wrap_for_max_device(aten_functions.aten_full)
+
+
+@register_aten_op("aten::full")
+@no_type_check
+def max_device_full(
+    size, fill_value, *, dtype=None, layout=None, device=None, pin_memory=None
+) -> TorchMaxTensor:
+    if dtype is not None:
+        resolved = dtype
+    elif isinstance(fill_value, bool):
+        resolved = torch.bool
+    elif isinstance(fill_value, int):
+        resolved = torch.int64
+    else:
+        resolved = torch.get_default_dtype()
+    result = _fast_filled_tensor(size, fill_value, resolved, device)
+    if result is not None:
+        return result
+    return _slow_full(
+        size,
+        fill_value,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        pin_memory=pin_memory,
+    )
+
+
 register_aten_op("aten::full_like")(wrap_for_max_device(aten_functions.aten_full_like))
 
-register_aten_op("aten::ge")(wrap_for_max_device(aten_functions.aten_ge))
-register_aten_op("aten::ge.Scalar")(wrap_for_max_device(aten_functions.aten_ge))
+register_aten_op("aten::ge")(_eager_impl("fast_aten_ge", aten_functions.aten_ge))
+register_aten_op("aten::ge.Scalar")(_eager_impl("fast_aten_ge", aten_functions.aten_ge))
+register_aten_op("aten::ge.Tensor")(_eager_impl("fast_aten_ge", aten_functions.aten_ge))
 
 register_aten_op("aten::gelu")(wrap_for_max_device(aten_functions.aten_gelu))
 register_aten_op("aten::gelu_backward")(
     wrap_for_max_device(aten_functions.aten_gelu_backward)
 )
-register_aten_op("aten::gt")(wrap_for_max_device(aten_functions.aten_gt))
-register_aten_op("aten::gt.Scalar")(wrap_for_max_device(aten_functions.aten_gt))
+register_aten_op("aten::gt")(_eager_impl("fast_aten_gt", aten_functions.aten_gt))
+register_aten_op("aten::gt.Scalar")(_eager_impl("fast_aten_gt", aten_functions.aten_gt))
+register_aten_op("aten::gt.Tensor")(_eager_impl("fast_aten_gt", aten_functions.aten_gt))
 
 register_aten_op("aten::index.Tensor")(wrap_for_max_device(aten_functions.aten_index))
 register_aten_op("aten::isin.Tensor_Tensor")(
-    wrap_for_max_device(aten_functions.aten_isin)
+    _eager_impl("fast_aten_isin", aten_functions.aten_isin)
 )
 register_aten_op("aten::isin.Tensor_Tensor_out")(
     wrap_for_max_device(aten_functions.aten_isin)
 )
 register_aten_op("aten::isnan")(wrap_for_max_device(aten_functions.aten_isnan))
 
-register_aten_op("aten::le")(wrap_for_max_device(aten_functions.aten_le))
-register_aten_op("aten::le.Scalar")(wrap_for_max_device(aten_functions.aten_le))
+register_aten_op("aten::le")(_eager_impl("fast_aten_le", aten_functions.aten_le))
+register_aten_op("aten::le.Scalar")(_eager_impl("fast_aten_le", aten_functions.aten_le))
+register_aten_op("aten::le.Tensor")(_eager_impl("fast_aten_le", aten_functions.aten_le))
+
+register_aten_op("aten::linear")(
+    _eager_impl("fast_aten_linear", aten_functions.aten_linear)
+)
 
 register_aten_op("aten::log")(wrap_for_max_device(aten_functions.aten_log))
 register_aten_op("aten::log1p")(wrap_for_max_device(aten_functions.aten_log1p))
@@ -536,14 +651,15 @@ register_aten_op("aten::logical_not")(
 register_aten_op("aten::logical_xor")(
     wrap_for_max_device(aten_functions.aten_logical_xor)
 )
-register_aten_op("aten::lt")(wrap_for_max_device(aten_functions.aten_lt))
-register_aten_op("aten::lt.Scalar")(wrap_for_max_device(aten_functions.aten_lt))
+register_aten_op("aten::lt")(_eager_impl("fast_aten_lt", aten_functions.aten_lt))
+register_aten_op("aten::lt.Scalar")(_eager_impl("fast_aten_lt", aten_functions.aten_lt))
+register_aten_op("aten::lt.Tensor")(_eager_impl("fast_aten_lt", aten_functions.aten_lt))
 
 register_aten_op("aten::masked_fill.Scalar")(
-    wrap_for_max_device(aten_functions.aten_masked_fill)
+    _eager_impl("fast_aten_masked_fill", aten_functions.aten_masked_fill)
 )
 register_aten_op("aten::masked_fill.Tensor")(
-    wrap_for_max_device(aten_functions.aten_masked_fill)
+    _eager_impl("fast_aten_masked_fill", aten_functions.aten_masked_fill)
 )
 
 
@@ -552,6 +668,11 @@ def max_device_masked_fill__scalar(
     self: TorchMaxTensor, mask: TorchMaxTensor, value: int | float
 ) -> TorchMaxTensor:
     # in-place masked fill
+    fast = _fast_module()
+    if fast is not None:
+        result = fast.fast_aten_masked_fill_(self, mask, value)
+        if result is not None:
+            return result
     self._max_data = aten_functions.aten_masked_fill(
         self._max_data, mask._max_data, value
     )
@@ -563,13 +684,18 @@ def max_device_masked_fill__tensor(
     self: TorchMaxTensor, mask: TorchMaxTensor, value: TorchMaxTensor
 ) -> TorchMaxTensor:
     # in-place masked fill
+    fast = _fast_module()
+    if fast is not None:
+        result = fast.fast_aten_masked_fill_(self, mask, value)
+        if result is not None:
+            return result
     self._max_data = aten_functions.aten_masked_fill(
         self._max_data, mask._max_data, value._max_data
     )
     return self
 
 
-register_aten_op("aten::max")(wrap_for_max_device(aten_functions.aten_max))
+register_aten_op("aten::max")(_eager_impl("fast_aten_max", aten_functions.aten_max))
 
 register_aten_op("aten::max_pool2d_with_indices")(
     _eager_impl(
@@ -665,11 +791,31 @@ def max_device_normal_(
     return self
 
 
-register_aten_op("aten::ne")(wrap_for_max_device(aten_functions.aten_ne))
+register_aten_op("aten::ne")(_eager_impl("fast_aten_ne", aten_functions.aten_ne))
+register_aten_op("aten::ne.Scalar")(_eager_impl("fast_aten_ne", aten_functions.aten_ne))
+register_aten_op("aten::ne.Tensor")(_eager_impl("fast_aten_ne", aten_functions.aten_ne))
 register_aten_op("aten::neg")(wrap_for_max_device(aten_functions.aten_neg))
 
 register_aten_op("aten::nonzero")(wrap_for_max_device(aten_functions.aten_nonzero))
-register_aten_op("aten::ones")(wrap_for_max_device(aten_functions.aten_ones))
+
+
+_slow_ones = wrap_for_max_device(aten_functions.aten_ones)
+
+
+@register_aten_op("aten::ones")
+@no_type_check
+def max_device_ones(
+    size, *, dtype=None, layout=None, device=None, pin_memory=None
+) -> TorchMaxTensor:
+    resolved = torch.get_default_dtype() if dtype is None else dtype
+    result = _fast_filled_tensor(size, 1, resolved, device)
+    if result is not None:
+        return result
+    return _slow_ones(
+        size, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )
+
+
 register_aten_op("aten::ones_like")(wrap_for_max_device(aten_functions.aten_ones_like))
 
 register_aten_op("aten::permute")(wrap_for_max_device(aten_functions.aten_permute))
@@ -700,9 +846,20 @@ register_aten_op("aten::remainder")(wrap_for_max_device(aten_functions.aten_rema
 register_aten_op("aten::repeat")(wrap_for_max_device(aten_functions.aten_repeat))
 register_aten_op("aten::rsqrt")(wrap_for_max_device(aten_functions.aten_rsqrt))
 
-register_aten_op("aten::scalar_tensor")(
-    wrap_for_max_device(aten_functions.aten_scalar_tensor)
-)
+_slow_scalar_tensor = wrap_for_max_device(aten_functions.aten_scalar_tensor)
+
+
+@register_aten_op("aten::scalar_tensor")
+@no_type_check
+def max_device_scalar_tensor(
+    s, dtype=None, layout=None, device=None, pin_memory=None
+) -> TorchMaxTensor:
+    resolved = torch.float32 if dtype is None else dtype
+    result = _fast_filled_tensor((), s, resolved, device)
+    if result is not None:
+        return result
+    return _slow_scalar_tensor(s, dtype, layout, device)
+
 
 register_aten_op("aten::scatter.src")(
     wrap_for_max_device(aten_functions.aten_scatter_src)
@@ -711,7 +868,9 @@ register_aten_op("aten::scatter.value")(
     wrap_for_max_device(aten_functions.aten_scatter_value)
 )
 
-register_aten_op("aten::select.int")(wrap_for_max_device(aten_functions.aten_select))
+register_aten_op("aten::select.int")(
+    _eager_impl("fast_aten_select", aten_functions.aten_select)
+)
 register_aten_op("aten::select_scatter")(
     wrap_for_max_device(aten_functions.aten_select_scatter)
 )
@@ -721,7 +880,9 @@ register_aten_op("aten::silu")(wrap_for_max_device(aten_functions.aten_silu))
 register_aten_op("aten::sin")(wrap_for_max_device(aten_functions.aten_sin))
 register_aten_op("aten::sinh")(wrap_for_max_device(aten_functions.aten_sinh))
 
-register_aten_op("aten::slice.Tensor")(wrap_for_max_device(aten_functions.aten_slice))
+register_aten_op("aten::slice.Tensor")(
+    _eager_impl("fast_aten_slice", aten_functions.aten_slice)
+)
 
 register_aten_op("aten::softmax.int")(wrap_for_max_device(aten_functions.aten_softmax))
 
@@ -772,12 +933,12 @@ _slow_view = wrap_for_max_device(aten_functions.aten_view)
 def max_device_view(self: TorchMaxTensor, size) -> TorchMaxTensor:
     # view is by far the most frequent op in transformer forwards; skip the
     # generic argument-conversion walk and alias the driver buffer directly.
-    if fast_eager_enabled():
-        from torch_max_backend.eager_kernels import aten_fast
+    if _FAST_EAGER:
+        aten_fast = _aten_fast_module or _fast_module()
 
         buffer = aten_fast._buffer_or_none(self)
         if buffer is not None and buffer.num_elements > 0:
-            sizes = aten_fast._resolve_sizes(list(size), buffer.num_elements)
+            sizes = aten_fast._resolve_sizes(size, buffer.num_elements)
             if sizes is not None:
                 return TorchMaxTensor._from_buffer(buffer.view(buffer.dtype, sizes))
     return _slow_view(self, size)
@@ -787,6 +948,22 @@ register_aten_op("aten::_unsafe_view")(
     _eager_impl("fast_aten__unsafe_view", aten_functions.aten__unsafe_view)
 )
 
-register_aten_op("aten::where.self")(wrap_for_max_device(aten_functions.aten_where))
+register_aten_op("aten::where.self")(
+    _eager_impl("fast_aten_where", aten_functions.aten_where)
+)
 
-register_aten_op("aten::zeros")(wrap_for_max_device(aten_functions.aten_zeros))
+_slow_zeros = wrap_for_max_device(aten_functions.aten_zeros)
+
+
+@register_aten_op("aten::zeros")
+@no_type_check
+def max_device_zeros(
+    size, *, dtype=None, layout=None, device=None, pin_memory=None
+) -> TorchMaxTensor:
+    resolved = torch.get_default_dtype() if dtype is None else dtype
+    result = _fast_filled_tensor(size, 0, resolved, device)
+    if result is not None:
+        return result
+    return _slow_zeros(
+        size, dtype=dtype, layout=layout, device=device, pin_memory=pin_memory
+    )

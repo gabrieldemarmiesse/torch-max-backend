@@ -3078,6 +3078,55 @@ def test_aten_min_different_dtypes(
     check_outputs(fn, conf, [x])
 
 
+@pytest.mark.parametrize("dtype", [torch.bool, torch.uint8, torch.int32, torch.int64])
+def test_aten_sum_integral_dtypes(
+    conf: Conf, dtype: torch.dtype, call_checker: CallChecker
+):
+    """Test aten.sum over integral dtypes (torch promotes bool/small-int sums to int64)"""
+    call_checker.register(aten_functions.aten_sum)
+
+    def fn(x):
+        return aten.sum(x)
+
+    x = (torch.arange(12) % 2).reshape(3, 4).to(dtype)
+    check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("with_bias", [True, False])
+def test_aten_linear(conf: Conf, with_bias: bool, call_checker: CallChecker):
+    """Test aten.linear (input @ weight^T + bias) with 2D input"""
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(aten_functions.aten_linear, aten_fast.fast_aten_linear)
+
+    if with_bias:
+
+        def fn(x, w, b):
+            return aten.linear(x, w, b)
+
+        inputs = [torch.randn(5, 16), torch.randn(9, 16), torch.randn(9)]
+    else:
+
+        def fn(x, w):
+            return aten.linear(x, w)
+
+        inputs = [torch.randn(5, 16), torch.randn(9, 16)]
+    check_outputs(fn, conf, inputs)
+
+
+def test_aten_linear_3d_input(conf: Conf, call_checker: CallChecker):
+    """Test aten.linear with batched (3D) input, as transformers call it"""
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(aten_functions.aten_linear, aten_fast.fast_aten_linear)
+
+    def fn(x, w, b):
+        return aten.linear(x, w, b)
+
+    inputs = [torch.randn(3, 7, 16), torch.randn(11, 16), torch.randn(11)]
+    check_outputs(fn, conf, inputs)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_aten_var_no_dim(conf: Conf, dtype: torch.dtype, call_checker: CallChecker):
     """Test aten.var over all dimensions (default correction=1)"""
@@ -3169,7 +3218,11 @@ def test_fill_scalar_basic(
     call_checker: CallChecker,
 ):
     """Test basic fill.Scalar functionality with different dtypes, shapes, and values"""
-    call_checker.register(aten_functions.aten_fill_scalar)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten_fill_scalar, aten_fast.fast_aten_fill_scalar
+    )
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -3187,7 +3240,11 @@ def test_fill_scalar_integer_dtypes(
     conf: Conf, dtype: torch.dtype, shape: tuple, value: int, call_checker: CallChecker
 ):
     """Test fill.Scalar functionality with integer dtypes"""
-    call_checker.register(aten_functions.aten_fill_scalar)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten_fill_scalar, aten_fast.fast_aten_fill_scalar
+    )
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -3201,7 +3258,11 @@ def test_fill_scalar_integer_dtypes(
 @pytest.mark.parametrize("value", [-5, 100])
 def test_fill_scalar_integer_values(conf: Conf, value: int, call_checker: CallChecker):
     """Test fill.Scalar with integer values"""
-    call_checker.register(aten_functions.aten_fill_scalar)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten_fill_scalar, aten_fast.fast_aten_fill_scalar
+    )
 
     def fn(x):
         return aten.fill.Scalar(x, value)
@@ -3214,7 +3275,11 @@ def test_fill_scalar_integer_values(conf: Conf, value: int, call_checker: CallCh
 
 def test_fill_scalar_single_element(conf: Conf, call_checker: CallChecker):
     """Test fill.Scalar with single element tensor"""
-    call_checker.register(aten_functions.aten_fill_scalar)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten_fill_scalar, aten_fast.fast_aten_fill_scalar
+    )
 
     def fn(x):
         return torch.ops.aten.fill.Scalar(x, 7.5)
@@ -3239,7 +3304,11 @@ def test_fill_scalar_zero_dim(conf: Conf):
 
 def test_fill__scalar_inplace(conf: Conf, call_checker: CallChecker):
     """Test fill_.Scalar fills tensor in-place"""
-    call_checker.register(aten_functions.aten_fill__scalar)
+    from torch_max_backend.eager_kernels import aten_fast
+
+    call_checker.register(
+        aten_functions.aten_fill__scalar, aten_fast.fast_aten_fill__scalar
+    )
 
     def fn(x):
         aten.fill_(x, 3.5)

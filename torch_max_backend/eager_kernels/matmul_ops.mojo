@@ -40,7 +40,20 @@ from layout import TileTensor, row_major
 from linalg.bmm import batched_matmul
 from linalg.matmul.vendor.blas import matmul as vendor_matmul
 
-from op_utils import _enqueue_cached, _get_ctx, _get_dtype, _make_ptr
+from std.python._cpython import PyObjectPtr, Py_ssize_t
+
+from op_utils import (
+    _enqueue_cached,
+    _get_ctx,
+    _get_dtype,
+    _make_ptr,
+    _raw_addr,
+    _raw_ctx,
+    _raw_dtype,
+    _raw_ret_none,
+    _raw_tuple_int,
+    _raw_tuple_len,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -69,16 +82,30 @@ def _ksplit_reduce_kernel(
     ksplits: Int,
     total: Int,
 ):
-    var i = block_idx.x * 256 + thread_idx.x
+    # 4 outputs per thread: one div/mod chain + vector loads per chunk.
+    var i = (block_idx.x * 256 + thread_idx.x) * 4
     if i >= total:
         return
     var bz = i // mn
     var off = i % mn
-    var base = bz * ksplits * mn + off
-    var acc = Scalar[DType.float32](0)
-    for st in range(ksplits):
-        acc += ws_ptr[base + st * mn]
-    out_ptr[i] = acc
+    if off + 4 <= mn and i + 4 <= total:
+        var base = bz * ksplits * mn + off
+        var acc = SIMD[DType.float32, 4](0)
+        for st in range(ksplits):
+            acc += ws_ptr.load[width=4](base + st * mn)
+        out_ptr.store(i, acc)
+    else:
+        for u in range(4):
+            var iu = i + u
+            if iu >= total:
+                return
+            var bzu = iu // mn
+            var offu = iu % mn
+            var baseu = bzu * ksplits * mn + offu
+            var accu = Scalar[DType.float32](0)
+            for st in range(ksplits):
+                accu += ws_ptr[baseu + st * mn]
+            out_ptr[iu] = accu
 
 
 @__llvm_metadata(
@@ -461,13 +488,33 @@ def _gemm_pipe_kernel[
 comptime PIPE3_STAGES = 4
 
 
+# One thread per element: out (k, m) <- in (m, k). Used to transpose the
+# small activation matrix for the skinny-M transposed-B GEMM path below
+# (96 KB for a GPT-2 decode step; ~1 µs).
+@__name("pure_transpose_small")
+def _transpose_small_kernel(
+    out_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    m: Int,
+    k: Int,
+):
+    var i = block_idx.x * 256 + thread_idx.x
+    if i >= m * k:
+        return
+    var mm = i // k
+    var kk = i % k
+    out_ptr[kk * m + mm] = in_ptr[i]
+
+
 @__llvm_metadata(
     MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](
         Int32((BM // TM) * (BN // TN))
     ),
-    `nvvm.minctasm`=SIMDSize(2 if BM >= 128 else 3),
+    `nvvm.minctasm`=SIMDSize(MINB if MINB > 0 else (2 if BM >= 128 else 3)),
 )
-@__name(t"pure_gemm_pipe3_{BM}x{BN}x{BK}_va{VEC_A}_vb{VEC_B}")
+@__name(
+    t"pure_gemm_pipe3_{BM}x{BN}x{BK}_va{VEC_A}_vb{VEC_B}_ct{CT}_s{STAGES}_at{AT}_mb{MINB}_bs{BIAS}"
+)
 def _gemm_pipe3_kernel[
     BM: Int,
     BN: Int,
@@ -476,7 +523,16 @@ def _gemm_pipe3_kernel[
     TN: Int,
     VEC_A: Int,
     VEC_B: Int,
+    CT: Bool = False,
+    STAGES: Int = PIPE3_STAGES,
+    AT: Bool = False,
+    MINB: Int = -1,
+    BIAS: Bool = False,
 ](
+    # MINB: min resident blocks/SM hint (__launch_bounds__ second arg);
+    # -1 keeps the historical default (2 for BM >= 128 else 3).
+    # BIAS: fuse `c[row, col] += bias[col]` into the epilogue (the ks == 0
+    # split only, so split-K partial sums receive the bias exactly once).
     c_base: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
     a_base: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
     b_base: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
@@ -485,6 +541,7 @@ def _gemm_pipe3_kernel[
     k: Int,
     a_bstride: Int,
     ksplits: Int,
+    bias_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
 ):
     comptime F32 = DType.float32
     comptime THREADS = (BM // TM) * (BN // TN)
@@ -492,6 +549,7 @@ def _gemm_pipe3_kernel[
     comptime NB = (BK * BN) // (THREADS * VEC_B)
     comptime assert (BM * BK) % (THREADS * VEC_A) == 0
     comptime assert (BK * BN) % (THREADS * VEC_B) == 0
+    comptime assert not (BIAS and CT), "bias fusion not supported with CT"
 
     var bz = block_idx.z // ksplits
     var ks = block_idx.z % ksplits
@@ -513,10 +571,10 @@ def _gemm_pipe3_kernel[
     var tid = thread_idx.x
 
     var a_smem = stack_allocation[
-        PIPE3_STAGES * BM * BK, F32, address_space=AddressSpace.SHARED
+        STAGES * BM * BK, F32, address_space=AddressSpace.SHARED
     ]()
     var b_smem = stack_allocation[
-        PIPE3_STAGES * BK * BN, F32, address_space=AddressSpace.SHARED
+        STAGES * BK * BN, F32, address_space=AddressSpace.SHARED
     ]()
 
     var tn0 = (tid % (BN // TN)) * TN
@@ -531,29 +589,51 @@ def _gemm_pipe3_kernel[
     @always_inline
     @parameter
     def _fetch(s: Int):
-        var buf = s % PIPE3_STAGES
+        var buf = s % STAGES
         var kt = k_start + s * BK
         var a_dst = a_smem + buf * BM * BK
         var b_dst = b_smem + buf * BK * BN
 
-        # A (m, k) row-major: chunks along k into As[mm][kk].
-        comptime for t in range(NA):
-            var ci = t * THREADS + tid
-            var mm = ci // (BK // VEC_A)
-            var ck = (ci % (BK // VEC_A)) * VEC_A
-            var row = bm + mm
-            var col = kt + ck
-            var bytes: Int32 = 0
-            if row < m:
-                bytes = Int32(max(0, min(VEC_A, k_end - col)) * 4)
-            var src_off = (row * k + col) if bytes > 0 else 0
-            async_copy[VEC_A * 4, fill=Scalar[F32](0)](
-                (a_ptr + src_off).address_space_cast[AddressSpace.GLOBAL](),
-                (a_dst + mm * BK + ck).address_space_cast[
-                    AddressSpace.SHARED
-                ](),
-                src_size=bytes,
-            )
+        comptime if AT:
+            # A^T (k, m) row-major: chunks along m into As[kk][mm], so the
+            # compute fragment load is a contiguous vector (no scalar
+            # broadcasts). Requires m % VEC_A == 0 for cp.async alignment.
+            comptime for t in range(NA):
+                var ci = t * THREADS + tid
+                var kk = ci // (BM // VEC_A)
+                var cm = (ci % (BM // VEC_A)) * VEC_A
+                var row = kt + kk
+                var col = bm + cm
+                var bytes: Int32 = 0
+                if row < k_end:
+                    bytes = Int32(max(0, min(VEC_A, m - col)) * 4)
+                var src_off = (row * m + col) if bytes > 0 else 0
+                async_copy[VEC_A * 4, fill=Scalar[F32](0)](
+                    (a_ptr + src_off).address_space_cast[AddressSpace.GLOBAL](),
+                    (a_dst + kk * BM + cm).address_space_cast[
+                        AddressSpace.SHARED
+                    ](),
+                    src_size=bytes,
+                )
+        else:
+            # A (m, k) row-major: chunks along k into As[mm][kk].
+            comptime for t in range(NA):
+                var ci = t * THREADS + tid
+                var mm = ci // (BK // VEC_A)
+                var ck = (ci % (BK // VEC_A)) * VEC_A
+                var row = bm + mm
+                var col = kt + ck
+                var bytes: Int32 = 0
+                if row < m:
+                    bytes = Int32(max(0, min(VEC_A, k_end - col)) * 4)
+                var src_off = (row * k + col) if bytes > 0 else 0
+                async_copy[VEC_A * 4, fill=Scalar[F32](0)](
+                    (a_ptr + src_off).address_space_cast[AddressSpace.GLOBAL](),
+                    (a_dst + mm * BK + ck).address_space_cast[
+                        AddressSpace.SHARED
+                    ](),
+                    src_size=bytes,
+                )
 
         # B (k, n) row-major: chunks along n into Bs[kk][nn].
         comptime for t in range(NB):
@@ -575,44 +655,95 @@ def _gemm_pipe3_kernel[
             )
 
     # Prologue: fill the pipeline (STAGES - 1 slabs in flight).
-    for st in range(min(PIPE3_STAGES - 1, nslabs)):
+    for st in range(min(STAGES - 1, nslabs)):
         _fetch(st)
         async_copy_commit_group()
-    for _ in range(nslabs, PIPE3_STAGES - 1):
+    for _ in range(nslabs, STAGES - 1):
         async_copy_commit_group()
 
     for s in range(nslabs):
         # Wait until the group fetched for slab s has landed.
-        async_copy_wait_group(PIPE3_STAGES - 2)
+        async_copy_wait_group(Int32(STAGES - 2))
         barrier()
 
-        var buf = s % PIPE3_STAGES
+        var buf = s % STAGES
         var a_base_s = a_smem + buf * BM * BK
         var b_base_s = b_smem + buf * BK * BN
-        for kk in range(BK):
-            var b_frag = b_base_s.load[width=TN](kk * BN + tn0)
-            var a_frag = SIMD[F32, TM](0)
-            comptime for i in range(TM):
-                a_frag[i] = a_base_s[(tm0 + i) * BK + kk]
-            comptime for i in range(TM):
-                acc[i] = b_frag.fma(SIMD[F32, TN](a_frag[i]), acc[i])
 
-        # Release this buffer, then refill it with the slab 2 ahead.
+        # Fully unrolled with register-double-buffered fragments: the
+        # loads for slab column kk + 1 issue before the FMAs of column
+        # kk, so the shared-memory load latency hides behind the math
+        # instead of stalling every iteration.
+        var a_cur: SIMD[F32, TM]
+        comptime if AT:
+            a_cur = a_base_s.load[width=TM](tm0)
+        else:
+            a_cur = SIMD[F32, TM](0)
+            comptime for i in range(TM):
+                a_cur[i] = a_base_s[(tm0 + i) * BK]
+        var b_cur = b_base_s.load[width=TN](tn0)
+        comptime for kk in range(BK - 1):
+            var a_nxt: SIMD[F32, TM]
+            comptime if AT:
+                a_nxt = a_base_s.load[width=TM]((kk + 1) * BM + tm0)
+            else:
+                a_nxt = SIMD[F32, TM](0)
+                comptime for i in range(TM):
+                    a_nxt[i] = a_base_s[(tm0 + i) * BK + kk + 1]
+            var b_nxt = b_base_s.load[width=TN]((kk + 1) * BN + tn0)
+            comptime for i in range(TM):
+                acc[i] = b_cur.fma(SIMD[F32, TN](a_cur[i]), acc[i])
+            a_cur = a_nxt
+            b_cur = b_nxt
+        comptime for i in range(TM):
+            acc[i] = b_cur.fma(SIMD[F32, TN](a_cur[i]), acc[i])
+
+        # Release this buffer, then refill it with the slab ahead.
         barrier()
-        if s + PIPE3_STAGES - 1 < nslabs:
-            _fetch(s + PIPE3_STAGES - 1)
+        if s + STAGES - 1 < nslabs:
+            _fetch(s + STAGES - 1)
         async_copy_commit_group()
 
-    comptime for i in range(TM):
-        var row = bm + tm0 + i
-        if row < m:
-            if bn + tn0 + TN <= n:
-                c_ptr.store(row * n + bn + tn0, acc[i])
-            else:
-                comptime for j in range(TN):
-                    var col = bn + tn0 + j
-                    if col < n:
-                        c_ptr[row * n + col] = acc[i][j]
+    comptime if CT:
+        # C is stored transposed, (n, m) row-major: used by the skinny-M
+        # transposed-B path, which computes C^T = B @ A^T with the roles
+        # of the operands swapped. Rows (the kernel's m) are contiguous in
+        # C, so each column's TM values store as one vector.
+        comptime for j in range(TN):
+            var col = bn + tn0 + j
+            if col < n:
+                var row0 = bm + tm0
+                var out = SIMD[F32, TM](0)
+                comptime for i in range(TM):
+                    out[i] = acc[i][j]
+                if row0 + TM <= m:
+                    c_ptr.store(col * m + row0, out)
+                else:
+                    comptime for i in range(TM):
+                        if row0 + i < m:
+                            c_ptr[col * m + row0 + i] = out[i]
+    else:
+        comptime if BIAS:
+            var bias_frag = SIMD[F32, TN](0)
+            if ks == 0:
+                if bn + tn0 + TN <= n:
+                    bias_frag = bias_ptr.load[width=TN](bn + tn0)
+                else:
+                    comptime for j in range(TN):
+                        if bn + tn0 + j < n:
+                            bias_frag[j] = bias_ptr[bn + tn0 + j]
+            comptime for i in range(TM):
+                acc[i] = acc[i] + bias_frag
+        comptime for i in range(TM):
+            var row = bm + tm0 + i
+            if row < m:
+                if bn + tn0 + TN <= n:
+                    c_ptr.store(row * n + bn + tn0, acc[i])
+                else:
+                    comptime for j in range(TN):
+                        var col = bn + tn0 + j
+                        if col < n:
+                            c_ptr[row * n + col] = acc[i][j]
 
 
 # ---------------------------------------------------------------------------
@@ -843,9 +974,13 @@ def _enqueue_pipe[
         # Latency-bound thin tiles: 3-stage cp.async pipeline.
         var vb4 = n % 4 == 0  # B is loaded along n
         if va4 and vb4:
-            _enqueue_cached[_gemm_pipe3_kernel[BM, BN, BK, TM, TN, 4, 4]](
+            _enqueue_cached[
+                _gemm_pipe3_kernel[
+                    BM, BN, BK, TM, TN, 4, 4, False, PIPE3_STAGES, False, 4
+                ]
+            ](
                 ctx,
-                String(t"gemm_pipe3_{BM}x{BN}_v44"),
+                String(t"gemm_pipe3_{BM}x{BN}_v44_mb4"),
                 gx,
                 gy,
                 gz,
@@ -858,11 +993,16 @@ def _enqueue_pipe[
                 k,
                 a_bstride,
                 ksplits,
+                a,
             )
         elif va4:
-            _enqueue_cached[_gemm_pipe3_kernel[BM, BN, BK, TM, TN, 4, 1]](
+            _enqueue_cached[
+                _gemm_pipe3_kernel[
+                    BM, BN, BK, TM, TN, 4, 1, False, PIPE3_STAGES, False, 4
+                ]
+            ](
                 ctx,
-                String(t"gemm_pipe3_{BM}x{BN}_v41"),
+                String(t"gemm_pipe3_{BM}x{BN}_v41_mb4"),
                 gx,
                 gy,
                 gz,
@@ -875,11 +1015,16 @@ def _enqueue_pipe[
                 k,
                 a_bstride,
                 ksplits,
+                a,
             )
         elif vb4:
-            _enqueue_cached[_gemm_pipe3_kernel[BM, BN, BK, TM, TN, 1, 4]](
+            _enqueue_cached[
+                _gemm_pipe3_kernel[
+                    BM, BN, BK, TM, TN, 1, 4, False, PIPE3_STAGES, False, 4
+                ]
+            ](
                 ctx,
-                String(t"gemm_pipe3_{BM}x{BN}_v14"),
+                String(t"gemm_pipe3_{BM}x{BN}_v14_mb4"),
                 gx,
                 gy,
                 gz,
@@ -892,11 +1037,16 @@ def _enqueue_pipe[
                 k,
                 a_bstride,
                 ksplits,
+                a,
             )
         else:
-            _enqueue_cached[_gemm_pipe3_kernel[BM, BN, BK, TM, TN, 1, 1]](
+            _enqueue_cached[
+                _gemm_pipe3_kernel[
+                    BM, BN, BK, TM, TN, 1, 1, False, PIPE3_STAGES, False, 4
+                ]
+            ](
                 ctx,
-                String(t"gemm_pipe3_{BM}x{BN}_v11"),
+                String(t"gemm_pipe3_{BM}x{BN}_v11_mb4"),
                 gx,
                 gy,
                 gz,
@@ -909,6 +1059,7 @@ def _enqueue_pipe[
                 k,
                 a_bstride,
                 ksplits,
+                a,
             )
 
 
@@ -929,6 +1080,70 @@ def _gemm_enqueue[
     comptime if has_accelerator():
         var a = _make_ptr[dtype](a_addr).as_unsafe_any_origin().as_immutable()
         var b = _make_ptr[dtype](b_addr).as_unsafe_any_origin().as_immutable()
+
+        # Skinny-M float32 paths (decode-step GEMMs: m = batch <= 32). The
+        # BM=64 tiles waste half of every block there; the BM=32 pipe3 tile
+        # (128-thread blocks, k-chunk floor 96) beats cuBLAS SGEMM on the
+        # GPT-2 decode shapes. For transposed-B (linear/lm_head), compute
+        # C^T = B @ A^T instead so B streams via cp.async at full rate.
+        comptime if dtype == DType.float32:
+            comptime if transpose_b:
+                # Fat C^T path for medium-m transposed-B (lm_head at large
+                # batch): batch==1 only, grid must fill the GPU on its own.
+                if (
+                    batch == 1
+                    and m > 32
+                    and k % 4 == 0
+                    and m % 4 == 0
+                    and ceildiv(n, 64) * ceildiv(m, 64) >= 342
+                ):
+                    _ct_enqueue[64, 64, 16, 8, 8, 3, 6](
+                        c_addr, a_addr, b_addr, m, n, k, ctx
+                    )
+                    return
+            if m > SMALLM_MR and m <= 32:
+                comptime if transpose_b:
+                    # CT path: batch==1 only (no batched A^T scratch), and
+                    # only when the weight-row grid alone fills the GPU.
+                    if (
+                        batch == 1
+                        and k % 4 == 0
+                        and m % 4 == 0
+                        and ceildiv(n, 64) >= 128
+                    ):
+                        _ct_enqueue[64, 32, 32, 4, 4, 3](
+                            c_addr, a_addr, b_addr, m, n, k, ctx
+                        )
+                        return
+                    if k % 4 == 0:
+                        _tune_enqueue[32, 64, 16, 4, 4, True, False](
+                            c_addr,
+                            a_addr,
+                            b_addr,
+                            batch,
+                            m,
+                            n,
+                            k,
+                            a_bstride,
+                            96,
+                            ctx,
+                        )
+                        return
+                else:
+                    if k % 4 == 0 and n % 4 == 0:
+                        _tune_enqueue[32, 64, 16, 4, 4, False, True](
+                            c_addr,
+                            a_addr,
+                            b_addr,
+                            batch,
+                            m,
+                            n,
+                            k,
+                            a_bstride,
+                            96,
+                            ctx,
+                        )
+                        return
 
         # Choose the kernel/tile config, then a split-K factor that brings
         # the block count up to a few per SM (float32 only).
@@ -1096,7 +1311,7 @@ def _gemm_enqueue[
             _enqueue_cached[_ksplit_reduce_kernel](
                 ctx,
                 String("ksplit_reduce"),
-                ceildiv(total, 256),
+                ceildiv(total, 1024),
                 1,
                 1,
                 256,
@@ -1136,6 +1351,458 @@ def _gemm_transb_dispatch[
         _gemm_enqueue[dtype, False](
             c_addr, a_addr, b_addr, batch, m, n, k, a_bstride, ctx
         )
+
+
+# ---------------------------------------------------------------------------
+# Tuning entry point (float32 only): run one GEMM with an explicit tile
+# config + split-K chunk floor, selected at runtime. Used by offline sweeps
+# to pick the dispatch configs; not called by the backend.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _tune_enqueue[
+    BM: Int,
+    BN: Int,
+    BK: Int,
+    TM: Int,
+    TN: Int,
+    transpose_b: Bool,
+    pipe3: Bool,
+    STAGES: Int = PIPE3_STAGES,
+    MINB: Int = -1,
+    BIAS: Bool = False,
+](
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    batch: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    a_bstride: Int,
+    kchunk_min: Int,
+    ctx: DeviceContext,
+    bias_addr: Int = 0,
+) raises:
+    comptime if has_accelerator():
+        comptime THREADS = (BM // TM) * (BN // TN)
+        var gx = ceildiv(n, BN)
+        var gy = ceildiv(m, BM)
+        var ksplits = 1
+        var base = gx * gy * batch
+        var kcap = ceildiv(k, kchunk_min)
+        if base < TARGET_BLOCKS // 2:
+            ksplits = min(min(ceildiv(TARGET_BLOCKS, base), kcap), 32)
+        var ws = Optional[DeviceBuffer[DType.float32]](None)
+        var c_target = c_addr
+        if ksplits > 1:
+            ws = ctx.enqueue_create_buffer[DType.float32](
+                batch * ksplits * m * n
+            )
+            c_target = Int(ws.value().unsafe_ptr())
+        var c = _make_ptr[DType.float32](c_target).as_unsafe_any_origin()
+        var a = (
+            _make_ptr[DType.float32](a_addr)
+            .as_unsafe_any_origin()
+            .as_immutable()
+        )
+        var b = (
+            _make_ptr[DType.float32](b_addr)
+            .as_unsafe_any_origin()
+            .as_immutable()
+        )
+        comptime if pipe3:
+            var bias = (
+                _make_ptr[DType.float32](
+                    bias_addr if bias_addr != 0 else a_addr
+                )
+                .as_unsafe_any_origin()
+                .as_immutable()
+            )
+            _enqueue_cached[
+                _gemm_pipe3_kernel[
+                    BM, BN, BK, TM, TN, 4, 4, False, STAGES, False, MINB, BIAS
+                ]
+            ](
+                ctx,
+                String(
+                    t"tune_p3_{BM}x{BN}x{BK}_{TM}{TN}_s{STAGES}_mb{MINB}_bs{BIAS}"
+                ),
+                gx,
+                gy,
+                batch * ksplits,
+                THREADS,
+                c,
+                a,
+                b,
+                m,
+                n,
+                k,
+                a_bstride,
+                ksplits,
+                bias,
+            )
+        else:
+            _enqueue_cached[
+                _gemm_pipe_kernel[BM, BN, BK, TM, TN, 4, 4, transpose_b]
+            ](
+                ctx,
+                String(t"tune_p_{BM}x{BN}x{BK}_{TM}{TN}_tb{transpose_b}"),
+                gx,
+                gy,
+                batch * ksplits,
+                THREADS,
+                c,
+                a,
+                b,
+                m,
+                n,
+                k,
+                a_bstride,
+                ksplits,
+            )
+        if ksplits > 1:
+            var total = batch * m * n
+            var c_out = _make_ptr[DType.float32](c_addr).as_unsafe_any_origin()
+            var ws_ptr = (
+                _make_ptr[DType.float32](c_target)
+                .as_unsafe_any_origin()
+                .as_immutable()
+            )
+            _enqueue_cached[_ksplit_reduce_kernel](
+                ctx,
+                String("ksplit_reduce"),
+                ceildiv(total, 1024),
+                1,
+                1,
+                256,
+                c_out,
+                ws_ptr,
+                m * n,
+                ksplits,
+                total,
+            )
+        _ = ws^
+    else:
+        raise Error("no GPU accelerator available at compile time")
+
+
+# Skinny-M transposed-B GEMM as C^T = B @ A^T: materialize A^T (m x k ->
+# k x m, one tiny kernel), then run the cp.async tb0 pipeline with the
+# operand roles swapped — B (n, k) row-major streams as the "A" operand at
+# full bandwidth — and the CT epilogue writes C (m, n) directly.
+@always_inline
+def _ct_enqueue[
+    BM: Int,
+    BN: Int,
+    BK: Int,
+    TM: Int,
+    TN: Int,
+    STAGES: Int = PIPE3_STAGES,
+    MINB: Int = -1,
+](
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    ctx: DeviceContext,
+) raises:
+    comptime if has_accelerator():
+        comptime THREADS = (BM // TM) * (BN // TN)
+        var at_buf = ctx.enqueue_create_buffer[DType.float32](m * k)
+        var at_addr = Int(at_buf.unsafe_ptr())
+        var a_in = (
+            _make_ptr[DType.float32](a_addr)
+            .as_unsafe_any_origin()
+            .as_immutable()
+        )
+        var at_out = _make_ptr[DType.float32](at_addr).as_unsafe_any_origin()
+        _enqueue_cached[_transpose_small_kernel](
+            ctx,
+            String("transpose_small"),
+            ceildiv(m * k, 256),
+            1,
+            1,
+            256,
+            at_out,
+            a_in,
+            m,
+            k,
+        )
+        var c = _make_ptr[DType.float32](c_addr).as_unsafe_any_origin()
+        var wa = (
+            _make_ptr[DType.float32](b_addr)
+            .as_unsafe_any_origin()
+            .as_immutable()
+        )
+        var at = (
+            _make_ptr[DType.float32](at_addr)
+            .as_unsafe_any_origin()
+            .as_immutable()
+        )
+        # Swapped roles: kernel-m = n (weight rows), kernel-n = m.
+        _enqueue_cached[
+            _gemm_pipe3_kernel[
+                BM, BN, BK, TM, TN, 4, 4, True, STAGES, False, MINB
+            ]
+        ](
+            ctx,
+            String(t"gemm_ct_{BM}x{BN}x{BK}_{TM}{TN}_s{STAGES}_mb{MINB}"),
+            ceildiv(m, BN),
+            ceildiv(n, BM),
+            1,
+            THREADS,
+            c,
+            wa,
+            at,
+            n,
+            m,
+            k,
+            n * k,
+            1,
+            at,
+        )
+        _ = at_buf^
+    else:
+        raise Error("no GPU accelerator available at compile time")
+
+
+# Medium-M FFMA-dense path: transpose the (small) activation A once so
+# BOTH operand slabs stream via cp.async and both compute fragments are
+# contiguous vector loads (CUTLASS-SIMT-style instruction density).
+@always_inline
+def _pipe3t_enqueue[
+    BM: Int, BN: Int, BK: Int, TM: Int, TN: Int, STAGES: Int, MINB: Int = -1
+](
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    kchunk_min: Int,
+    ctx: DeviceContext,
+) raises:
+    comptime if has_accelerator():
+        comptime THREADS = (BM // TM) * (BN // TN)
+        var at_buf = ctx.enqueue_create_buffer[DType.float32](m * k)
+        var at_addr = Int(at_buf.unsafe_ptr())
+        var a_in = (
+            _make_ptr[DType.float32](a_addr)
+            .as_unsafe_any_origin()
+            .as_immutable()
+        )
+        var at_out = _make_ptr[DType.float32](at_addr).as_unsafe_any_origin()
+        _enqueue_cached[_transpose_small_kernel](
+            ctx,
+            String("transpose_small"),
+            ceildiv(m * k, 256),
+            1,
+            1,
+            256,
+            at_out,
+            a_in,
+            m,
+            k,
+        )
+        var gx = ceildiv(n, BN)
+        var gy = ceildiv(m, BM)
+        var ksplits = 1
+        var base = gx * gy
+        var kcap = ceildiv(k, kchunk_min)
+        if base < TARGET_BLOCKS // 2:
+            ksplits = min(min(ceildiv(TARGET_BLOCKS, base), kcap), 32)
+        var ws = Optional[DeviceBuffer[DType.float32]](None)
+        var c_target = c_addr
+        if ksplits > 1:
+            ws = ctx.enqueue_create_buffer[DType.float32](ksplits * m * n)
+            c_target = Int(ws.value().unsafe_ptr())
+        var c = _make_ptr[DType.float32](c_target).as_unsafe_any_origin()
+        var at = (
+            _make_ptr[DType.float32](at_addr)
+            .as_unsafe_any_origin()
+            .as_immutable()
+        )
+        var b = (
+            _make_ptr[DType.float32](b_addr)
+            .as_unsafe_any_origin()
+            .as_immutable()
+        )
+        _enqueue_cached[
+            _gemm_pipe3_kernel[
+                BM, BN, BK, TM, TN, 4, 4, False, STAGES, True, MINB
+            ]
+        ](
+            ctx,
+            String(t"gemm_p3t_{BM}x{BN}x{BK}_{TM}{TN}_s{STAGES}_mb{MINB}"),
+            gx,
+            gy,
+            ksplits,
+            THREADS,
+            c,
+            at,
+            b,
+            m,
+            n,
+            k,
+            m * k,
+            ksplits,
+            at,
+        )
+        if ksplits > 1:
+            var total = m * n
+            var c_out = _make_ptr[DType.float32](c_addr).as_unsafe_any_origin()
+            var ws_ptr = (
+                _make_ptr[DType.float32](c_target)
+                .as_unsafe_any_origin()
+                .as_immutable()
+            )
+            _enqueue_cached[_ksplit_reduce_kernel](
+                ctx,
+                String("ksplit_reduce"),
+                ceildiv(total, 1024),
+                1,
+                1,
+                256,
+                c_out,
+                ws_ptr,
+                m * n,
+                ksplits,
+                total,
+            )
+        _ = ws^
+        _ = at_buf^
+    else:
+        raise Error("no GPU accelerator available at compile time")
+
+
+def _matmul_tune_dispatcher(
+    c_buffer: PythonObject,
+    a_buffer: PythonObject,
+    b_buffer: PythonObject,
+    # (m, n, k, transpose_b, cfg, kchunk_min); float32 only, k % 4 == 0
+    # and (n % 4 == 0 when transpose_b == 0) required.
+    params: PythonObject,
+    device_context_ptr: PythonObject,
+) raises:
+    var c_addr = Int(py=c_buffer._data_ptr())
+    var a_addr = Int(py=a_buffer._data_ptr())
+    var b_addr = Int(py=b_buffer._data_ptr())
+    var m = Int(py=params[0])
+    var n = Int(py=params[1])
+    var k = Int(py=params[2])
+    var transpose_b = Int(py=params[3])
+    var cfg = Int(py=params[4])
+    var kmin = Int(py=params[5])
+    var ctx = _get_ctx(device_context_ptr)
+
+    if transpose_b == 0:
+        if cfg == 1:
+            _tune_enqueue[32, 64, 16, 4, 4, False, True](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 2:
+            _tune_enqueue[64, 64, 16, 4, 4, False, True](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 3:
+            _tune_enqueue[128, 128, 16, 8, 8, False, False](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 4:
+            _tune_enqueue[128, 64, 8, 8, 8, False, True, 5](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 5:
+            _tune_enqueue[128, 128, 8, 8, 8, False, True, 5](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 6:
+            _tune_enqueue[128, 64, 8, 8, 8, False, True, 7](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 7:
+            _pipe3t_enqueue[128, 64, 8, 8, 8, 5](
+                c_addr, a_addr, b_addr, m, n, k, kmin, ctx
+            )
+        elif cfg == 8:
+            _pipe3t_enqueue[128, 128, 8, 8, 8, 5](
+                c_addr, a_addr, b_addr, m, n, k, kmin, ctx
+            )
+        elif cfg == 9:
+            _pipe3t_enqueue[128, 64, 16, 8, 8, 3](
+                c_addr, a_addr, b_addr, m, n, k, kmin, ctx
+            )
+        elif cfg == 10:
+            _pipe3t_enqueue[64, 64, 8, 8, 8, 5](
+                c_addr, a_addr, b_addr, m, n, k, kmin, ctx
+            )
+        elif cfg == 11:
+            _tune_enqueue[64, 64, 16, 4, 4, False, True, 4, 4](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 12:
+            _tune_enqueue[64, 64, 16, 4, 4, False, True, 4, 5](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 13:
+            _pipe3t_enqueue[64, 64, 8, 8, 4, 5, 6](
+                c_addr, a_addr, b_addr, m, n, k, kmin, ctx
+            )
+        elif cfg == 14:
+            _pipe3t_enqueue[64, 64, 8, 8, 4, 6, 8](
+                c_addr, a_addr, b_addr, m, n, k, kmin, ctx
+            )
+        elif cfg == 15:
+            _pipe3t_enqueue[128, 64, 8, 8, 8, 5, 4](
+                c_addr, a_addr, b_addr, m, n, k, kmin, ctx
+            )
+        elif cfg == 16:
+            _pipe3t_enqueue[64, 128, 8, 8, 8, 5, 6](
+                c_addr, a_addr, b_addr, m, n, k, kmin, ctx
+            )
+        else:
+            raise Error("unknown tb0 tune cfg")
+    else:
+        if cfg == 1:
+            _tune_enqueue[32, 64, 16, 4, 4, True, False](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, kmin, ctx
+            )
+        elif cfg == 2:
+            _ct_enqueue[64, 32, 32, 4, 4, 3](
+                c_addr, a_addr, b_addr, m, n, k, ctx
+            )
+        elif cfg == 3:
+            _ct_enqueue[64, 32, 16, 4, 4](c_addr, a_addr, b_addr, m, n, k, ctx)
+        elif cfg == 4:
+            _ct_enqueue[128, 64, 8, 8, 8, 5](
+                c_addr, a_addr, b_addr, m, n, k, ctx
+            )
+        elif cfg == 5:
+            _ct_enqueue[128, 128, 8, 8, 8, 5](
+                c_addr, a_addr, b_addr, m, n, k, ctx
+            )
+        elif cfg == 6:
+            _ct_enqueue[64, 64, 8, 8, 8, 5](
+                c_addr, a_addr, b_addr, m, n, k, ctx
+            )
+        elif cfg == 7:
+            _ct_enqueue[64, 64, 8, 8, 8, 5, 6](
+                c_addr, a_addr, b_addr, m, n, k, ctx
+            )
+        elif cfg == 8:
+            _ct_enqueue[64, 128, 8, 8, 8, 5, 4](
+                c_addr, a_addr, b_addr, m, n, k, ctx
+            )
+        elif cfg == 9:
+            _ct_enqueue[64, 64, 16, 8, 8, 3, 6](
+                c_addr, a_addr, b_addr, m, n, k, ctx
+            )
+        else:
+            raise Error("unknown tb1 tune cfg")
 
 
 @always_inline
@@ -1198,32 +1865,32 @@ def _gemm_dtype_dispatch(
         raise Error("unsupported dtype for fast matmul: " + String(dtype))
 
 
-def _matmul_dispatcher(
-    c_buffer: PythonObject,
-    a_buffer: PythonObject,
-    b_buffer: PythonObject,
+def _matmul_go(
+    c_buffer: PyObjectPtr,
+    a_buffer: PyObjectPtr,
+    b_buffer: PyObjectPtr,
     # (m, n, k, transpose_b) or, with element offsets into the three
     # buffers (grouped convolution), (m, n, k, transpose_b, c_off, a_off,
     # b_off).
-    params: PythonObject,
-    device_context_ptr: PythonObject,
+    params: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(a_buffer)
-    var c_addr = Int(py=c_buffer._data_ptr())
-    var a_addr = Int(py=a_buffer._data_ptr())
-    var b_addr = Int(py=b_buffer._data_ptr())
-    var m = Int(py=params[0])
-    var n = Int(py=params[1])
-    var k = Int(py=params[2])
-    var transpose_b = Int(py=params[3])
+    var dtype = _raw_dtype(a_buffer)
+    var c_addr = _raw_addr(c_buffer)
+    var a_addr = _raw_addr(a_buffer)
+    var b_addr = _raw_addr(b_buffer)
+    var m = _raw_tuple_int(params, 0)
+    var n = _raw_tuple_int(params, 1)
+    var k = _raw_tuple_int(params, 2)
+    var transpose_b = _raw_tuple_int(params, 3)
     var c_off = 0
     var a_off = 0
     var b_off = 0
-    if len(params) > 4:
-        c_off = Int(py=params[4])
-        a_off = Int(py=params[5])
-        b_off = Int(py=params[6])
-    var ctx = _get_ctx(device_context_ptr)
+    if _raw_tuple_len(params) > 4:
+        c_off = _raw_tuple_int(params, 4)
+        a_off = _raw_tuple_int(params, 5)
+        b_off = _raw_tuple_int(params, 6)
+    var ctx = _raw_ctx(device_context_ptr)
 
     _gemm_dtype_dispatch(
         dtype,
@@ -1243,29 +1910,29 @@ def _matmul_dispatcher(
     )
 
 
-def _bmm_dispatcher(
-    c_buffer: PythonObject,
-    a_buffer: PythonObject,
-    b_buffer: PythonObject,
+def _bmm_go(
+    c_buffer: PyObjectPtr,
+    a_buffer: PyObjectPtr,
+    b_buffer: PyObjectPtr,
     # (batch, m, n, k, transpose_b) or (batch, m, n, k, transpose_b,
     # a_shared) — a_shared=1 broadcasts a single (m, k) A across the batch
     # (batched convolution with shared weights).
-    params: PythonObject,
-    device_context_ptr: PythonObject,
+    params: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(a_buffer)
-    var c_addr = Int(py=c_buffer._data_ptr())
-    var a_addr = Int(py=a_buffer._data_ptr())
-    var b_addr = Int(py=b_buffer._data_ptr())
-    var batch = Int(py=params[0])
-    var m = Int(py=params[1])
-    var n = Int(py=params[2])
-    var k = Int(py=params[3])
-    var transpose_b = Int(py=params[4])
+    var dtype = _raw_dtype(a_buffer)
+    var c_addr = _raw_addr(c_buffer)
+    var a_addr = _raw_addr(a_buffer)
+    var b_addr = _raw_addr(b_buffer)
+    var batch = _raw_tuple_int(params, 0)
+    var m = _raw_tuple_int(params, 1)
+    var n = _raw_tuple_int(params, 2)
+    var k = _raw_tuple_int(params, 3)
+    var transpose_b = _raw_tuple_int(params, 4)
     var a_bstride = m * k
-    if len(params) > 5 and Int(py=params[5]) != 0:
+    if _raw_tuple_len(params) > 5 and _raw_tuple_int(params, 5) != 0:
         a_bstride = 0
-    var ctx = _get_ctx(device_context_ptr)
+    var ctx = _raw_ctx(device_context_ptr)
 
     _gemm_dtype_dispatch(
         dtype,
@@ -1461,6 +2128,119 @@ def _bias_add_row_dispatcher(
         raise Error("unsupported dtype for fast bias add: " + String(dtype))
 
 
+def _matmul_bias_go(
+    c_buffer: PyObjectPtr,
+    a_buffer: PyObjectPtr,
+    b_buffer: PyObjectPtr,
+    bias_buffer: PyObjectPtr,
+    # (m, n, k, transpose_b)
+    params: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
+) raises:
+    """C = A @ B (+ bias broadcast over rows) in one Python-visible call.
+
+    Equivalent to Matmul followed by BiasAddRow; fused at the dispatcher
+    level because addmm/linear call both back to back on every transformer
+    layer and each Python->Mojo binding call costs a few microseconds of
+    argument unwrapping.
+    """
+    var dtype = _raw_dtype(a_buffer)
+    var c_addr = _raw_addr(c_buffer)
+    var a_addr = _raw_addr(a_buffer)
+    var b_addr = _raw_addr(b_buffer)
+    var bias_addr = _raw_addr(bias_buffer)
+    var m = _raw_tuple_int(params, 0)
+    var n = _raw_tuple_int(params, 1)
+    var k = _raw_tuple_int(params, 2)
+    var transpose_b = _raw_tuple_int(params, 3)
+    var ctx = _raw_ctx(device_context_ptr)
+
+    # Fused-epilogue path: the float32 pipe3 tile kernels add the bias in
+    # the GEMM epilogue, saving a full extra read+write of C per call.
+    if (
+        dtype == DType.float32
+        and transpose_b == 0
+        and m > SMALLM_MR
+        and k % 4 == 0
+        and n % 4 == 0
+    ):
+        if m <= 32:
+            _tune_enqueue[
+                32, 64, 16, 4, 4, False, True, PIPE3_STAGES, -1, True
+            ](c_addr, a_addr, b_addr, 1, m, n, k, m * k, 96, ctx, bias_addr)
+        else:
+            _tune_enqueue[64, 64, 16, 4, 4, False, True, PIPE3_STAGES, 4, True](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, 192, ctx, bias_addr
+            )
+        return
+
+    _gemm_dtype_dispatch(
+        dtype,
+        c_addr,
+        a_addr,
+        b_addr,
+        1,
+        m,
+        n,
+        k,
+        m * k,
+        transpose_b,
+        0,
+        0,
+        0,
+        ctx,
+    )
+    if dtype == DType.float32:
+        _bias_add_row[DType.float32](c_addr, bias_addr, m * n, n, ctx)
+    elif dtype == DType.float16:
+        _bias_add_row[DType.float16](c_addr, bias_addr, m * n, n, ctx)
+    elif dtype == DType.bfloat16:
+        _bias_add_row[DType.bfloat16](c_addr, bias_addr, m * n, n, ctx)
+    else:
+        raise Error("unsupported dtype for fast bias add: " + String(dtype))
+
+
+# METH_FASTCALL wrappers for the hot dispatchers (raw CPython unpack; the
+# internal Python callers guarantee argument types, and raise sites are
+# unsupported-dtype guards gated upstream).
+
+
+def _matmul_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _matmul_go(args[0], args[1], args[2], args[3], args[4])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _bmm_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _bmm_go(args[0], args[1], args[2], args[3], args[4])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _matmul_bias_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _matmul_bias_go(args[0], args[1], args[2], args[3], args[4], args[5])
+    except:
+        pass
+    return _raw_ret_none()
+
+
 # ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
@@ -1470,14 +2250,24 @@ def _bias_add_row_dispatcher(
 def PyInit_matmul_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("matmul_ops")
-        b.def_function[_matmul_dispatcher](
+        b.def_py_c_function(
+            _matmul_dispatcher,
             "Matmul",
             docstring=(
                 "C = A @ B (row-major, optional transposed B), pure Mojo"
                 " kernels, GPU only"
             ),
         )
-        b.def_function[_bmm_dispatcher](
+        b.def_py_c_function(
+            _matmul_bias_dispatcher,
+            "MatmulBias",
+            docstring=(
+                "C = A @ B + bias (bias broadcast over rows); one call"
+                " instead of Matmul + BiasAddRow"
+            ),
+        )
+        b.def_py_c_function(
+            _bmm_dispatcher,
             "Bmm",
             docstring=(
                 "batched C = A @ B (rank 3, optional transposed B), pure Mojo"
@@ -1487,6 +2277,12 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
         b.def_function[_matmul_vendor_dispatcher](
             "MatmulVendor",
             docstring="vendor BLAS (cuBLAS) matmul — benchmarking only",
+        )
+        b.def_function[_matmul_tune_dispatcher](
+            "MatmulTune",
+            docstring=(
+                "GEMM with explicit tile cfg + split-K floor — tuning only"
+            ),
         )
         b.def_function[_bmm_vendor_dispatcher](
             "BmmVendor",

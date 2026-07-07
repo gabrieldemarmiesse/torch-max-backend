@@ -23,41 +23,53 @@ from std.gpu.host import DeviceContext
 from std.math import exp, pow, tanh
 from std.memory import OpaquePointer
 from std.python import PythonObject
+from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
 from std.sys.info import has_accelerator, simd_width_of
 from std.utils.coord import Coord
 
 from std.algorithm.functional import elementwise
 
+from op_utils import (
+    _raw_addr,
+    _raw_ctx,
+    _raw_dtype,
+    _raw_f64,
+    _raw_int,
+    _raw_numel,
+    _raw_ret_none,
+)
+
 # ---------------------------------------------------------------------------
-# Helpers to unwrap `max.driver.Buffer` Python objects.
-# Mirrors `max._interpreter_ops.op_utils`.
+# Helpers to unwrap `max.driver.Buffer` Python objects, via direct CPython
+# calls on borrowed references (see op_utils). The dispatchers register as
+# METH_FASTCALL functions (`def_py_c_function`), skipping the owning
+# PythonObject wrappers of the `def_function` path entirely.
 # ---------------------------------------------------------------------------
 
 
-def _get_dtype(buffer: PythonObject) raises -> DType:
-    return DType._from_ui8(UInt8(py=buffer.dtype.value)._mlir_value)
+@always_inline
+def _get_dtype(buffer: PyObjectPtr) -> DType:
+    return _raw_dtype(buffer)
 
 
+@always_inline
 def _get_buffer_ptr[
     dtype: DType
-](buffer: PythonObject) raises -> UnsafePointer[
-    Scalar[dtype], MutUntrackedOrigin
-]:
+](buffer: PyObjectPtr) -> UnsafePointer[Scalar[dtype], MutUntrackedOrigin]:
     return UnsafePointer[Scalar[dtype], MutUntrackedOrigin](
-        unsafe_from_address=Int(py=buffer._data_ptr())
+        unsafe_from_address=_raw_addr(buffer)
     )
 
 
-def _get_size(buffer: PythonObject) raises -> Int:
-    return Int(py=buffer.num_elements)
+@always_inline
+def _get_size(buffer: PyObjectPtr) -> Int:
+    return _raw_numel(buffer)
 
 
-def _get_ctx(device_context_ptr: PythonObject) raises -> DeviceContext:
-    var addr = Int(py=device_context_ptr)
-    return DeviceContext(
-        OpaquePointer[MutUntrackedOrigin](unsafe_from_address=addr)
-    )
+@always_inline
+def _get_ctx(device_context_ptr: PyObjectPtr) -> DeviceContext:
+    return _raw_ctx(device_context_ptr)
 
 
 # ---------------------------------------------------------------------------
@@ -124,19 +136,14 @@ def _bin_elementwise[
                 raise Error("no GPU accelerator available at compile time")
 
 
-def _bin_dispatcher[
+def _bin_go[
     op_code: Int
 ](
-    out_buffer: PythonObject,
-    lhs_buffer: PythonObject,
-    rhs_buffer: PythonObject,
-    device_context_ptr: PythonObject,
+    out_buffer: PyObjectPtr,
+    lhs_buffer: PyObjectPtr,
+    rhs_buffer: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
 ) raises:
-    """Runtime dtype dispatch for a binary elementwise op.
-
-    All dtype specializations live in this one extension, so a single
-    `.so` serves every dtype and every shape.
-    """
     var dtype = _get_dtype(lhs_buffer)
     var size = _get_size(out_buffer)
     var ctx = _get_ctx(device_context_ptr)
@@ -214,8 +221,8 @@ def _bin_dispatcher[
             ctx,
         )
     else:
-        raise Error(
-            "unsupported dtype for fast binary elementwise op: " + String(dtype)
+        abort(
+            String("unsupported dtype for fast binary elementwise op: ", dtype)
         )
 
 
@@ -287,12 +294,12 @@ def _unary_elementwise[
                 raise Error("no GPU accelerator available at compile time")
 
 
-def _unary_dispatcher[
+def _unary_go[
     op_code: Int
 ](
-    out_buffer: PythonObject,
-    in_buffer: PythonObject,
-    device_context_ptr: PythonObject,
+    out_buffer: PyObjectPtr,
+    in_buffer: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
 ) raises:
     var dtype = _get_dtype(in_buffer)
     var size = _get_size(out_buffer)
@@ -320,8 +327,8 @@ def _unary_dispatcher[
             ctx,
         )
     else:
-        raise Error(
-            "unsupported dtype for fast unary elementwise op: " + String(dtype)
+        abort(
+            String("unsupported dtype for fast unary elementwise op: ", dtype)
         )
 
 
@@ -376,17 +383,17 @@ def _scalar_elementwise[
                 raise Error("no GPU accelerator available at compile time")
 
 
-def _scalar_dispatcher[
+def _scalar_go[
     op_code: Int
 ](
-    out_buffer: PythonObject,
-    in_buffer: PythonObject,
-    scalar: PythonObject,
-    device_context_ptr: PythonObject,
+    out_buffer: PyObjectPtr,
+    in_buffer: PyObjectPtr,
+    scalar: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
 ) raises:
     var dtype = _get_dtype(in_buffer)
     var size = _get_size(out_buffer)
-    var scalar_val = Float32(py=scalar)
+    var scalar_val = Float32(_raw_f64(scalar))
     var ctx = _get_ctx(device_context_ptr)
 
     if dtype == DType.float32:
@@ -414,18 +421,21 @@ def _scalar_dispatcher[
             ctx,
         )
     else:
-        raise Error(
-            "unsupported dtype for fast scalar elementwise op: " + String(dtype)
+        abort(
+            String("unsupported dtype for fast scalar elementwise op: ", dtype)
         )
 
 
-# Integer variant: out = x + scalar over integer dtypes (int semantics, no
-# float round-trip). Only Add is needed so far.
+# Integer variant: out = op(x, scalar) over integer dtypes (int semantics,
+# no float round-trip).
+
+comptime IOP_ADD = 0
+comptime IOP_MUL = 1
 
 
 @always_inline
-def _add_scalar_int[
-    dtype: DType
+def _int_scalar_elementwise[
+    dtype: DType, op_code: Int
 ](
     out_ptr: UnsafePointer[Scalar[dtype], MutUntrackedOrigin],
     in_ptr: UnsafePointer[Scalar[dtype], MutUntrackedOrigin],
@@ -439,7 +449,10 @@ def _add_scalar_int[
     def func[width: Int, alignment: Int = 1](idx: Coord):
         var i = Int(idx[0].value())
         var a = in_ptr.load[width=width](i)
-        out_ptr.store[width=width](i, a + SIMD[dtype, width](scalar))
+        comptime if op_code == IOP_ADD:
+            out_ptr.store[width=width](i, a + SIMD[dtype, width](scalar))
+        comptime if op_code == IOP_MUL:
+            out_ptr.store[width=width](i, a * SIMD[dtype, width](scalar))
 
     if ctx.api() == "cpu":
         elementwise[func, simd_width=simd_width_of[dtype]()](Coord(size), ctx)
@@ -450,19 +463,21 @@ def _add_scalar_int[
             raise Error("no GPU accelerator available at compile time")
 
 
-def _add_scalar_int_dispatcher(
-    out_buffer: PythonObject,
-    in_buffer: PythonObject,
-    scalar: PythonObject,
-    device_context_ptr: PythonObject,
+def _int_scalar_go[
+    op_code: Int
+](
+    out_buffer: PyObjectPtr,
+    in_buffer: PyObjectPtr,
+    scalar: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
 ) raises:
     var dtype = _get_dtype(in_buffer)
     var size = _get_size(out_buffer)
-    var scalar_val = Int(py=scalar)
+    var scalar_val = _raw_int(scalar)
     var ctx = _get_ctx(device_context_ptr)
 
     if dtype == DType.int64:
-        _add_scalar_int[DType.int64](
+        _int_scalar_elementwise[DType.int64, op_code](
             _get_buffer_ptr[DType.int64](out_buffer),
             _get_buffer_ptr[DType.int64](in_buffer),
             scalar_val,
@@ -470,7 +485,7 @@ def _add_scalar_int_dispatcher(
             ctx,
         )
     elif dtype == DType.int32:
-        _add_scalar_int[DType.int32](
+        _int_scalar_elementwise[DType.int32, op_code](
             _get_buffer_ptr[DType.int32](out_buffer),
             _get_buffer_ptr[DType.int32](in_buffer),
             scalar_val,
@@ -479,8 +494,174 @@ def _add_scalar_int_dispatcher(
         )
     else:
         raise Error(
-            "unsupported dtype for fast int scalar add: " + String(dtype)
+            "unsupported dtype for fast int scalar op: " + String(dtype)
         )
+
+
+# ---------------------------------------------------------------------------
+# Fill: out[i] = value, over any dtype. The value comes in as a Float64 and
+# is cast to the buffer dtype (exact for the small ints masks/one-hots use).
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _fill[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutUntrackedOrigin],
+    value: Float64,
+    size: Int,
+    ctx: DeviceContext,
+) raises:
+    var scalar = value.cast[dtype]()
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, scalar)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        out_ptr.store[width=width](i, SIMD[dtype, width](scalar))
+
+    if ctx.api() == "cpu":
+        elementwise[func, simd_width=simd_width_of[dtype]()](Coord(size), ctx)
+    else:
+        comptime if has_accelerator():
+            elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
+
+def _fill_go(
+    out_buffer: PyObjectPtr,
+    value: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
+) raises:
+    var dtype = _get_dtype(out_buffer)
+    var size = _get_size(out_buffer)
+    var value_val = _raw_f64(value)
+    var ctx = _get_ctx(device_context_ptr)
+
+    if dtype == DType.float32:
+        _fill[DType.float32](
+            _get_buffer_ptr[DType.float32](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.float16:
+        _fill[DType.float16](
+            _get_buffer_ptr[DType.float16](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.bfloat16:
+        _fill[DType.bfloat16](
+            _get_buffer_ptr[DType.bfloat16](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.float64:
+        _fill[DType.float64](
+            _get_buffer_ptr[DType.float64](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.int64:
+        _fill[DType.int64](
+            _get_buffer_ptr[DType.int64](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.int32:
+        _fill[DType.int32](
+            _get_buffer_ptr[DType.int32](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.int16:
+        _fill[DType.int16](
+            _get_buffer_ptr[DType.int16](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.int8:
+        _fill[DType.int8](
+            _get_buffer_ptr[DType.int8](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.uint8:
+        _fill[DType.uint8](
+            _get_buffer_ptr[DType.uint8](out_buffer), value_val, size, ctx
+        )
+    elif dtype == DType.bool:
+        _fill[DType.bool](
+            _get_buffer_ptr[DType.bool](out_buffer),
+            Float64(1) if value_val != 0 else Float64(0),
+            size,
+            ctx,
+        )
+    else:
+        abort(String("unsupported dtype for fast fill: ", dtype))
+
+
+# ---------------------------------------------------------------------------
+# METH_FASTCALL wrappers: raw CPython argument unpacking (no owning
+# PythonObject per argument). Argument types are guaranteed by the internal
+# Python callers in aten_fast.py; errors cannot cross the C ABI, and the
+# only raise sites are unsupported-dtype guards already gated upstream.
+# ---------------------------------------------------------------------------
+
+
+def _bin_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _bin_go[op_code](args[0], args[1], args[2], args[3])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _unary_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _unary_go[op_code](args[0], args[1], args[2])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _scalar_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _scalar_go[op_code](args[0], args[1], args[2], args[3])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _int_scalar_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _int_scalar_go[op_code](args[0], args[1], args[2], args[3])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _fill_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _fill_go(args[0], args[1], args[2])
+    except:
+        pass
+    return _raw_ret_none()
 
 
 # ---------------------------------------------------------------------------
@@ -492,46 +673,80 @@ def _add_scalar_int_dispatcher(
 def PyInit_elementwise_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("elementwise_ops")
-        b.def_function[_bin_dispatcher[OP_ADD]](
-            "Add", docstring="out = lhs + rhs (contiguous, dtype dispatch)"
+        b.def_py_c_function(
+            _bin_dispatcher[OP_ADD],
+            "Add",
+            docstring="out = lhs + rhs (contiguous, dtype dispatch)",
         )
-        b.def_function[_bin_dispatcher[OP_SUB]](
-            "Sub", docstring="out = lhs - rhs (contiguous, dtype dispatch)"
+        b.def_py_c_function(
+            _bin_dispatcher[OP_SUB],
+            "Sub",
+            docstring="out = lhs - rhs (contiguous, dtype dispatch)",
         )
-        b.def_function[_bin_dispatcher[OP_MUL]](
-            "Mul", docstring="out = lhs * rhs (contiguous, dtype dispatch)"
+        b.def_py_c_function(
+            _bin_dispatcher[OP_MUL],
+            "Mul",
+            docstring="out = lhs * rhs (contiguous, dtype dispatch)",
         )
-        b.def_function[_bin_dispatcher[OP_DIV]](
-            "Div", docstring="out = lhs / rhs (contiguous, dtype dispatch)"
+        b.def_py_c_function(
+            _bin_dispatcher[OP_DIV],
+            "Div",
+            docstring="out = lhs / rhs (contiguous, dtype dispatch)",
         )
-        b.def_function[_bin_dispatcher[OP_MAX]](
-            "Max", docstring="out = max(lhs, rhs) (contiguous, dtype dispatch)"
+        b.def_py_c_function(
+            _bin_dispatcher[OP_MAX],
+            "Max",
+            docstring="out = max(lhs, rhs) (contiguous, dtype dispatch)",
         )
-        b.def_function[_bin_dispatcher[OP_MIN]](
-            "Min", docstring="out = min(lhs, rhs) (contiguous, dtype dispatch)"
+        b.def_py_c_function(
+            _bin_dispatcher[OP_MIN],
+            "Min",
+            docstring="out = min(lhs, rhs) (contiguous, dtype dispatch)",
         )
-        b.def_function[_unary_dispatcher[UOP_RELU]](
-            "Relu", docstring="out = max(x, 0) (contiguous, dtype dispatch)"
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_RELU],
+            "Relu",
+            docstring="out = max(x, 0) (contiguous, dtype dispatch)",
         )
-        b.def_function[_unary_dispatcher[UOP_EXP]](
-            "Exp", docstring="out = exp(x) (contiguous, float dtypes)"
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_EXP],
+            "Exp",
+            docstring="out = exp(x) (contiguous, float dtypes)",
         )
-        b.def_function[_unary_dispatcher[UOP_TANH]](
-            "Tanh", docstring="out = tanh(x) (contiguous, float dtypes)"
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_TANH],
+            "Tanh",
+            docstring="out = tanh(x) (contiguous, float dtypes)",
         )
-        b.def_function[_scalar_dispatcher[SOP_ADD]](
-            "AddScalar", docstring="out = x + scalar (contiguous, float dtypes)"
+        b.def_py_c_function(
+            _scalar_dispatcher[SOP_ADD],
+            "AddScalar",
+            docstring="out = x + scalar (contiguous, float dtypes)",
         )
-        b.def_function[_scalar_dispatcher[SOP_MUL]](
-            "MulScalar", docstring="out = x * scalar (contiguous, float dtypes)"
+        b.def_py_c_function(
+            _scalar_dispatcher[SOP_MUL],
+            "MulScalar",
+            docstring="out = x * scalar (contiguous, float dtypes)",
         )
-        b.def_function[_scalar_dispatcher[SOP_POW]](
+        b.def_py_c_function(
+            _scalar_dispatcher[SOP_POW],
             "PowScalar",
             docstring="out = x ** scalar (contiguous, float dtypes)",
         )
-        b.def_function[_add_scalar_int_dispatcher](
+        b.def_py_c_function(
+            _int_scalar_dispatcher[IOP_ADD],
             "AddScalarInt",
             docstring="out = x + scalar (contiguous, int dtypes)",
+        )
+        b.def_py_c_function(
+            _int_scalar_dispatcher[IOP_MUL],
+            "MulScalarInt",
+            docstring="out = x * scalar (contiguous, int dtypes)",
+        )
+        b.def_py_c_function(
+            _fill_dispatcher,
+            "Fill",
+            docstring="out[i] = value (contiguous, any dtype)",
         )
         return b.finalize()
     except e:

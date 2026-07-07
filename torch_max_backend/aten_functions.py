@@ -2219,6 +2219,17 @@ def aten_le(input: MaxTensor, other: Scalar | MaxTensor) -> MaxTensor:
 
 
 # leaky_relu(Tensor self, Scalar negative_slope=0.01) -> Tensor
+# linear(Tensor input, Tensor weight, Tensor? bias=None) -> Tensor
+@map_to(aten.linear)
+def aten_linear(
+    input: MaxTensor, weight: MaxTensor, bias: MaxTensor | None = None
+) -> MaxTensor:
+    result = operator.matmul(input, F.transpose(weight, -1, -2))
+    if bias is not None:
+        result = result + bias
+    return result
+
+
 # log(Tensor self) -> Tensor
 @map_to(aten.log)
 def aten_log(input: MaxTensor) -> MaxTensor:
@@ -2497,6 +2508,9 @@ def aten_mm(x: MaxTensor, y: MaxTensor) -> MaxTensor:
 @map_to(aten.mul)
 def aten_mul(input: MaxTensor, other: MaxTensor | Scalar) -> MaxTensor:
     input, other = type_promotion(input, other)
+    if input.dtype == DType.bool and getattr(other, "dtype", None) == DType.bool:
+        # MAX's mul doesn't lower for bool; torch defines it as logical AND.
+        return F.logical_and(input, other)
     return input * other
 
 
@@ -3143,6 +3157,10 @@ def aten_sum(
     if dtype is not None:
         max_dtype = torch_dtype_to_max(dtype)
         input = F.cast(input, dtype=max_dtype)
+    elif input.dtype in (DType.bool, DType.uint8, DType.int8, DType.int16, DType.int32):
+        # torch promotes bool/small-int sums to int64; MAX's reduction
+        # kernel also rejects bool outright ("SIMD type must be numeric").
+        input = F.cast(input, dtype=DType.int64)
 
     result = input
 

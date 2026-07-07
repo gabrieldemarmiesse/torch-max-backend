@@ -70,8 +70,17 @@ class TorchMaxTensor(torch.Tensor):
     @classmethod
     @no_type_check
     def _from_buffer(cls, buffer: max.driver.Buffer) -> "TorchMaxTensor":
-        """Wrap a realized contiguous driver buffer (fast path outputs)."""
-        result = TorchMaxTensor(tuple(buffer.shape), max_dtype_to_torch(buffer.dtype))
+        """Wrap a realized contiguous driver buffer (fast path outputs).
+
+        Inlines __new__/__init__ (create + class stamp + the two slots):
+        this constructor runs several hundred times per transformer decode
+        step, so the two extra Python frames are worth skipping.
+        """
+        result = torch._C._acc.create_empty_tensor(
+            tuple(buffer.shape), max_dtype_to_torch(buffer.dtype)
+        )
+        result.__class__ = TorchMaxTensor
+        result._max_data_ = None
         result._buffer = buffer
         return result
 

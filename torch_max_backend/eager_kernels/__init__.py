@@ -38,6 +38,7 @@ _MOJO_MODULES = (
     "elementwise_ops",
     "nn_ops",
     "data_movement_ops",
+    "logic_ops",
     "matmul_ops",
     "conv_ops",
 )

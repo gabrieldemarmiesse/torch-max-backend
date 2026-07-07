@@ -10,7 +10,8 @@ from std.builtin.device_passable import DevicePassable
 from std.ffi import _get_global_or_null, external_call
 from std.gpu.host import DeviceContext
 from std.memory import OpaquePointer, alloc
-from std.python import PythonObject
+from std.python import Python, PythonObject
+from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 
 def _get_dtype(buffer: PythonObject) raises -> DType:
@@ -90,3 +91,88 @@ def _get_ctx(device_context_ptr: PythonObject) raises -> DeviceContext:
     return DeviceContext(
         OpaquePointer[MutUntrackedOrigin](unsafe_from_address=addr)
     )
+
+
+# ---------------------------------------------------------------------------
+# Raw-CPython argument unpacking for METH_FASTCALL dispatchers
+# (`def_py_c_function`). The high-level `def_function` path pays an owning
+# PythonObject per argument plus PyNumber round-trips per int — several
+# hundred ns per argument. These helpers read the exact types aten_fast.py
+# passes (ints, tuples of ints, driver.Buffer objects) directly, with
+# borrowed references where possible. No type checking: the Python callers
+# are internal and guarantee the shapes.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _raw_int(obj: PyObjectPtr) -> Int:
+    return Int(Python().cpython().PyLong_AsSsize_t(obj))
+
+
+@always_inline
+def _raw_f64(obj: PyObjectPtr) -> Float64:
+    return Float64(Python().cpython().PyFloat_AsDouble(obj))
+
+
+@always_inline
+def _raw_tuple_int(t: PyObjectPtr, i: Int) -> Int:
+    # PyTuple_GetItem returns a borrowed reference: no refcount traffic.
+    ref cpy = Python().cpython()
+    return Int(cpy.PyLong_AsSsize_t(cpy.PyTuple_GetItem(t, i)))
+
+
+@always_inline
+def _raw_addr(buffer: PyObjectPtr) -> Int:
+    """buffer._data_ptr() via direct CPython calls."""
+    ref cpy = Python().cpython()
+    var meth = cpy.PyObject_GetAttrString(buffer, "_data_ptr")
+    var addr_obj = cpy.PyObject_CallObject(meth, PyObjectPtr())
+    var addr = Int(cpy.PyLong_AsSsize_t(addr_obj))
+    cpy.Py_DecRef(addr_obj)
+    cpy.Py_DecRef(meth)
+    return addr
+
+
+@always_inline
+def _raw_numel(buffer: PyObjectPtr) -> Int:
+    ref cpy = Python().cpython()
+    var v = cpy.PyObject_GetAttrString(buffer, "num_elements")
+    var n = Int(cpy.PyLong_AsSsize_t(v))
+    cpy.Py_DecRef(v)
+    return n
+
+
+@always_inline
+def _raw_dtype(buffer: PyObjectPtr) -> DType:
+    ref cpy = Python().cpython()
+    var dt = cpy.PyObject_GetAttrString(buffer, "dtype")
+    var val = cpy.PyObject_GetAttrString(dt, "value")
+    var v = Int(cpy.PyLong_AsSsize_t(val))
+    cpy.Py_DecRef(val)
+    cpy.Py_DecRef(dt)
+    return DType._from_ui8(UInt8(v)._mlir_value)
+
+
+@always_inline
+def _raw_ctx(ptr_obj: PyObjectPtr) -> DeviceContext:
+    return DeviceContext(
+        OpaquePointer[MutUntrackedOrigin](unsafe_from_address=_raw_int(ptr_obj))
+    )
+
+
+@always_inline
+def _raw_ret_none() -> PyObjectPtr:
+    # The Python callers ignore the return value; 0 is an immortal cached
+    # small int, so this is refcount-only.
+    return Python().cpython().PyLong_FromSsize_t(0)
+
+
+@always_inline
+def _raw_tuple_f64(t: PyObjectPtr, i: Int) -> Float64:
+    ref cpy = Python().cpython()
+    return Float64(cpy.PyFloat_AsDouble(cpy.PyTuple_GetItem(t, i)))
+
+
+@always_inline
+def _raw_tuple_len(t: PyObjectPtr) -> Int:
+    return Int(Python().cpython().PyObject_Length(t))

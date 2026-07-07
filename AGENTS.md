@@ -6,6 +6,10 @@ This file provides guidance to AI agents when working with code in this reposito
 
 This is a PyTorch backend implementation using Modular's MAX framework. The project demonstrates how to create custom PyTorch compilation backends that bridge PyTorch operations to MAX/Mojo implementations. It also has support for eager mode.
 
+## Setup
+
+Make sure a copy of the repository https://github.com/modular/modular and https://github.com/pytorch/pytorch is available for you to grep things and explore. If you cannot find them locally, clone them in `/tmp`, checkout to the right branch/commit (the same as the one in the pyproject.toml).
+
 ## Common Commands
 
 ```bash
