@@ -16,7 +16,7 @@ from std.utils.coord import Coord as StdCoord
 
 from std.algorithm.functional import elementwise
 
-from op_utils import _get_ctx, _get_dtype, _make_ptr
+from op_utils import FLOAT_DTYPES, _get_ctx, _get_dtype, _make_ptr
 
 
 @always_inline
@@ -117,67 +117,30 @@ def _im2col_dispatcher(
     var batch = Int(py=params[13]) if len(params) > 13 else 1
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _im2col[DType.float32](
-            out_addr,
-            in_addr,
-            in_h,
-            in_w,
-            out_h,
-            out_w,
-            kh,
-            kw,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            dil_h,
-            dil_w,
-            channels,
-            batch,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _im2col[DType.float16](
-            out_addr,
-            in_addr,
-            in_h,
-            in_w,
-            out_h,
-            out_w,
-            kh,
-            kw,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            dil_h,
-            dil_w,
-            channels,
-            batch,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _im2col[DType.bfloat16](
-            out_addr,
-            in_addr,
-            in_h,
-            in_w,
-            out_h,
-            out_w,
-            kh,
-            kw,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            dil_h,
-            dil_w,
-            channels,
-            batch,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _im2col[dt](
+                out_addr,
+                in_addr,
+                in_h,
+                in_w,
+                out_h,
+                out_w,
+                kh,
+                kw,
+                stride_h,
+                stride_w,
+                pad_h,
+                pad_w,
+                dil_h,
+                dil_w,
+                channels,
+                batch,
+                ctx,
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast im2col: " + String(dtype))
 
 
@@ -225,19 +188,14 @@ def _bias_add_chan_dispatcher(
     var channels = Int(py=params[1])
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _bias_add_chan[DType.float32](
-            out_addr, bias_addr, total, plane_val, channels, ctx
-        )
-    elif dtype == DType.float16:
-        _bias_add_chan[DType.float16](
-            out_addr, bias_addr, total, plane_val, channels, ctx
-        )
-    elif dtype == DType.bfloat16:
-        _bias_add_chan[DType.bfloat16](
-            out_addr, bias_addr, total, plane_val, channels, ctx
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _bias_add_chan[dt](
+                out_addr, bias_addr, total, plane_val, channels, ctx
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast bias add: " + String(dtype))
 
 

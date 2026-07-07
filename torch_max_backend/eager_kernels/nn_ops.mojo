@@ -37,6 +37,7 @@ from std.algorithm.functional import elementwise
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 from op_utils import (
+    FLOAT_DTYPES,
     _enqueue_cached,
     _make_ptr,
     _raw_addr,
@@ -135,49 +136,24 @@ def _batch_norm_go(
     var total = _raw_numel(out_buffer)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _batch_norm[DType.float32](
-            out_addr,
-            in_addr,
-            mean_addr,
-            var_addr,
-            gamma_addr,
-            beta_addr,
-            eps_val,
-            channels_val,
-            inner_val,
-            total,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _batch_norm[DType.float16](
-            out_addr,
-            in_addr,
-            mean_addr,
-            var_addr,
-            gamma_addr,
-            beta_addr,
-            eps_val,
-            channels_val,
-            inner_val,
-            total,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _batch_norm[DType.bfloat16](
-            out_addr,
-            in_addr,
-            mean_addr,
-            var_addr,
-            gamma_addr,
-            beta_addr,
-            eps_val,
-            channels_val,
-            inner_val,
-            total,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _batch_norm[dt](
+                out_addr,
+                in_addr,
+                mean_addr,
+                var_addr,
+                gamma_addr,
+                beta_addr,
+                eps_val,
+                channels_val,
+                inner_val,
+                total,
+                ctx,
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast batch_norm: " + String(dtype))
 
 
@@ -361,46 +337,23 @@ def _layer_norm_go(
     var cols_val = _raw_tuple_int(params, 2)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _layer_norm[DType.float32](
-            out_addr,
-            mean_out_addr,
-            rstd_out_addr,
-            in_addr,
-            gamma_addr,
-            beta_addr,
-            eps_val,
-            rows_val,
-            cols_val,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _layer_norm[DType.float16](
-            out_addr,
-            mean_out_addr,
-            rstd_out_addr,
-            in_addr,
-            gamma_addr,
-            beta_addr,
-            eps_val,
-            rows_val,
-            cols_val,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _layer_norm[DType.bfloat16](
-            out_addr,
-            mean_out_addr,
-            rstd_out_addr,
-            in_addr,
-            gamma_addr,
-            beta_addr,
-            eps_val,
-            rows_val,
-            cols_val,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _layer_norm[dt](
+                out_addr,
+                mean_out_addr,
+                rstd_out_addr,
+                in_addr,
+                gamma_addr,
+                beta_addr,
+                eps_val,
+                rows_val,
+                cols_val,
+                ctx,
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast layer_norm: " + String(dtype))
 
 
@@ -573,40 +526,21 @@ def _softmax_rows_go(
     var q_len_val = _raw_int(q_len)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _softmax_rows[DType.float32](
-            out_addr,
-            in_addr,
-            rows_val,
-            cols_val,
-            scale_val,
-            causal_val,
-            q_len_val,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _softmax_rows[DType.float16](
-            out_addr,
-            in_addr,
-            rows_val,
-            cols_val,
-            scale_val,
-            causal_val,
-            q_len_val,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _softmax_rows[DType.bfloat16](
-            out_addr,
-            in_addr,
-            rows_val,
-            cols_val,
-            scale_val,
-            causal_val,
-            q_len_val,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _softmax_rows[dt](
+                out_addr,
+                in_addr,
+                rows_val,
+                cols_val,
+                scale_val,
+                causal_val,
+                q_len_val,
+                ctx,
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast softmax: " + String(dtype))
 
 
@@ -782,19 +716,22 @@ def _attn_decode_go(
     if kv_len > ATTN_MAX_KV or head_dim > ATTN_MAX_HD or head_dim % 4 != 0:
         raise Error("attn_decode size caps violated")
 
-    if dtype == DType.float32:
-        _attn_decode[DType.float32](
-            out_addr, q_addr, k_addr, v_addr, bh, kv_len, head_dim, scale, ctx
-        )
-    elif dtype == DType.float16:
-        _attn_decode[DType.float16](
-            out_addr, q_addr, k_addr, v_addr, bh, kv_len, head_dim, scale, ctx
-        )
-    elif dtype == DType.bfloat16:
-        _attn_decode[DType.bfloat16](
-            out_addr, q_addr, k_addr, v_addr, bh, kv_len, head_dim, scale, ctx
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _attn_decode[dt](
+                out_addr,
+                q_addr,
+                k_addr,
+                v_addr,
+                bh,
+                kv_len,
+                head_dim,
+                scale,
+                ctx,
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast attn_decode: " + String(dtype))
 
 
@@ -839,13 +776,12 @@ def _mean_rows_go(
     var cols_val = _raw_int(cols)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _mean_rows[DType.float32](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.float16:
-        _mean_rows[DType.float16](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.bfloat16:
-        _mean_rows[DType.bfloat16](out_addr, in_addr, rows_val, cols_val, ctx)
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _mean_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast mean: " + String(dtype))
 
 
@@ -937,67 +873,30 @@ def _max_pool2d_go(
     var planes = _raw_tuple_int(params, 12)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _max_pool2d[DType.float32](
-            out_addr,
-            idx_addr,
-            in_addr,
-            in_h,
-            in_w,
-            out_h,
-            out_w,
-            kh,
-            kw,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            dil_h,
-            dil_w,
-            planes,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _max_pool2d[DType.float16](
-            out_addr,
-            idx_addr,
-            in_addr,
-            in_h,
-            in_w,
-            out_h,
-            out_w,
-            kh,
-            kw,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            dil_h,
-            dil_w,
-            planes,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _max_pool2d[DType.bfloat16](
-            out_addr,
-            idx_addr,
-            in_addr,
-            in_h,
-            in_w,
-            out_h,
-            out_w,
-            kh,
-            kw,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            dil_h,
-            dil_w,
-            planes,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _max_pool2d[dt](
+                out_addr,
+                idx_addr,
+                in_addr,
+                in_h,
+                in_w,
+                out_h,
+                out_w,
+                kh,
+                kw,
+                stride_h,
+                stride_w,
+                pad_h,
+                pad_w,
+                dil_h,
+                dil_w,
+                planes,
+                ctx,
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast max_pool2d: " + String(dtype))
 
 
@@ -1045,19 +944,14 @@ def _gather0_data_dispatch[
     row_len: Int,
     ctx: DeviceContext,
 ) raises:
-    if dtype == DType.float32:
-        _gather0[DType.float32, idx_dtype](
-            out_addr, weight_addr, indices_addr, num_indices, row_len, ctx
-        )
-    elif dtype == DType.float16:
-        _gather0[DType.float16, idx_dtype](
-            out_addr, weight_addr, indices_addr, num_indices, row_len, ctx
-        )
-    elif dtype == DType.bfloat16:
-        _gather0[DType.bfloat16, idx_dtype](
-            out_addr, weight_addr, indices_addr, num_indices, row_len, ctx
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _gather0[dt, idx_dtype](
+                out_addr, weight_addr, indices_addr, num_indices, row_len, ctx
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast embedding: " + String(dtype))
 
 
@@ -1405,17 +1299,18 @@ def _argmax_rows_go(
     var cols_val = _raw_int(cols)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _argmax_rows[DType.float32](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.float16:
-        _argmax_rows[DType.float16](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.bfloat16:
-        _argmax_rows[DType.bfloat16](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.int64:
-        _argmax_rows[DType.int64](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.int32:
-        _argmax_rows[DType.int32](out_addr, in_addr, rows_val, cols_val, ctx)
-    else:
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.int64,
+        DType.int32,
+    ]:
+        if dtype == dt:
+            _argmax_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast argmax: " + String(dtype))
 
 
@@ -1462,17 +1357,18 @@ def _max_rows_go(
     var cols_val = _raw_int(cols)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _max_rows[DType.float32](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.float16:
-        _max_rows[DType.float16](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.bfloat16:
-        _max_rows[DType.bfloat16](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.int64:
-        _max_rows[DType.int64](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.int32:
-        _max_rows[DType.int32](out_addr, in_addr, rows_val, cols_val, ctx)
-    else:
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.int64,
+        DType.int32,
+    ]:
+        if dtype == dt:
+            _max_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast max: " + String(dtype))
 
 
@@ -1518,13 +1414,12 @@ def _cumsum_rows_go(
     var cols_val = _raw_int(cols)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if dtype == DType.int64:
-        _cumsum_rows[DType.int64](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.int32:
-        _cumsum_rows[DType.int32](out_addr, in_addr, rows_val, cols_val, ctx)
-    elif dtype == DType.float32:
-        _cumsum_rows[DType.float32](out_addr, in_addr, rows_val, cols_val, ctx)
-    else:
+    var handled = False
+    comptime for dt in [DType.int64, DType.int32, DType.float32]:
+        if dtype == dt:
+            _cumsum_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast cumsum: " + String(dtype))
 
 

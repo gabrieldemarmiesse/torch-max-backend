@@ -31,6 +31,7 @@ from std.utils.coord import Coord
 from std.algorithm.functional import elementwise
 
 from op_utils import (
+    FLOAT_DTYPES,
     _raw_addr,
     _raw_ctx,
     _raw_dtype,
@@ -148,79 +149,28 @@ def _bin_go[
     var size = _get_size(out_buffer)
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _bin_elementwise[DType.float32, op_code](
-            _get_buffer_ptr[DType.float32](out_buffer),
-            _get_buffer_ptr[DType.float32](lhs_buffer),
-            _get_buffer_ptr[DType.float32](rhs_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _bin_elementwise[DType.float16, op_code](
-            _get_buffer_ptr[DType.float16](out_buffer),
-            _get_buffer_ptr[DType.float16](lhs_buffer),
-            _get_buffer_ptr[DType.float16](rhs_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _bin_elementwise[DType.bfloat16, op_code](
-            _get_buffer_ptr[DType.bfloat16](out_buffer),
-            _get_buffer_ptr[DType.bfloat16](lhs_buffer),
-            _get_buffer_ptr[DType.bfloat16](rhs_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.float64:
-        _bin_elementwise[DType.float64, op_code](
-            _get_buffer_ptr[DType.float64](out_buffer),
-            _get_buffer_ptr[DType.float64](lhs_buffer),
-            _get_buffer_ptr[DType.float64](rhs_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.int8:
-        _bin_elementwise[DType.int8, op_code](
-            _get_buffer_ptr[DType.int8](out_buffer),
-            _get_buffer_ptr[DType.int8](lhs_buffer),
-            _get_buffer_ptr[DType.int8](rhs_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.int16:
-        _bin_elementwise[DType.int16, op_code](
-            _get_buffer_ptr[DType.int16](out_buffer),
-            _get_buffer_ptr[DType.int16](lhs_buffer),
-            _get_buffer_ptr[DType.int16](rhs_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.int32:
-        _bin_elementwise[DType.int32, op_code](
-            _get_buffer_ptr[DType.int32](out_buffer),
-            _get_buffer_ptr[DType.int32](lhs_buffer),
-            _get_buffer_ptr[DType.int32](rhs_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.int64:
-        _bin_elementwise[DType.int64, op_code](
-            _get_buffer_ptr[DType.int64](out_buffer),
-            _get_buffer_ptr[DType.int64](lhs_buffer),
-            _get_buffer_ptr[DType.int64](rhs_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.uint8:
-        _bin_elementwise[DType.uint8, op_code](
-            _get_buffer_ptr[DType.uint8](out_buffer),
-            _get_buffer_ptr[DType.uint8](lhs_buffer),
-            _get_buffer_ptr[DType.uint8](rhs_buffer),
-            size,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.float64,
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+        DType.uint8,
+    ]:
+        if dtype == dt:
+            _bin_elementwise[dt, op_code](
+                _get_buffer_ptr[dt](out_buffer),
+                _get_buffer_ptr[dt](lhs_buffer),
+                _get_buffer_ptr[dt](rhs_buffer),
+                size,
+                ctx,
+            )
+            handled = True
+    if not handled:
         abort(
             String("unsupported dtype for fast binary elementwise op: ", dtype)
         )
@@ -305,28 +255,17 @@ def _unary_go[
     var size = _get_size(out_buffer)
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _unary_elementwise[DType.float32, op_code](
-            _get_buffer_ptr[DType.float32](out_buffer),
-            _get_buffer_ptr[DType.float32](in_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _unary_elementwise[DType.float16, op_code](
-            _get_buffer_ptr[DType.float16](out_buffer),
-            _get_buffer_ptr[DType.float16](in_buffer),
-            size,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _unary_elementwise[DType.bfloat16, op_code](
-            _get_buffer_ptr[DType.bfloat16](out_buffer),
-            _get_buffer_ptr[DType.bfloat16](in_buffer),
-            size,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _unary_elementwise[dt, op_code](
+                _get_buffer_ptr[dt](out_buffer),
+                _get_buffer_ptr[dt](in_buffer),
+                size,
+                ctx,
+            )
+            handled = True
+    if not handled:
         abort(
             String("unsupported dtype for fast unary elementwise op: ", dtype)
         )
@@ -396,31 +335,18 @@ def _scalar_go[
     var scalar_val = Float32(_raw_f64(scalar))
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _scalar_elementwise[DType.float32, op_code](
-            _get_buffer_ptr[DType.float32](out_buffer),
-            _get_buffer_ptr[DType.float32](in_buffer),
-            scalar_val,
-            size,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _scalar_elementwise[DType.float16, op_code](
-            _get_buffer_ptr[DType.float16](out_buffer),
-            _get_buffer_ptr[DType.float16](in_buffer),
-            scalar_val,
-            size,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _scalar_elementwise[DType.bfloat16, op_code](
-            _get_buffer_ptr[DType.bfloat16](out_buffer),
-            _get_buffer_ptr[DType.bfloat16](in_buffer),
-            scalar_val,
-            size,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _scalar_elementwise[dt, op_code](
+                _get_buffer_ptr[dt](out_buffer),
+                _get_buffer_ptr[dt](in_buffer),
+                scalar_val,
+                size,
+                ctx,
+            )
+            handled = True
+    if not handled:
         abort(
             String("unsupported dtype for fast scalar elementwise op: ", dtype)
         )
@@ -476,23 +402,18 @@ def _int_scalar_go[
     var scalar_val = _raw_int(scalar)
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.int64:
-        _int_scalar_elementwise[DType.int64, op_code](
-            _get_buffer_ptr[DType.int64](out_buffer),
-            _get_buffer_ptr[DType.int64](in_buffer),
-            scalar_val,
-            size,
-            ctx,
-        )
-    elif dtype == DType.int32:
-        _int_scalar_elementwise[DType.int32, op_code](
-            _get_buffer_ptr[DType.int32](out_buffer),
-            _get_buffer_ptr[DType.int32](in_buffer),
-            scalar_val,
-            size,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in [DType.int64, DType.int32]:
+        if dtype == dt:
+            _int_scalar_elementwise[dt, op_code](
+                _get_buffer_ptr[dt](out_buffer),
+                _get_buffer_ptr[dt](in_buffer),
+                scalar_val,
+                size,
+                ctx,
+            )
+            handled = True
+    if not handled:
         raise Error(
             "unsupported dtype for fast int scalar op: " + String(dtype)
         )

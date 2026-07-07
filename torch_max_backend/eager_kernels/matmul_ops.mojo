@@ -29,7 +29,7 @@ from std.gpu.memory import (
 from std.gpu.host import DeviceBuffer, DeviceContext
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator
+from std.sys.info import has_accelerator, size_of
 from std.utils.coord import Coord as StdCoord
 from std.utils.static_tuple import StaticTuple
 
@@ -43,6 +43,7 @@ from linalg.matmul.vendor.blas import matmul as vendor_matmul
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 from op_utils import (
+    FLOAT_DTYPES,
     _enqueue_cached,
     _get_ctx,
     _get_dtype,
@@ -1822,46 +1823,26 @@ def _gemm_dtype_dispatch(
     b_off: Int,
     ctx: DeviceContext,
 ) raises:
-    if dtype == DType.float32:
-        _gemm_transb_dispatch[DType.float32](
-            c_addr + c_off * 4,
-            a_addr + a_off * 4,
-            b_addr + b_off * 4,
-            batch,
-            m,
-            n,
-            k,
-            a_bstride,
-            transpose_b,
-            ctx,
-        )
-    elif dtype == DType.float16:
-        _gemm_transb_dispatch[DType.float16](
-            c_addr + c_off * 2,
-            a_addr + a_off * 2,
-            b_addr + b_off * 2,
-            batch,
-            m,
-            n,
-            k,
-            a_bstride,
-            transpose_b,
-            ctx,
-        )
-    elif dtype == DType.bfloat16:
-        _gemm_transb_dispatch[DType.bfloat16](
-            c_addr + c_off * 2,
-            a_addr + a_off * 2,
-            b_addr + b_off * 2,
-            batch,
-            m,
-            n,
-            k,
-            a_bstride,
-            transpose_b,
-            ctx,
-        )
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            # c_off/a_off/b_off are element offsets; scale to bytes for the
+            # raw addresses (4 for float32, 2 for the 16-bit dtypes).
+            comptime elem_size = size_of[dt]()
+            _gemm_transb_dispatch[dt](
+                c_addr + c_off * elem_size,
+                a_addr + a_off * elem_size,
+                b_addr + b_off * elem_size,
+                batch,
+                m,
+                n,
+                k,
+                a_bstride,
+                transpose_b,
+                ctx,
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast matmul: " + String(dtype))
 
 
@@ -2118,13 +2099,12 @@ def _bias_add_row_dispatcher(
     var cols_val = Int(py=cols)
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _bias_add_row[DType.float32](out_addr, bias_addr, total, cols_val, ctx)
-    elif dtype == DType.float16:
-        _bias_add_row[DType.float16](out_addr, bias_addr, total, cols_val, ctx)
-    elif dtype == DType.bfloat16:
-        _bias_add_row[DType.bfloat16](out_addr, bias_addr, total, cols_val, ctx)
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _bias_add_row[dt](out_addr, bias_addr, total, cols_val, ctx)
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast bias add: " + String(dtype))
 
 
@@ -2190,13 +2170,12 @@ def _matmul_bias_go(
         0,
         ctx,
     )
-    if dtype == DType.float32:
-        _bias_add_row[DType.float32](c_addr, bias_addr, m * n, n, ctx)
-    elif dtype == DType.float16:
-        _bias_add_row[DType.float16](c_addr, bias_addr, m * n, n, ctx)
-    elif dtype == DType.bfloat16:
-        _bias_add_row[DType.bfloat16](c_addr, bias_addr, m * n, n, ctx)
-    else:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _bias_add_row[dt](c_addr, bias_addr, m * n, n, ctx)
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast bias add: " + String(dtype))
 
 

@@ -681,27 +681,31 @@ def _cast[
     _parallel_for[func](size, ctx)
 
 
+# The dtypes fast cast supports on either end. Both the src and dst
+# dispatch loops iterate this list at compile time.
+comptime CAST_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.int64,
+    DType.int32,
+    DType.uint8,
+    DType.bool,
+]
+
+
 @always_inline
 def _cast_to[
     src: DType
 ](
     dst: DType, out_addr: Int, in_addr: Int, size: Int, ctx: DeviceContext
 ) raises:
-    if dst == DType.float32:
-        _cast[src, DType.float32](out_addr, in_addr, size, ctx)
-    elif dst == DType.float16:
-        _cast[src, DType.float16](out_addr, in_addr, size, ctx)
-    elif dst == DType.bfloat16:
-        _cast[src, DType.bfloat16](out_addr, in_addr, size, ctx)
-    elif dst == DType.int64:
-        _cast[src, DType.int64](out_addr, in_addr, size, ctx)
-    elif dst == DType.int32:
-        _cast[src, DType.int32](out_addr, in_addr, size, ctx)
-    elif dst == DType.uint8:
-        _cast[src, DType.uint8](out_addr, in_addr, size, ctx)
-    elif dst == DType.bool:
-        _cast[src, DType.bool](out_addr, in_addr, size, ctx)
-    else:
+    var handled = False
+    comptime for dst_dt in CAST_DTYPES:
+        if dst == dst_dt:
+            _cast[src, dst_dt](out_addr, in_addr, size, ctx)
+            handled = True
+    if not handled:
         raise Error(
             "unsupported destination dtype for fast cast: " + String(dst)
         )
@@ -719,21 +723,12 @@ def _cast_go(
     var size = _raw_numel(out_buffer)
     var ctx = _raw_ctx(device_context_ptr)
 
-    if src == DType.float32:
-        _cast_to[DType.float32](dst, out_addr, in_addr, size, ctx)
-    elif src == DType.float16:
-        _cast_to[DType.float16](dst, out_addr, in_addr, size, ctx)
-    elif src == DType.bfloat16:
-        _cast_to[DType.bfloat16](dst, out_addr, in_addr, size, ctx)
-    elif src == DType.int64:
-        _cast_to[DType.int64](dst, out_addr, in_addr, size, ctx)
-    elif src == DType.int32:
-        _cast_to[DType.int32](dst, out_addr, in_addr, size, ctx)
-    elif src == DType.uint8:
-        _cast_to[DType.uint8](dst, out_addr, in_addr, size, ctx)
-    elif src == DType.bool:
-        _cast_to[DType.bool](dst, out_addr, in_addr, size, ctx)
-    else:
+    var handled = False
+    comptime for src_dt in CAST_DTYPES:
+        if src == src_dt:
+            _cast_to[src_dt](dst, out_addr, in_addr, size, ctx)
+            handled = True
+    if not handled:
         raise Error("unsupported source dtype for fast cast: " + String(src))
 
 

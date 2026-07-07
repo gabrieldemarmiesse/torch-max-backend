@@ -14,6 +14,13 @@ from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 
+# The floating-point dtypes the fast kernels specialize for. Dispatchers loop
+# over this at compile time (`comptime for dt in FLOAT_DTYPES`) to pick the
+# runtime dtype, which unrolls into the same `if dtype == ...` chain without
+# repeating the call site once per dtype.
+comptime FLOAT_DTYPES = [DType.float32, DType.float16, DType.bfloat16]
+
+
 def _get_dtype(buffer: PythonObject) raises -> DType:
     return DType._from_ui8(UInt8(py=buffer.dtype.value)._mlir_value)
 

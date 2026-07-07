@@ -263,23 +263,21 @@ def _dispatch_bcast[
                 ctx,
             )
 
-    if dtype == DType.float32:
-        run[DType.float32]()
-    elif dtype == DType.float16:
-        run[DType.float16]()
-    elif dtype == DType.bfloat16:
-        run[DType.bfloat16]()
-    elif dtype == DType.int8:
-        run[DType.int8]()
-    elif dtype == DType.int16:
-        run[DType.int16]()
-    elif dtype == DType.int32:
-        run[DType.int32]()
-    elif dtype == DType.int64:
-        run[DType.int64]()
-    elif dtype == DType.uint8:
-        run[DType.uint8]()
-    else:
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+        DType.uint8,
+    ]:
+        if dtype == dt:
+            run[dt]()
+            handled = True
+    if not handled:
         raise Error(
             "unsupported dtype for fast broadcast elementwise op: "
             + String(dtype)
@@ -358,19 +356,19 @@ def _bitwise_not_dispatcher(
     var size = Int(py=out_buffer.num_elements)
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.bool:
-        _bitwise_not[DType.bool](out_addr, in_addr, size, ctx)
-    elif dtype == DType.uint8:
-        _bitwise_not[DType.uint8](out_addr, in_addr, size, ctx)
-    elif dtype == DType.int8:
-        _bitwise_not[DType.int8](out_addr, in_addr, size, ctx)
-    elif dtype == DType.int16:
-        _bitwise_not[DType.int16](out_addr, in_addr, size, ctx)
-    elif dtype == DType.int32:
-        _bitwise_not[DType.int32](out_addr, in_addr, size, ctx)
-    elif dtype == DType.int64:
-        _bitwise_not[DType.int64](out_addr, in_addr, size, ctx)
-    else:
+    var handled = False
+    comptime for dt in [
+        DType.bool,
+        DType.uint8,
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+    ]:
+        if dtype == dt:
+            _bitwise_not[dt](out_addr, in_addr, size, ctx)
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast bitwise not: " + String(dtype))
 
 
@@ -431,15 +429,14 @@ def _isin_dispatcher(
     var invert_val = Int(py=invert)
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.int64:
-        _isin[DType.int64](
-            out_addr, in_addr, test_addr, size, n_test_val, invert_val, ctx
-        )
-    elif dtype == DType.int32:
-        _isin[DType.int32](
-            out_addr, in_addr, test_addr, size, n_test_val, invert_val, ctx
-        )
-    else:
+    var handled = False
+    comptime for dt in [DType.int64, DType.int32]:
+        if dtype == dt:
+            _isin[dt](
+                out_addr, in_addr, test_addr, size, n_test_val, invert_val, ctx
+            )
+            handled = True
+    if not handled:
         raise Error("unsupported dtype for fast isin: " + String(dtype))
 
 
