@@ -348,6 +348,21 @@ register_aten_op("aten::alias")(wrap_for_max_device(aten_functions.aten_alias))
 register_aten_op("aten::amax")(wrap_for_max_device(aten_functions.aten_amax))
 register_aten_op("aten::amin")(wrap_for_max_device(aten_functions.aten_amin))
 register_aten_op("aten::any")(_eager_impl("fast_aten_any", aten_functions.aten_any))
+register_aten_op("aten::any.dim")(wrap_for_max_device(aten_functions.aten_any))
+
+
+@register_aten_op("aten::any.out")
+def max_device_any_out(
+    input: TorchMaxTensor,
+    dim: int | None = None,
+    keepdim: bool = False,
+    *,
+    out: TorchMaxTensor,
+) -> TorchMaxTensor:
+    out._max_data = aten_functions.aten_any(input._max_data, dim, keepdim)
+    return out
+
+
 register_aten_op("aten::all")(_eager_impl("fast_aten_all", aten_functions.aten_all))
 register_aten_op("aten::all.dim")(wrap_for_max_device(aten_functions.aten_all))
 register_aten_op("aten::all.dims")(wrap_for_max_device(aten_functions.aten_all))
@@ -765,6 +780,16 @@ def max_device_min_dim_min(
 register_aten_op("aten::minimum")(
     _eager_impl("fast_aten_minimum", aten_functions.aten_minimum)
 )
+
+
+@register_aten_op("aten::mul.out")
+def max_device_mul_out(
+    input: TorchMaxTensor, other, *, out: TorchMaxTensor
+) -> TorchMaxTensor:
+    other_data = other._max_data if isinstance(other, TorchMaxTensor) else other
+    out._max_data = aten_functions.aten_mul(input._max_data, other_data)
+    return out
+
 
 register_aten_op("aten::mul.Tensor")(
     _eager_impl("fast_aten_mul", aten_functions.aten_mul)

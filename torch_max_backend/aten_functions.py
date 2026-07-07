@@ -423,9 +423,22 @@ def aten__scaled_dot_product_attention_math(
             "dropout_mask is not supported in aten._scaled_dot_product_attention_math yet"
         )
     if enable_gqa:
-        raise NotImplementedError(
-            "enable_gqa is not supported in aten._scaled_dot_product_attention_math yet"
-        )
+        # Grouped-query attention: broadcast each KV head over its query
+        # group so the math below sees matching head counts (the same
+        # repeat_interleave(dim=1) torch's reference implementation does).
+        q_heads = query.shape[1]
+        kv_heads = key.shape[1]
+        if q_heads != kv_heads:
+            group = int(q_heads) // int(kv_heads)
+
+            def _repeat_kv(x: MaxTensor) -> MaxTensor:
+                b, h, s, d = x.shape
+                x = F.reshape(x, (b, h, 1, s, d))
+                x = F.broadcast_to(x, (b, h, group, s, d))
+                return F.reshape(x, (b, int(h) * group, s, d))
+
+            key = _repeat_kv(key)
+            value = _repeat_kv(value)
     if attn_mask is None:
         # No custom mask: delegate to flash attention (handles is_causal) and use its
         # first two return values as (output, logsumexp).
@@ -2849,7 +2862,13 @@ def aten_repeat(input: MaxTensor, repeats: list[SymIntType]) -> MaxTensor:
     """
     Equivalent to torch.repeat - repeats the tensor along each dimension.
     Each dimension is repeated the number of times specified in repeats.
+    When len(repeats) exceeds the input rank, torch prepends size-1 dims
+    to the input first; MAX's tile requires matching ranks, so do the
+    same reshape here.
     """
+    rank = len(input.shape)
+    if len(repeats) > rank:
+        input = F.reshape(input, [1] * (len(repeats) - rank) + list(input.shape))
     return F.tile(input, repeats)
 
 

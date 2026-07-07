@@ -21,7 +21,7 @@ register_max_devices()
 DEVICE = sys.argv[1] if len(sys.argv) > 1 else "max_device"
 BATCHES = [int(b) for b in sys.argv[2:]] or [256]
 N_NEW_TOKENS = 200
-PROMPT = ""
+PROMPT = "Here is how quantum computing works: "
 WARMUP = 1
 ITERS = 3
 
