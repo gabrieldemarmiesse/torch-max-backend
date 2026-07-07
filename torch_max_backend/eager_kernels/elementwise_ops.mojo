@@ -462,50 +462,28 @@ def _fill_go(
     var value_val = _raw_f64(value)
     var ctx = _get_ctx(device_context_ptr)
 
-    if dtype == DType.float32:
-        _fill[DType.float32](
-            _get_buffer_ptr[DType.float32](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.float16:
-        _fill[DType.float16](
-            _get_buffer_ptr[DType.float16](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.bfloat16:
-        _fill[DType.bfloat16](
-            _get_buffer_ptr[DType.bfloat16](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.float64:
-        _fill[DType.float64](
-            _get_buffer_ptr[DType.float64](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.int64:
-        _fill[DType.int64](
-            _get_buffer_ptr[DType.int64](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.int32:
-        _fill[DType.int32](
-            _get_buffer_ptr[DType.int32](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.int16:
-        _fill[DType.int16](
-            _get_buffer_ptr[DType.int16](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.int8:
-        _fill[DType.int8](
-            _get_buffer_ptr[DType.int8](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.uint8:
-        _fill[DType.uint8](
-            _get_buffer_ptr[DType.uint8](out_buffer), value_val, size, ctx
-        )
-    elif dtype == DType.bool:
-        _fill[DType.bool](
-            _get_buffer_ptr[DType.bool](out_buffer),
-            Float64(1) if value_val != 0 else Float64(0),
-            size,
-            ctx,
-        )
-    else:
+    # bool fill must store exactly 0/1 (a raw nonzero float doesn't reliably
+    # cast to True); normalize once so every dtype's call site is identical.
+    if dtype == DType.bool:
+        value_val = Float64(1) if value_val != 0 else Float64(0)
+
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.float64,
+        DType.int64,
+        DType.int32,
+        DType.int16,
+        DType.int8,
+        DType.uint8,
+        DType.bool,
+    ]:
+        if dtype == dt:
+            _fill[dt](_get_buffer_ptr[dt](out_buffer), value_val, size, ctx)
+            handled = True
+    if not handled:
         abort(String("unsupported dtype for fast fill: ", dtype))
 
 
