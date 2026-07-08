@@ -1774,88 +1774,264 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
-def fast_aten_mean(input, dim=None, keepdim=False, *, dtype=None):
-    a = _tc(input) if dtype is None else None
-    if (
-        a is not None
-        and a._numel > 0
-        and a._dtype in _FLOAT_DTYPES
-        and isinstance(dim, list | tuple)
-        and len(dim) > 0
-        and all(isinstance(d, int) for d in dim)
-    ):
-        rank = len(a._shape)
-        dims = sorted(d % rank for d in dim)
-        # Fast path: reducing exactly the trailing dims (contiguous rows).
-        if dims == list(range(rank - len(dims), rank)):
-            cols = math.prod(a._shape[d] for d in dims)
-            rows = a._numel // cols
-            lead_shape = list(a._shape[: rank - len(dims)])
-            out_shape = lead_shape + [1] * len(dims) if keepdim else lead_shape
-            out = _alloc(out_shape, a._dtype, a._device)
-            eager_kernels.nn_ops.MeanRows(
-                out._ptr, a._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
-            )
-            return out
-    return NOT_HANDLED
-
-
-@no_type_check
-def fast_aten_all(input, dim=None, keepdim=False):
-    a = _tc(input)
-    if (
-        a is not None
-        and dim is None
-        and not keepdim
-        and a._dtype == DType.bool
-        and 0 < a._numel < (1 << 22)
-    ):
-        out = _alloc((), DType.bool, a._device)
-        eager_kernels.nn_ops.AllBool(out._ptr, a._ptr, a._numel, _ctx_ptr(a._device))
-        return out
-    return NOT_HANDLED
-
-
-@no_type_check
-def fast_aten_any(input, dim=None, keepdim=False):
-    a = _tc(input)
-    if (
-        a is not None
-        and dim is None
-        and not keepdim
-        and a._dtype == DType.bool
-        and 0 < a._numel < (1 << 22)
-    ):
-        out = _alloc((), DType.bool, a._device)
-        eager_kernels.nn_ops.AnyBool(out._ptr, a._ptr, a._numel, _ctx_ptr(a._device))
-        return out
-    return NOT_HANDLED
-
-
 _ROW_REDUCE_DTYPES = _FLOAT_DTYPES + (DType.int64, DType.int32)
 
+# Dtypes any()/all() accept as input (the nonzero test works for all of them;
+# the output is always bool). Matches reduction_ops' AnyRows/AllRows dispatch.
+_ANYALL_DTYPES = _FLOAT_DTYPES + (
+    DType.int64,
+    DType.int32,
+    DType.int16,
+    DType.int8,
+    DType.uint8,
+    DType.bool,
+)
+
 
 @no_type_check
-def fast_aten_argmax(input, dim=None, keepdim=False):
+def _torch_dtype_to_max(dtype):
+    from max.experimental.torch.torch import torch_dtype_to_max
+
+    try:
+        return torch_dtype_to_max(dtype)
+    except (KeyError, ValueError):
+        return None
+
+
+@no_type_check
+def _norm_reduce_dims(dim, rank, empty_is_all):
+    """Sorted unique normalized reduce dims, or None if the spec is invalid.
+
+    `dim=None` always reduces every dim. An empty dim list reduces every dim
+    when `empty_is_all` (sum/amax/amin/mean/var semantics) and nothing when
+    not (any.dims/all.dims semantics). Duplicate or out-of-range dims -> None.
+    """
+    if dim is None:
+        return list(range(rank))
+    if isinstance(dim, int) and not isinstance(dim, bool):
+        dims = [dim]
+    elif isinstance(dim, list | tuple):
+        dims = list(dim)
+    else:
+        return None
+    if len(dims) == 0:
+        return list(range(rank)) if empty_is_all else []
+    seen = set()
+    out = []
+    for d in dims:
+        if not isinstance(d, int) or isinstance(d, bool):
+            return None
+        if not -rank <= d < rank:
+            return None
+        d %= rank
+        if d in seen:
+            return None
+        seen.add(d)
+        out.append(d)
+    return sorted(out)
+
+
+@no_type_check
+def _reduce_to_rows(t, reduce_dims, keepdim):
+    """Materialize `t` with the reduce dims moved to the trailing positions.
+
+    Returns (contiguous row-major tensor, rows, cols, out_shape) where the
+    kernel reduces each of the `rows` contiguous rows of `cols` elements to
+    one output element, and `out_shape` already respects `keepdim`. The
+    kept dims stay in ascending original order, so the `rows` output values
+    are laid out exactly as `out_shape`'s row-major buffer.
+    """
+    rank = len(t._shape)
+    rset = set(reduce_dims)
+    kept = [i for i in range(rank) if i not in rset]
+    if keepdim:
+        out_shape = tuple(1 if i in rset else t._shape[i] for i in range(rank))
+    else:
+        out_shape = tuple(t._shape[i] for i in kept)
+    cols = 1
+    for i in reduce_dims:
+        cols *= t._shape[i]
+    rows = t._numel // cols if cols else t._numel
+    if reduce_dims:
+        contig = _tc(fast_aten_permute(t, kept + sorted(reduce_dims)))
+    else:
+        contig = _tc(t)
+    return contig, rows, cols, out_shape
+
+
+@no_type_check
+def fast_aten_mean(input, dim=None, keepdim=False, *, dtype=None):
+    a = _t(input)
+    if a is None:
+        return NOT_HANDLED
+    if dtype is not None:
+        target = _torch_dtype_to_max(dtype)
+        if target is None or target not in _FLOAT_DTYPES:
+            return NOT_HANDLED
+        if a._dtype != target:
+            if a._dtype not in _CAST_DTYPES or target not in _CAST_DTYPES:
+                return NOT_HANDLED
+            a = _cast_tensor(a, target)
+    if a._dtype not in _FLOAT_DTYPES:
+        return NOT_HANDLED
+    rank = len(a._shape)
+    rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
+    if rdims is None:
+        return NOT_HANDLED
+    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
+    if cols == 0:
+        return NOT_HANDLED  # mean of an empty dim is nan; torch warns/errors
+    out = _alloc(out_shape, a._dtype, a._device)
+    if out._numel > 0:
+        eager_kernels.nn_ops.MeanRows(
+            out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
+        )
+    return out
+
+
+@no_type_check
+def fast_aten_sum(input, dim=None, keepdim=False, *, dtype=None):
+    a = _t(input)
+    if a is None:
+        return NOT_HANDLED
+    if dtype is not None:
+        target = _torch_dtype_to_max(dtype)
+        if target is None:
+            return NOT_HANDLED
+        if a._dtype != target:
+            if a._dtype not in _CAST_DTYPES or target not in _CAST_DTYPES:
+                return NOT_HANDLED
+            a = _cast_tensor(a, target)
+    elif not a._dtype.is_float():
+        # torch promotes bool/integer sums to int64.
+        if a._dtype != DType.int64:
+            if a._dtype not in _CAST_DTYPES:
+                return NOT_HANDLED
+            a = _cast_tensor(a, DType.int64)
+    if a._dtype not in (DType.float32, DType.float16, DType.bfloat16, DType.int64):
+        return NOT_HANDLED
+    rank = len(a._shape)
+    rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
+    if rdims is None:
+        return NOT_HANDLED
+    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
+    if rows * cols == 0:
+        # Empty reduction: torch defines sum over 0 elements as 0.
+        filled = fast_filled(out_shape, 0, a._dtype, a._device)
+        return NOT_HANDLED if filled is None else filled
+    out = _alloc(out_shape, a._dtype, a._device)
+    eager_kernels.reduction_ops.SumRows(
+        out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
+    )
+    return out
+
+
+@no_type_check
+def _amax_amin(input, dim, keepdim, kernel_name):
+    a = _t(input)
+    if a is None or a._dtype not in _ROW_REDUCE_DTYPES:
+        return NOT_HANDLED
+    rank = len(a._shape)
+    rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
+    if rdims is None:
+        return NOT_HANDLED
+    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
+    if cols == 0:
+        return NOT_HANDLED  # torch errors on amax/amin over an empty dim
+    out = _alloc(out_shape, a._dtype, a._device)
+    if out._numel > 0:
+        getattr(eager_kernels.reduction_ops, kernel_name)(
+            out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
+        )
+    return out
+
+
+@no_type_check
+def fast_aten_amax(input, dim=(), keepdim=False):
+    return _amax_amin(input, dim, keepdim, "MaxRowsR")
+
+
+@no_type_check
+def fast_aten_amin(input, dim=(), keepdim=False):
+    return _amax_amin(input, dim, keepdim, "MinRows")
+
+
+@no_type_check
+def fast_aten_min(input):
+    # Values-only full reduction: aten::min(Tensor) -> Tensor.
     a = _tc(input)
+    if a is None or a._numel == 0 or a._dtype not in _ROW_REDUCE_DTYPES:
+        return NOT_HANDLED
+    out = _alloc((), a._dtype, a._device)
+    eager_kernels.reduction_ops.MinRows(
+        out._ptr, a._ptr, 1, a._numel, a._dtype.value, _ctx_ptr(a._device)
+    )
+    return out
+
+
+@no_type_check
+def fast_aten_min_dim(input, dim, keepdim=False):
+    """aten::min.dim -> (values, indices) along `dim` (first-min-wins)."""
+    a = _t(input)
+    if a is None or a._dtype not in _ROW_REDUCE_DTYPES or not isinstance(dim, int):
+        return NOT_HANDLED
+    rank = len(a._shape)
+    if rank == 0 or not -rank <= dim < rank:
+        return NOT_HANDLED
+    contig, rows, cols, out_shape = _reduce_to_rows(a, [dim % rank], keepdim)
+    if cols == 0:
+        return NOT_HANDLED
+    values = _alloc(out_shape, a._dtype, a._device)
+    indices = _alloc(out_shape, DType.int64, a._device)
+    if rows > 0:
+        eager_kernels.reduction_ops.MinMaxIdxRows(
+            values._ptr,
+            indices._ptr,
+            contig._ptr,
+            rows,
+            cols,
+            1,
+            a._dtype.value,
+            _ctx_ptr(a._device),
+        )
+    return values, indices
+
+
+@no_type_check
+def _argreduce(input, dim, keepdim, is_min):
+    a = _t(input)
     if a is None or a._numel == 0 or a._dtype not in _ROW_REDUCE_DTYPES:
         return NOT_HANDLED
     rank = len(a._shape)
     if dim is None:
+        contig = _tc(a)
         rows, cols = 1, a._numel
-        out_shape = [1] * rank if keepdim else []
+        out_shape = tuple([1] * rank) if keepdim else ()
     else:
-        if not isinstance(dim, int) or rank == 0 or dim % rank != rank - 1:
+        if not isinstance(dim, int) or rank == 0 or not -rank <= dim < rank:
             return NOT_HANDLED
-        cols = a._shape[-1]
-        rows = a._numel // cols
-        out_shape = list(a._shape[:-1]) + ([1] if keepdim else [])
+        contig, rows, cols, out_shape = _reduce_to_rows(a, [dim % rank], keepdim)
+        if cols == 0:
+            return NOT_HANDLED
     out = _alloc(out_shape, DType.int64, a._device)
-    eager_kernels.nn_ops.ArgmaxRows(
-        out._ptr, a._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
-    )
+    if out._numel > 0:
+        kernel = (
+            eager_kernels.reduction_ops.ArgminRows
+            if is_min
+            else eager_kernels.nn_ops.ArgmaxRows
+        )
+        kernel(out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device))
     return out
+
+
+@no_type_check
+def fast_aten_argmax(input, dim=None, keepdim=False):
+    return _argreduce(input, dim, keepdim, is_min=False)
+
+
+@no_type_check
+def fast_aten_argmin(input, dim=None, keepdim=False):
+    return _argreduce(input, dim, keepdim, is_min=True)
 
 
 @no_type_check
@@ -1869,6 +2045,111 @@ def fast_aten_max(input, *args, **kwargs):
     out = _alloc((), a._dtype, a._device)
     eager_kernels.nn_ops.MaxRows(
         out._ptr, a._ptr, 1, a._numel, a._dtype.value, _ctx_ptr(a._device)
+    )
+    return out
+
+
+@no_type_check
+def fast_aten_var(input, dim=None, *, correction=1, keepdim=False):
+    a = _t(input)
+    if a is None or a._dtype not in _FLOAT_DTYPES:
+        return NOT_HANDLED
+    if correction is None:
+        correction = 1
+    if not isinstance(correction, int | float) or isinstance(correction, bool):
+        return NOT_HANDLED
+    rank = len(a._shape)
+    rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
+    if rdims is None:
+        return NOT_HANDLED
+    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
+    if cols == 0:
+        return NOT_HANDLED
+    out = _alloc(out_shape, a._dtype, a._device)
+    if out._numel > 0:
+        eager_kernels.reduction_ops.VarRows(
+            out._ptr,
+            contig._ptr,
+            rows,
+            cols,
+            float(correction),
+            a._dtype.value,
+            _ctx_ptr(a._device),
+        )
+    return out
+
+
+@no_type_check
+def _any_all(input, dim, keepdim, is_all):
+    a = _t(input)
+    if a is None or a._dtype not in _ANYALL_DTYPES:
+        return NOT_HANDLED
+    rank = len(a._shape)
+    # Fast full-reduce bool path (the existing single-block AllBool/AnyBool).
+    if dim is None and not keepdim and a._dtype == DType.bool:
+        c = _tc(a)
+        if 0 < c._numel < (1 << 22):
+            out = _alloc((), DType.bool, a._device)
+            fn = (
+                eager_kernels.nn_ops.AllBool if is_all else eager_kernels.nn_ops.AnyBool
+            )
+            fn(out._ptr, c._ptr, c._numel, _ctx_ptr(a._device))
+            return out
+    rdims = _norm_reduce_dims(dim, rank, empty_is_all=False)
+    if rdims is None:
+        return NOT_HANDLED
+    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
+    out = _alloc(out_shape, DType.bool, a._device)
+    if out._numel > 0:
+        # cols == 0 is valid: any -> False, all -> True (kernel handles it).
+        fn = (
+            eager_kernels.reduction_ops.AllRows
+            if is_all
+            else eager_kernels.reduction_ops.AnyRows
+        )
+        fn(out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device))
+    return out
+
+
+@no_type_check
+def fast_aten_all(input, dim=None, keepdim=False):
+    return _any_all(input, dim, keepdim, is_all=True)
+
+
+@no_type_check
+def fast_aten_any(input, dim=None, keepdim=False):
+    return _any_all(input, dim, keepdim, is_all=False)
+
+
+@no_type_check
+def fast_aten__log_softmax(input, dim, half_to_float=False):
+    t = _t(input)
+    if (
+        t is None
+        or t._numel == 0
+        or t._dtype not in _FLOAT_DTYPES
+        or half_to_float
+        or not isinstance(dim, int)
+    ):
+        return NOT_HANDLED
+    rank = len(t._shape)
+    if rank == 0:
+        return fast_filled((), 0.0, t._dtype, t._device)
+    dim %= rank
+    if dim != rank - 1:
+        # log_softmax(x, d) = log_softmax(x.transpose(d, -1), -1).T; both
+        # transposes are zero-copy, the inner one materializes once.
+        swapped = fast_aten_transpose(t, dim, rank - 1)
+        result = fast_aten__log_softmax(swapped, rank - 1, half_to_float)
+        if result is NOT_HANDLED:
+            return NOT_HANDLED
+        return fast_aten_transpose(result, dim, rank - 1)
+    a = _tc(t)
+    cols = a._shape[-1]
+    rows = a._numel // cols
+    out = _alloc(a._shape, a._dtype, a._device)
+    eager_kernels.reduction_ops.LogSoftmaxRows(
+        out._ptr, a._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
     )
     return out
 
