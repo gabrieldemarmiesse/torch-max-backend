@@ -1001,6 +1001,177 @@ def fast_aten_isin(elements, test_elements, *, assume_unique=False, invert=False
     return out
 
 
+# ---------------------------------------------------------------------------
+# Binary/ternary extras: remainder, floor_divide, pow(Tensor,Tensor),
+# logical_and/xor, clamp, addcmul/addcdiv. All ride the broadcast-strided
+# kernels (real strides, no materialization) except clamp, which is a
+# contiguous unary.
+# ---------------------------------------------------------------------------
+
+
+@no_type_check
+def fast_aten_remainder(input, other):
+    # Divisor-signed remainder (Python/torch `%`), float and int dtypes.
+    result = _try_binary_bcast("RemainderBcast", input, other)
+    if result is None:
+        result = _try_binary_bcast("RemainderBcast", _tc(input), _tc(other))
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_floor_divide(input, other):
+    # floor(input / other), float and int dtypes.
+    result = _try_binary_bcast("FloorDivBcast", input, other)
+    if result is None:
+        result = _try_binary_bcast("FloorDivBcast", _tc(input), _tc(other))
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_pow_tensor_tensor(input, exponent):
+    # Float-only (the kernel raises on ints, which would leave the output
+    # unwritten); gate here so unsupported dtypes fall through cleanly.
+    a = _t(input)
+    if a is None or a._dtype not in _FLOAT_DTYPES:
+        return NOT_HANDLED
+    result = _try_binary_bcast("PowBcast", input, exponent)
+    if result is None:
+        result = _try_binary_bcast("PowBcast", _tc(input), _tc(exponent))
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def _try_logical(kernel_name, input, other):
+    """logical_and / logical_xor: bool output from any input dtype pair.
+
+    Same-dtype operands (in the bcast set) test nonzero-ness inline with no
+    materialization; mixed dtypes are cast to bool first (which also does the
+    nonzero test) and combined through the uint8 dispatch.
+    """
+    a = _t(input)
+    b = _t(other)
+    if a is None or b is None or a._device != b._device:
+        return None
+    if a._dtype == b._dtype and a._dtype in _BCAST_DTYPES:
+        da, db, dtype = a, b, a._dtype
+    elif a._dtype == DType.bool and b._dtype == DType.bool:
+        da, db, dtype = a, b, DType.uint8
+    else:
+        # Mixed dtypes: reduce each to bool (nonzero test) via Cast.
+        if a._dtype not in _CAST_DTYPES or b._dtype not in _CAST_DTYPES:
+            return None
+        da = a if a._dtype == DType.bool else _cast_tensor(a, DType.bool)
+        db = b if b._dtype == DType.bool else _cast_tensor(b, DType.bool)
+        dtype = DType.uint8
+    meta = _bcast_meta(da, db)
+    if meta is None:
+        return None
+    out = _alloc(meta[0], DType.bool, a._device)
+    if out._numel > 0:
+        _launch_bcast(
+            getattr(eager_kernels.logic_ops, kernel_name), out, (da, db), meta, dtype
+        )
+    return out
+
+
+@no_type_check
+def fast_aten_logical_and(input, other):
+    result = _try_logical("LogicalAndBcast", input, other)
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_logical_xor(input, other):
+    result = _try_logical("LogicalXorBcast", input, other)
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_clamp(input, min=None, max=None):
+    a = _tc(input)
+    if a is None or a._dtype not in _BCAST_DTYPES:
+        return NOT_HANDLED
+    if min is None and max is None:
+        return NOT_HANDLED
+    for bound in (min, max):
+        if bound is not None and not isinstance(bound, int | float):
+            return NOT_HANDLED
+    has_min = min is not None
+    has_max = max is not None
+    lo = float(min) if has_min else 0.0
+    hi = float(max) if has_max else 0.0
+    out = _alloc(a._shape, a._dtype, a._device)
+    if out._numel > 0:
+        eager_kernels.logic_ops.ClampScalar(
+            out._ptr,
+            a._ptr,
+            lo,
+            hi,
+            1 if has_min else 0,
+            1 if has_max else 0,
+            out._numel,
+            a._dtype.value,
+            _ctx_ptr(a._device),
+        )
+    return out
+
+
+@no_type_check
+def _try_addc(kernel_name, self, tensor1, tensor2, value, allow_int):
+    a = _t(self)
+    b = _t(tensor1)
+    c = _t(tensor2)
+    if a is None or b is None or c is None:
+        return NOT_HANDLED
+    if a._device != b._device or a._device != c._device:
+        return NOT_HANDLED
+    dtype = a._dtype
+    if b._dtype != dtype or c._dtype != dtype:
+        return NOT_HANDLED
+    if dtype in _FLOAT_DTYPES:
+        pass
+    elif allow_int and dtype in (
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+        DType.uint8,
+    ):
+        pass
+    else:
+        return NOT_HANDLED
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return NOT_HANDLED
+    meta = _bcast_meta(a, b, c)
+    if meta is None:
+        return NOT_HANDLED
+    out_shape, dims, strides = meta
+    out = _alloc(out_shape, dtype, a._device)
+    if out._numel > 0:
+        params = tuple(dims) + tuple(s for st in strides for s in st)
+        getattr(eager_kernels.logic_ops, kernel_name)(
+            out._ptr,
+            a._ptr,
+            b._ptr,
+            c._ptr,
+            params,
+            float(value),
+            dtype.value,
+            _ctx_ptr(a._device),
+        )
+    return out
+
+
+@no_type_check
+def fast_aten_addcmul(self, tensor1, tensor2, value=1):
+    return _try_addc("AddcmulBcast", self, tensor1, tensor2, value, True)
+
+
+@no_type_check
+def fast_aten_addcdiv(self, tensor1, tensor2, value=1):
+    return _try_addc("AddcdivBcast", self, tensor1, tensor2, value, False)
+
+
 @no_type_check
 def fast_aten_where(condition, input, other):
     cond = _t(condition)
