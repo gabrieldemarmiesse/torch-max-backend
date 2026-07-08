@@ -7,12 +7,14 @@
 # addressed, so editing this file triggers exactly one recompile).
 #
 # The design mirrors `max._interpreter_ops.elementwise_binary_ops` (the MO
-# interpreter's own op bindings): each Python-visible function receives the
-# `max.driver.Buffer` objects directly plus the device's DeviceContext
-# pointer, unwraps raw pointers, dispatches on dtype at *runtime* (all dtype
-# specializations are compiled into this one extension), and enqueues the
-# kernel on MAX's own device context — so ordering with regular MAX driver
-# operations (copies, other kernels) comes for free.
+# interpreter's own op bindings): each Python-visible function receives raw
+# tensor-data pointers (plain ints, storage offset already applied) plus
+# explicit numel/dtype ints and the device's DeviceContext pointer — there
+# are no `max.driver.Buffer` objects and no attribute access at all —
+# dispatches on dtype at *runtime* (all dtype specializations are compiled
+# into this one extension), and enqueues the kernel on MAX's own device
+# context — so ordering with regular MAX driver operations (copies, other
+# kernels) comes for free.
 #
 # Every kernel here works on *contiguous* buffers with fully dynamic sizes:
 # one compiled extension serves every shape with zero recompilation.
@@ -32,45 +34,24 @@ from std.algorithm.functional import elementwise
 
 from op_utils import (
     FLOAT_DTYPES,
-    _raw_addr,
+    _make_ptr,
     _raw_ctx,
-    _raw_dtype,
+    _raw_dtype_int,
     _raw_f64,
     _raw_int,
-    _raw_numel,
     _raw_ret_none,
 )
 
 # ---------------------------------------------------------------------------
-# Helpers to unwrap `max.driver.Buffer` Python objects, via direct CPython
-# calls on borrowed references (see op_utils). The dispatchers register as
-# METH_FASTCALL functions (`def_py_c_function`), skipping the owning
-# PythonObject wrappers of the `def_function` path entirely.
+# Raw-pointer calling convention: every Python-visible kernel below receives
+# tensor operands as a single int (the `._ptr` address, storage offset
+# already applied), unpacked with `_raw_int` and turned into a typed
+# pointer with `_make_ptr[dt]`; numel and dtype are explicit int args
+# (`_raw_int` / `_raw_dtype_int`); `ctx_ptr` (int) is always last
+# (`_raw_ctx`). The dispatchers register as METH_FASTCALL functions
+# (`def_py_c_function`), skipping the owning PythonObject wrappers of the
+# `def_function` path entirely.
 # ---------------------------------------------------------------------------
-
-
-@always_inline
-def _get_dtype(buffer: PyObjectPtr) -> DType:
-    return _raw_dtype(buffer)
-
-
-@always_inline
-def _get_buffer_ptr[
-    dtype: DType
-](buffer: PyObjectPtr) -> UnsafePointer[Scalar[dtype], MutUntrackedOrigin]:
-    return UnsafePointer[Scalar[dtype], MutUntrackedOrigin](
-        unsafe_from_address=_raw_addr(buffer)
-    )
-
-
-@always_inline
-def _get_size(buffer: PyObjectPtr) -> Int:
-    return _raw_numel(buffer)
-
-
-@always_inline
-def _get_ctx(device_context_ptr: PyObjectPtr) -> DeviceContext:
-    return _raw_ctx(device_context_ptr)
 
 
 # ---------------------------------------------------------------------------
@@ -140,14 +121,19 @@ def _bin_elementwise[
 def _bin_go[
     op_code: Int
 ](
-    out_buffer: PyObjectPtr,
-    lhs_buffer: PyObjectPtr,
-    rhs_buffer: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    lhs_ptr: PyObjectPtr,
+    rhs_ptr: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype_val: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(lhs_buffer)
-    var size = _get_size(out_buffer)
-    var ctx = _get_ctx(device_context_ptr)
+    var out_addr = _raw_int(out_ptr)
+    var lhs_addr = _raw_int(lhs_ptr)
+    var rhs_addr = _raw_int(rhs_ptr)
+    var size = _raw_int(numel)
+    var dtype = _raw_dtype_int(dtype_val)
+    var ctx = _raw_ctx(ctx_ptr)
 
     var handled = False
     comptime for dt in [
@@ -163,9 +149,9 @@ def _bin_go[
     ]:
         if dtype == dt:
             _bin_elementwise[dt, op_code](
-                _get_buffer_ptr[dt](out_buffer),
-                _get_buffer_ptr[dt](lhs_buffer),
-                _get_buffer_ptr[dt](rhs_buffer),
+                _make_ptr[dt](out_addr),
+                _make_ptr[dt](lhs_addr),
+                _make_ptr[dt](rhs_addr),
                 size,
                 ctx,
             )
@@ -247,20 +233,24 @@ def _unary_elementwise[
 def _unary_go[
     op_code: Int
 ](
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype_val: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(in_buffer)
-    var size = _get_size(out_buffer)
-    var ctx = _get_ctx(device_context_ptr)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
+    var size = _raw_int(numel)
+    var dtype = _raw_dtype_int(dtype_val)
+    var ctx = _raw_ctx(ctx_ptr)
 
     var handled = False
     comptime for dt in FLOAT_DTYPES:
         if dtype == dt:
             _unary_elementwise[dt, op_code](
-                _get_buffer_ptr[dt](out_buffer),
-                _get_buffer_ptr[dt](in_buffer),
+                _make_ptr[dt](out_addr),
+                _make_ptr[dt](in_addr),
                 size,
                 ctx,
             )
@@ -325,22 +315,26 @@ def _scalar_elementwise[
 def _scalar_go[
     op_code: Int
 ](
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
     scalar: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype_val: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(in_buffer)
-    var size = _get_size(out_buffer)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
     var scalar_val = Float32(_raw_f64(scalar))
-    var ctx = _get_ctx(device_context_ptr)
+    var size = _raw_int(numel)
+    var dtype = _raw_dtype_int(dtype_val)
+    var ctx = _raw_ctx(ctx_ptr)
 
     var handled = False
     comptime for dt in FLOAT_DTYPES:
         if dtype == dt:
             _scalar_elementwise[dt, op_code](
-                _get_buffer_ptr[dt](out_buffer),
-                _get_buffer_ptr[dt](in_buffer),
+                _make_ptr[dt](out_addr),
+                _make_ptr[dt](in_addr),
                 scalar_val,
                 size,
                 ctx,
@@ -392,22 +386,26 @@ def _int_scalar_elementwise[
 def _int_scalar_go[
     op_code: Int
 ](
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
     scalar: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype_val: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(in_buffer)
-    var size = _get_size(out_buffer)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
     var scalar_val = _raw_int(scalar)
-    var ctx = _get_ctx(device_context_ptr)
+    var size = _raw_int(numel)
+    var dtype = _raw_dtype_int(dtype_val)
+    var ctx = _raw_ctx(ctx_ptr)
 
     var handled = False
     comptime for dt in [DType.int64, DType.int32]:
         if dtype == dt:
             _int_scalar_elementwise[dt, op_code](
-                _get_buffer_ptr[dt](out_buffer),
-                _get_buffer_ptr[dt](in_buffer),
+                _make_ptr[dt](out_addr),
+                _make_ptr[dt](in_addr),
                 scalar_val,
                 size,
                 ctx,
@@ -453,14 +451,17 @@ def _fill[
 
 
 def _fill_go(
-    out_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
     value: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype_val: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(out_buffer)
-    var size = _get_size(out_buffer)
+    var out_addr = _raw_int(out_ptr)
     var value_val = _raw_f64(value)
-    var ctx = _get_ctx(device_context_ptr)
+    var size = _raw_int(numel)
+    var dtype = _raw_dtype_int(dtype_val)
+    var ctx = _raw_ctx(ctx_ptr)
 
     # bool fill must store exactly 0/1 (a raw nonzero float doesn't reliably
     # cast to True); normalize once so every dtype's call site is identical.
@@ -481,7 +482,7 @@ def _fill_go(
         DType.bool,
     ]:
         if dtype == dt:
-            _fill[dt](_get_buffer_ptr[dt](out_buffer), value_val, size, ctx)
+            _fill[dt](_make_ptr[dt](out_addr), value_val, size, ctx)
             handled = True
     if not handled:
         abort(String("unsupported dtype for fast fill: ", dtype))
@@ -503,7 +504,7 @@ def _bin_dispatcher[
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _bin_go[op_code](args[0], args[1], args[2], args[3])
+        _bin_go[op_code](args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -517,7 +518,7 @@ def _unary_dispatcher[
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _unary_go[op_code](args[0], args[1], args[2])
+        _unary_go[op_code](args[0], args[1], args[2], args[3], args[4])
     except:
         pass
     return _raw_ret_none()
@@ -531,7 +532,9 @@ def _scalar_dispatcher[
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _scalar_go[op_code](args[0], args[1], args[2], args[3])
+        _scalar_go[op_code](
+            args[0], args[1], args[2], args[3], args[4], args[5]
+        )
     except:
         pass
     return _raw_ret_none()
@@ -545,7 +548,9 @@ def _int_scalar_dispatcher[
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _int_scalar_go[op_code](args[0], args[1], args[2], args[3])
+        _int_scalar_go[op_code](
+            args[0], args[1], args[2], args[3], args[4], args[5]
+        )
     except:
         pass
     return _raw_ret_none()
@@ -557,7 +562,7 @@ def _fill_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _fill_go(args[0], args[1], args[2])
+        _fill_go(args[0], args[1], args[2], args[3], args[4])
     except:
         pass
     return _raw_ret_none()
