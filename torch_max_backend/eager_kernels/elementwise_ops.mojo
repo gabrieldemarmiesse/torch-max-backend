@@ -22,13 +22,30 @@
 
 from std.os import abort
 from std.gpu.host import DeviceContext
-from std.math import exp, pow, tanh
+from std.math import (
+    acos,
+    atanh,
+    ceil,
+    cos,
+    cosh,
+    erf,
+    exp,
+    floor,
+    log,
+    log1p,
+    pow,
+    sin,
+    sinh,
+    sqrt,
+    tanh,
+)
 from std.memory import OpaquePointer
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
 from std.sys.info import has_accelerator, simd_width_of
 from std.utils.coord import Coord
+from std.utils.numerics import isnan
 
 from std.algorithm.functional import elementwise
 
@@ -164,11 +181,109 @@ def _bin_go[
 
 # ---------------------------------------------------------------------------
 # Unary elementwise kernels
+#
+# Opcodes fall in three buckets:
+#   * RELU / ABS / NEG / SIGN work on integer *and* float dtypes and compute
+#     directly in the tensor dtype (no float round-trip).
+#   * every other opcode is float-only (`_float_unary` below): half-precision
+#     inputs are promoted to float32, computed, and cast back — matching
+#     torch's numerics and keeping the polynomial math accurate.
+# Two of the composed ops deserve a note: `tan` and `asinh` are built from
+# sin/cos and log/sqrt rather than the std.math primitives, because those
+# lower to libm (`_call_libm`) which `comptime assert`s CPU-only and would
+# refuse to compile for the GPU target.
 # ---------------------------------------------------------------------------
 
 comptime UOP_RELU = 0
 comptime UOP_EXP = 1
 comptime UOP_TANH = 2
+comptime UOP_ABS = 3
+comptime UOP_NEG = 4
+comptime UOP_SIGN = 5
+comptime UOP_CEIL = 6
+comptime UOP_FLOOR = 7
+comptime UOP_ACOS = 8
+comptime UOP_ASINH = 9
+comptime UOP_ATANH = 10
+comptime UOP_COS = 11
+comptime UOP_COSH = 12
+comptime UOP_ERF = 13
+comptime UOP_LOG = 14
+comptime UOP_LOG1P = 15
+comptime UOP_RECIPROCAL = 16
+comptime UOP_RSQRT = 17
+comptime UOP_SIGMOID = 18
+comptime UOP_SILU = 19
+comptime UOP_SIN = 20
+comptime UOP_SINH = 21
+comptime UOP_SQRT = 22
+comptime UOP_TAN = 23
+comptime UOP_GELU_NONE = 24
+comptime UOP_GELU_TANH = 25
+
+
+@always_inline
+def _float_unary[
+    dtype: DType, width: Int, op_code: Int
+](a: SIMD[dtype, width]) -> SIMD[dtype, width] where dtype.is_floating_point():
+    """The float-only unary math, evaluated in `dtype` (float32 or float64).
+
+    Only instantiated for float32/float64 (half inputs are promoted before
+    the call), so every std.math call below sees a supported dtype.
+    """
+    var res = a
+    comptime if op_code == UOP_EXP:
+        res = exp(a)
+    comptime if op_code == UOP_TANH:
+        res = tanh(a)
+    comptime if op_code == UOP_CEIL:
+        res = ceil(a)
+    comptime if op_code == UOP_FLOOR:
+        res = floor(a)
+    comptime if op_code == UOP_ACOS:
+        res = acos(a)
+    comptime if op_code == UOP_ASINH:
+        # asinh(x) = log(x + sqrt(x^2 + 1)); std.math.asinh is libm/CPU-only.
+        res = log(a + sqrt(a * a + 1))
+    comptime if op_code == UOP_ATANH:
+        res = atanh(a)
+    comptime if op_code == UOP_COS:
+        res = cos(a)
+    comptime if op_code == UOP_COSH:
+        res = cosh(a)
+    comptime if op_code == UOP_ERF:
+        res = erf(a)
+    comptime if op_code == UOP_LOG:
+        res = log(a)
+    comptime if op_code == UOP_LOG1P:
+        res = log1p(a)
+    comptime if op_code == UOP_RECIPROCAL:
+        res = 1 / a
+    comptime if op_code == UOP_RSQRT:
+        res = 1 / sqrt(a)
+    comptime if op_code == UOP_SIGMOID:
+        res = 1 / (1 + exp(-a))
+    comptime if op_code == UOP_SILU:
+        res = a / (1 + exp(-a))
+    comptime if op_code == UOP_SIN:
+        res = sin(a)
+    comptime if op_code == UOP_SINH:
+        res = sinh(a)
+    comptime if op_code == UOP_SQRT:
+        res = sqrt(a)
+    comptime if op_code == UOP_TAN:
+        # tan(x) = sin(x)/cos(x); std.math.tan is libm/CPU-only.
+        res = sin(a) / cos(a)
+    comptime if op_code == UOP_GELU_NONE:
+        # 0.5 * x * (1 + erf(x / sqrt(2)))
+        comptime inv_sqrt2 = 0.70710678118654752440
+        res = 0.5 * a * (1 + erf(a * inv_sqrt2))
+    comptime if op_code == UOP_GELU_TANH:
+        # 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+        comptime sqrt_2_over_pi = 0.79788456080286535588
+        var inner = sqrt_2_over_pi * (a + 0.044715 * a * a * a)
+        res = 0.5 * a * (1 + tanh(inner))
+    return res
 
 
 @always_inline
@@ -180,10 +295,17 @@ def _unary_elementwise[
     size: Int,
     ctx: DeviceContext,
 ) raises:
-    comptime if (
-        op_code == UOP_EXP or op_code == UOP_TANH
-    ) and not dtype.is_floating_point():
-        raise Error("exp/tanh require a floating point dtype")
+    comptime is_direct = (
+        op_code == UOP_RELU
+        or op_code == UOP_ABS
+        or op_code == UOP_NEG
+        or op_code == UOP_SIGN
+    )
+    comptime if not is_direct and not dtype.is_floating_point():
+        # Transcendentals / ceil / floor / gelu require a float dtype; the
+        # Python side already gates on this, so this only ever fires as a
+        # defensive guard (and keeps the float math out of int instantiations).
+        raise Error("this unary op requires a floating point dtype")
     else:
 
         @always_inline
@@ -194,25 +316,27 @@ def _unary_elementwise[
             var a = in_ptr.load[width=width](i)
             comptime if op_code == UOP_RELU:
                 out_ptr.store[width=width](i, max(a, SIMD[dtype, width](0)))
-            comptime if op_code == UOP_EXP:
-                # The inner comptime gate gives the constraint checker
-                # direct evidence that `exp` only instantiates for floats;
-                # the runtime raise above already guarantees we never get
-                # here otherwise. Half-precision inputs are computed in
-                # float32 to match torch's numerics.
-                comptime if dtype == DType.float16 or dtype == DType.bfloat16:
+            comptime if op_code == UOP_ABS:
+                out_ptr.store[width=width](i, abs(a))
+            comptime if op_code == UOP_NEG:
+                # `-a` (pop.neg) wraps for unsigned/overflow exactly like torch.
+                out_ptr.store[width=width](i, -a)
+            comptime if op_code == UOP_SIGN:
+                var zero = SIMD[dtype, width](0)
+                var pos = a.gt(zero).cast[dtype]()
+                var neg = a.lt(zero).cast[dtype]()
+                # NaN compares false on both sides -> 0, matching torch.
+                out_ptr.store[width=width](i, pos - neg)
+            comptime if not is_direct:
+                comptime if (dtype == DType.float16 or dtype == DType.bfloat16):
+                    var af = a.cast[DType.float32]()
                     out_ptr.store[width=width](
-                        i, exp(a.cast[DType.float32]()).cast[dtype]()
+                        i, _float_unary[op_code=op_code](af).cast[dtype]()
                     )
                 elif dtype.is_floating_point():
-                    out_ptr.store[width=width](i, exp(a))
-            comptime if op_code == UOP_TANH:
-                comptime if dtype == DType.float16 or dtype == DType.bfloat16:
                     out_ptr.store[width=width](
-                        i, tanh(a.cast[DType.float32]()).cast[dtype]()
+                        i, _float_unary[op_code=op_code](a)
                     )
-                elif dtype.is_floating_point():
-                    out_ptr.store[width=width](i, tanh(a))
 
         if ctx.api() == "cpu":
             elementwise[func, simd_width=simd_width_of[dtype]()](
@@ -246,7 +370,17 @@ def _unary_go[
     var ctx = _raw_ctx(ctx_ptr)
 
     var handled = False
-    comptime for dt in FLOAT_DTYPES:
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.float64,
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+        DType.uint8,
+    ]:
         if dtype == dt:
             _unary_elementwise[dt, op_code](
                 _make_ptr[dt](out_addr),
@@ -259,6 +393,90 @@ def _unary_go[
         abort(
             String("unsupported dtype for fast unary elementwise op: ", dtype)
         )
+
+
+# ---------------------------------------------------------------------------
+# Unary-to-bool kernels: isnan and logical_not. Input dtype dispatches over
+# ints and floats (bool tensors are passed as their uint8 storage); output is
+# always bool bytes.
+# ---------------------------------------------------------------------------
+
+comptime BUOP_ISNAN = 0
+comptime BUOP_LOGICAL_NOT = 1
+
+
+@always_inline
+def _unary_bool[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[DType.bool], MutUntrackedOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], MutUntrackedOrigin],
+    size: Int,
+    ctx: DeviceContext,
+) raises:
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var a = in_ptr.load[width=width](i)
+        comptime if op_code == BUOP_ISNAN:
+            # `numerics.isnan` is bit-based (llvm.is.fpclass), so it survives
+            # the fast-math flags that would fold `a != a` to False; it also
+            # returns all-False for integer dtypes.
+            out_ptr.store[width=width](i, isnan(a))
+        comptime if op_code == BUOP_LOGICAL_NOT:
+            out_ptr.store[width=width](i, a.eq(SIMD[dtype, width](0)))
+
+    if ctx.api() == "cpu":
+        elementwise[func, simd_width=simd_width_of[dtype]()](Coord(size), ctx)
+    else:
+        comptime if has_accelerator():
+            comptime if dtype != DType.float64:
+                elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
+            else:
+                raise Error("float64 is not supported on GPU")
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
+
+def _unary_bool_go[
+    op_code: Int
+](
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype_val: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
+    var size = _raw_int(numel)
+    var dtype = _raw_dtype_int(dtype_val)
+    var ctx = _raw_ctx(ctx_ptr)
+
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.float64,
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+        DType.uint8,
+    ]:
+        if dtype == dt:
+            _unary_bool[dt, op_code](
+                _make_ptr[DType.bool](out_addr),
+                _make_ptr[dt](in_addr),
+                size,
+                ctx,
+            )
+            handled = True
+    if not handled:
+        abort(String("unsupported dtype for fast unary-to-bool op: ", dtype))
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +742,20 @@ def _unary_dispatcher[
     return _raw_ret_none()
 
 
+def _unary_bool_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _unary_bool_go[op_code](args[0], args[1], args[2], args[3], args[4])
+    except:
+        pass
+    return _raw_ret_none()
+
+
 def _scalar_dispatcher[
     op_code: Int
 ](
@@ -621,6 +853,131 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
             _unary_dispatcher[UOP_TANH],
             "Tanh",
             docstring="out = tanh(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_ABS],
+            "Abs",
+            docstring="out = abs(x) (contiguous, int/float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_NEG],
+            "Neg",
+            docstring="out = -x (contiguous, int/float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_SIGN],
+            "Sign",
+            docstring="out = sign(x) (contiguous, int/float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_CEIL],
+            "Ceil",
+            docstring="out = ceil(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_FLOOR],
+            "Floor",
+            docstring="out = floor(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_ACOS],
+            "Acos",
+            docstring="out = acos(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_ASINH],
+            "Asinh",
+            docstring="out = asinh(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_ATANH],
+            "Atanh",
+            docstring="out = atanh(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_COS],
+            "Cos",
+            docstring="out = cos(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_COSH],
+            "Cosh",
+            docstring="out = cosh(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_ERF],
+            "Erf",
+            docstring="out = erf(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_LOG],
+            "Log",
+            docstring="out = log(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_LOG1P],
+            "Log1p",
+            docstring="out = log1p(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_RECIPROCAL],
+            "Reciprocal",
+            docstring="out = 1/x (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_RSQRT],
+            "Rsqrt",
+            docstring="out = 1/sqrt(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_SIGMOID],
+            "Sigmoid",
+            docstring="out = sigmoid(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_SILU],
+            "Silu",
+            docstring="out = x*sigmoid(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_SIN],
+            "Sin",
+            docstring="out = sin(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_SINH],
+            "Sinh",
+            docstring="out = sinh(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_SQRT],
+            "Sqrt",
+            docstring="out = sqrt(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_TAN],
+            "Tan",
+            docstring="out = tan(x) (contiguous, float dtypes)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_GELU_NONE],
+            "GeluNone",
+            docstring="out = gelu(x) exact erf form (contiguous, float)",
+        )
+        b.def_py_c_function(
+            _unary_dispatcher[UOP_GELU_TANH],
+            "GeluTanh",
+            docstring="out = gelu(x) tanh approximation (contiguous, float)",
+        )
+        b.def_py_c_function(
+            _unary_bool_dispatcher[BUOP_ISNAN],
+            "IsNan",
+            docstring="out = (x != x) -> bool (contiguous, int/float)",
+        )
+        b.def_py_c_function(
+            _unary_bool_dispatcher[BUOP_LOGICAL_NOT],
+            "LogicalNot",
+            docstring="out = (x == 0) -> bool (contiguous, any dtype)",
         )
         b.def_py_c_function(
             _scalar_dispatcher[SOP_ADD],

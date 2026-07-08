@@ -144,10 +144,7 @@ def _copy_into(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
         return
     if dst._is_contiguous and src._is_contiguous:
         eager_kernels.tensor_holder.copy_d2d(
-            _ctx_ptr(dst._device),
-            dst._ptr,
-            src._ptr,
-            dst._numel * dst._itemsize,
+            _ctx_ptr(dst._device), dst._ptr, src._ptr, dst._numel * dst._itemsize
         )
     else:
         _copy_strided_into(dst, src)
@@ -177,12 +174,7 @@ def _try_binary(mojo_fn, lhs, rhs):
     out = _alloc(a._shape, a._dtype, a._device)
     if out._numel > 0:
         mojo_fn(
-            out._ptr,
-            a._ptr,
-            b._ptr,
-            out._numel,
-            a._dtype.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, b._ptr, out._numel, a._dtype.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -215,12 +207,7 @@ def _try_bool_and(lhs, rhs):
     out = _alloc(a._shape, DType.bool, a._device)
     if out._numel > 0:
         eager_kernels.elementwise_ops.Mul(
-            out._ptr,
-            a._ptr,
-            b._ptr,
-            out._numel,
-            DType.uint8.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, b._ptr, out._numel, DType.uint8.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -255,12 +242,7 @@ def _try_int_scalar(mojo_fn, x, scalar):
     out = _alloc(a._shape, a._dtype, a._device)
     if out._numel > 0:
         mojo_fn(
-            out._ptr,
-            a._ptr,
-            scalar,
-            out._numel,
-            a._dtype.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, scalar, out._numel, a._dtype.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -547,7 +529,11 @@ def fast_aten_add_(input, other, alpha=1):
         return input
     # General path: functional result, then a (strided-safe) copy back.
     result = fast_aten_add(input, other, alpha)
-    if result is NOT_HANDLED or result._shape != dst._shape or result._dtype != dst._dtype:
+    if (
+        result is NOT_HANDLED
+        or result._shape != dst._shape
+        or result._dtype != dst._dtype
+    ):
         return None
     _copy_into(dst, result)
     return input
@@ -560,7 +546,11 @@ def fast_aten_sub(input, other, alpha=1):
         if other is None:
             return NOT_HANDLED
     result = _try_binary(eager_kernels.elementwise_ops.Sub, input, other)
-    if result is None and isinstance(other, int | float) and not isinstance(other, bool):
+    if (
+        result is None
+        and isinstance(other, int | float)
+        and not isinstance(other, bool)
+    ):
         result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, -other)
         if result is None and isinstance(other, int):
             result = _try_int_scalar(
@@ -622,11 +612,7 @@ def fast_aten_div(input, other, *, rounding_mode=None):
         if b is not None:
             if b._device != a._device:
                 return NOT_HANDLED
-            rhs = (
-                _cast_tensor(b, DType.float32)
-                if b._dtype != DType.float32
-                else b
-            )
+            rhs = _cast_tensor(b, DType.float32) if b._dtype != DType.float32 else b
         elif isinstance(other, int | float) and not isinstance(other, bool):
             rhs = other
         else:
@@ -721,6 +707,187 @@ def fast_aten_pow(x, y):
     if result is not None:
         return result
     return NOT_HANDLED
+
+
+# ---------------------------------------------------------------------------
+# Unary elementwise suite
+#
+# One generic `_try_unary` call per op. The float-only transcendentals (and
+# ceil/floor/gelu/sigmoid/silu) gate on `_FLOAT_DTYPES`; abs/neg/sign also
+# dispatch on the integer dtypes the kernel handles. isnan / logical_not go
+# through the unary-to-bool kernels and always produce a bool tensor.
+# ---------------------------------------------------------------------------
+
+# abs/neg/sign accept the signed ints + uint8 the Neg/Abs/Sign kernels
+# dispatch on, plus the float dtypes (float64 works on the CPU device).
+_SIGNED_UNARY_DTYPES = _FLOAT_DTYPES + (
+    DType.float64,
+    DType.int8,
+    DType.int16,
+    DType.int32,
+    DType.int64,
+    DType.uint8,
+)
+
+# Dtypes the unary-to-bool kernels (IsNan / LogicalNot) dispatch on. bool
+# tensors are routed through their uint8 storage below.
+_BOOL_UNARY_DTYPES = _FLOAT_DTYPES + (
+    DType.float64,
+    DType.int8,
+    DType.int16,
+    DType.int32,
+    DType.int64,
+    DType.uint8,
+)
+
+
+@no_type_check
+def _try_unary_bool(mojo_fn, x):
+    """Unary op producing a bool tensor (isnan / logical_not)."""
+    a = _tc(x)
+    if a is None:
+        return None
+    kernel_dtype = DType.uint8 if a._dtype == DType.bool else a._dtype
+    if kernel_dtype not in _BOOL_UNARY_DTYPES:
+        return None
+    out = _alloc(a._shape, DType.bool, a._device)
+    if out._numel > 0:
+        mojo_fn(out._ptr, a._ptr, out._numel, kernel_dtype.value, _ctx_ptr(a._device))
+    return out
+
+
+@no_type_check
+def _unary_op(mojo_fn, x, dtypes=_FLOAT_DTYPES):
+    result = _try_unary(mojo_fn, x, dtypes)
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_abs(x):
+    return _unary_op(eager_kernels.elementwise_ops.Abs, x, _SIGNED_UNARY_DTYPES)
+
+
+@no_type_check
+def fast_aten_neg(x):
+    return _unary_op(eager_kernels.elementwise_ops.Neg, x, _SIGNED_UNARY_DTYPES)
+
+
+@no_type_check
+def fast_aten_sign(x):
+    return _unary_op(eager_kernels.elementwise_ops.Sign, x, _SIGNED_UNARY_DTYPES)
+
+
+@no_type_check
+def fast_aten_ceil(x):
+    return _unary_op(eager_kernels.elementwise_ops.Ceil, x)
+
+
+@no_type_check
+def fast_aten_floor(x):
+    return _unary_op(eager_kernels.elementwise_ops.Floor, x)
+
+
+@no_type_check
+def fast_aten_acos(x):
+    return _unary_op(eager_kernels.elementwise_ops.Acos, x)
+
+
+@no_type_check
+def fast_aten_asinh(x):
+    return _unary_op(eager_kernels.elementwise_ops.Asinh, x)
+
+
+@no_type_check
+def fast_aten_atanh(x):
+    return _unary_op(eager_kernels.elementwise_ops.Atanh, x)
+
+
+@no_type_check
+def fast_aten_cos(x):
+    return _unary_op(eager_kernels.elementwise_ops.Cos, x)
+
+
+@no_type_check
+def fast_aten_cosh(x):
+    return _unary_op(eager_kernels.elementwise_ops.Cosh, x)
+
+
+@no_type_check
+def fast_aten_erf(x):
+    return _unary_op(eager_kernels.elementwise_ops.Erf, x)
+
+
+@no_type_check
+def fast_aten_log(x):
+    return _unary_op(eager_kernels.elementwise_ops.Log, x)
+
+
+@no_type_check
+def fast_aten_log1p(x):
+    return _unary_op(eager_kernels.elementwise_ops.Log1p, x)
+
+
+@no_type_check
+def fast_aten_reciprocal(x):
+    return _unary_op(eager_kernels.elementwise_ops.Reciprocal, x)
+
+
+@no_type_check
+def fast_aten_rsqrt(x):
+    return _unary_op(eager_kernels.elementwise_ops.Rsqrt, x)
+
+
+@no_type_check
+def fast_aten_sigmoid(x):
+    return _unary_op(eager_kernels.elementwise_ops.Sigmoid, x)
+
+
+@no_type_check
+def fast_aten_silu(x):
+    return _unary_op(eager_kernels.elementwise_ops.Silu, x)
+
+
+@no_type_check
+def fast_aten_sin(x):
+    return _unary_op(eager_kernels.elementwise_ops.Sin, x)
+
+
+@no_type_check
+def fast_aten_sinh(x):
+    return _unary_op(eager_kernels.elementwise_ops.Sinh, x)
+
+
+@no_type_check
+def fast_aten_sqrt(x):
+    return _unary_op(eager_kernels.elementwise_ops.Sqrt, x)
+
+
+@no_type_check
+def fast_aten_tan(x):
+    return _unary_op(eager_kernels.elementwise_ops.Tan, x)
+
+
+@no_type_check
+def fast_aten_gelu(input, approximate="none"):
+    if approximate == "none":
+        fn = eager_kernels.elementwise_ops.GeluNone
+    elif approximate == "tanh":
+        fn = eager_kernels.elementwise_ops.GeluTanh
+    else:
+        return NOT_HANDLED
+    return _unary_op(fn, input)
+
+
+@no_type_check
+def fast_aten_isnan(x):
+    result = _try_unary_bool(eager_kernels.elementwise_ops.IsNan, x)
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_logical_not(x):
+    result = _try_unary_bool(eager_kernels.elementwise_ops.LogicalNot, x)
+    return result if result is not None else NOT_HANDLED
 
 
 # ---------------------------------------------------------------------------
@@ -997,9 +1164,7 @@ def _compute_view_strides(old_shape, old_strides, new_shape):
             old_shape[tensor_d - 1] != 1
             and old_strides[tensor_d - 1] != tensor_numel * chunk_base_stride
         ):
-            while view_d >= 0 and (
-                view_numel < tensor_numel or new_shape[view_d] == 1
-            ):
+            while view_d >= 0 and (view_numel < tensor_numel or new_shape[view_d] == 1):
                 new_strides[view_d] = view_numel * chunk_base_stride
                 view_numel *= new_shape[view_d]
                 view_d -= 1
@@ -1190,9 +1355,7 @@ def fast_aten_slice(input, dim=0, start=None, end=None, step=1):
     length = max(end - start, 0)
     length = -(-length // step)  # ceil div for step > 1
     new_shape = t._shape[:dim] + (length,) + t._shape[dim + 1 :]
-    new_strides = (
-        t._strides[:dim] + (t._strides[dim] * step,) + t._strides[dim + 1 :]
-    )
+    new_strides = t._strides[:dim] + (t._strides[dim] * step,) + t._strides[dim + 1 :]
     new_offset = t._offset + start * t._strides[dim]
     return _view_of(t, new_shape, new_strides, new_offset)
 
@@ -1372,11 +1535,7 @@ def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, e
         _ctx_ptr(a._device),
     )
     # Inference mode returns empty (0,) tensors for the saved stats.
-    return (
-        out,
-        _alloc((0,), a._dtype, a._device),
-        _alloc((0,), a._dtype, a._device),
-    )
+    return (out, _alloc((0,), a._dtype, a._device), _alloc((0,), a._dtype, a._device))
 
 
 @no_type_check
@@ -1732,13 +1891,7 @@ def fast_aten_linear(input, weight, bias=None):
         ctx = _ctx_ptr(a._device)
         if bias_t is not None:
             eager_kernels.matmul_ops.MatmulBias(
-                out._ptr,
-                a._ptr,
-                w._ptr,
-                bias_t._ptr,
-                (m, n, k, 1),
-                a._dtype.value,
-                ctx,
+                out._ptr, a._ptr, w._ptr, bias_t._ptr, (m, n, k, 1), a._dtype.value, ctx
             )
         else:
             eager_kernels.matmul_ops.Matmul(
@@ -2021,15 +2174,7 @@ def fast_aten__softmax(input, dim, half_to_float=False):
     rows = a._numel // cols
     out = _alloc(a._shape, a._dtype, a._device)
     eager_kernels.nn_ops.SoftmaxRows(
-        out._ptr,
-        a._ptr,
-        rows,
-        cols,
-        1.0,
-        0,
-        1,
-        a._dtype.value,
-        _ctx_ptr(a._device),
+        out._ptr, a._ptr, rows, cols, 1.0, 0, 1, a._dtype.value, _ctx_ptr(a._device)
     )
     return out
 
