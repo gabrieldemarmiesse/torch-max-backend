@@ -150,6 +150,17 @@ def _raw_numel(buffer: PyObjectPtr) -> Int:
 
 
 @always_inline
+def _raw_dtype_int(obj: PyObjectPtr) -> DType:
+    """DType from a Python int holding `max.dtype.DType.value`.
+
+    The raw-pointer kernel convention passes dtypes as plain ints; this is
+    the counterpart of the GetAttr-based `_raw_dtype` below (which reads a
+    `driver.Buffer.dtype` and dies with the Buffer).
+    """
+    return DType._from_ui8(UInt8(_raw_int(obj))._mlir_value)
+
+
+@always_inline
 def _raw_dtype(buffer: PyObjectPtr) -> DType:
     ref cpy = Python().cpython()
     var dt = cpy.PyObject_GetAttrString(buffer, "dtype")

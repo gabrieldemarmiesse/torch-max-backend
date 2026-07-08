@@ -35,6 +35,7 @@ _PACKAGE_DIR = Path(__file__).parent
 _CACHE_DIR = _PACKAGE_DIR / "__mojocache__"
 
 _MOJO_MODULES = (
+    "tensor_holder",
     "elementwise_ops",
     "nn_ops",
     "data_movement_ops",
