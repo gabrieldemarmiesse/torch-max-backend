@@ -9,7 +9,9 @@
 # `MatmulVendor` / `BmmVendor` keep the previous vendor BLAS (cuBLAS) path
 # available for A/B benchmarking; nothing in the backend calls them.
 #
-# GPU only: the Python side falls back to the graph path on CPU devices.
+# `Matmul` / `MatmulBias` / `Bmm` also run on the CPU MAX device, via a plain
+# parallel-loop GEMM (see `_cpu_gemm` below) — no tiling/tensor-core tricks,
+# just correctness, since there is no graph fallback to lean on anymore.
 # ===----------------------------------------------------------------------=== #
 
 from std.math import ceildiv
@@ -33,7 +35,7 @@ from std.sys.info import has_accelerator, size_of
 from std.utils.coord import Coord as StdCoord
 from std.utils.static_tuple import StaticTuple
 
-from std.algorithm.functional import elementwise
+from std.algorithm.functional import elementwise, parallelize
 
 from layout import TileTensor, row_major
 
@@ -48,9 +50,9 @@ from op_utils import (
     _get_ctx,
     _get_dtype,
     _make_ptr,
-    _raw_addr,
     _raw_ctx,
-    _raw_dtype,
+    _raw_dtype_int,
+    _raw_int,
     _raw_ret_none,
     _raw_tuple_int,
     _raw_tuple_len,
@@ -1846,20 +1848,134 @@ def _gemm_dtype_dispatch(
         raise Error("unsupported dtype for fast matmul: " + String(dtype))
 
 
+# ---------------------------------------------------------------------------
+# CPU fallback: plain triple-loop GEMM, parallelized over output rows
+# (batch * m) with `std.algorithm.parallelize`. No tiling/tensor-core
+# tricks — the fast paths above are GPU-only and this only has to be
+# correct. Accumulates in float32 regardless of the operand dtype (matches
+# the GPU kernels' accumulator), and honors the same transpose_b /
+# element-offset / a-broadcast (a_bstride == 0) semantics as the GPU
+# dispatch so callers don't need to special-case the device.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _cpu_gemm[
+    dtype: DType
+](
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    batch: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    a_bstride: Int,
+    transpose_b: Bool,
+    c_off: Int,
+    a_off: Int,
+    b_off: Int,
+    bias_addr: Int,  # 0 means no bias
+    ctx: DeviceContext,
+) raises:
+    var c_ptr = _make_ptr[dtype](c_addr) + c_off
+    var a_ptr = _make_ptr[dtype](a_addr) + a_off
+    var b_ptr = _make_ptr[dtype](b_addr) + b_off
+    var has_bias = bias_addr != 0
+    var bias_ptr = _make_ptr[dtype](bias_addr) if has_bias else c_ptr
+
+    # B is (k, n) row-major when transpose_b is False, (n, k) row-major
+    # ("transposed") when True — the same layouts the GPU kernels assume.
+    var b_batch_stride = (n * k) if transpose_b else (k * n)
+
+    @always_inline
+    @parameter
+    @__copy_capture(c_ptr, a_ptr, b_ptr, bias_ptr)
+    def row_func(row: Int):
+        var bz = row // m
+        var mm = row % m
+        var a_row = a_ptr + bz * a_bstride + mm * k
+        var c_row = c_ptr + row * n
+        var b_base = b_ptr + bz * b_batch_stride
+        for j in range(n):
+            var acc = Float32(0)
+            if transpose_b:
+                var b_row = b_base + j * k
+                for kk in range(k):
+                    acc += (
+                        a_row[kk].cast[DType.float32]()
+                        * b_row[kk].cast[DType.float32]()
+                    )
+            else:
+                for kk in range(k):
+                    acc += (
+                        a_row[kk].cast[DType.float32]()
+                        * b_base[kk * n + j].cast[DType.float32]()
+                    )
+            if has_bias:
+                acc += bias_ptr[j].cast[DType.float32]()
+            c_row[j] = acc.cast[dtype]()
+
+    parallelize[row_func](batch * m, ctx)
+
+
+@always_inline
+def _cpu_gemm_dtype_dispatch(
+    dtype: DType,
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    batch: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    a_bstride: Int,
+    transpose_b: Bool,
+    c_off: Int,
+    a_off: Int,
+    b_off: Int,
+    bias_addr: Int,
+    ctx: DeviceContext,
+) raises:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _cpu_gemm[dt](
+                c_addr,
+                a_addr,
+                b_addr,
+                batch,
+                m,
+                n,
+                k,
+                a_bstride,
+                transpose_b,
+                c_off,
+                a_off,
+                b_off,
+                bias_addr,
+                ctx,
+            )
+            handled = True
+    if not handled:
+        raise Error("unsupported dtype for CPU matmul: " + String(dtype))
+
+
 def _matmul_go(
-    c_buffer: PyObjectPtr,
-    a_buffer: PyObjectPtr,
-    b_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    a_ptr: PyObjectPtr,
+    b_ptr: PyObjectPtr,
     # (m, n, k, transpose_b) or, with element offsets into the three
     # buffers (grouped convolution), (m, n, k, transpose_b, c_off, a_off,
     # b_off).
     params: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(a_buffer)
-    var c_addr = _raw_addr(c_buffer)
-    var a_addr = _raw_addr(a_buffer)
-    var b_addr = _raw_addr(b_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var c_addr = _raw_int(out_ptr)
+    var a_addr = _raw_int(a_ptr)
+    var b_addr = _raw_int(b_ptr)
     var m = _raw_tuple_int(params, 0)
     var n = _raw_tuple_int(params, 1)
     var k = _raw_tuple_int(params, 2)
@@ -1872,6 +1988,26 @@ def _matmul_go(
         a_off = _raw_tuple_int(params, 5)
         b_off = _raw_tuple_int(params, 6)
     var ctx = _raw_ctx(device_context_ptr)
+
+    if ctx.api() == "cpu":
+        _cpu_gemm_dtype_dispatch(
+            dtype,
+            c_addr,
+            a_addr,
+            b_addr,
+            1,
+            m,
+            n,
+            k,
+            m * k,
+            transpose_b != 0,
+            c_off,
+            a_off,
+            b_off,
+            0,
+            ctx,
+        )
+        return
 
     _gemm_dtype_dispatch(
         dtype,
@@ -1892,19 +2028,20 @@ def _matmul_go(
 
 
 def _bmm_go(
-    c_buffer: PyObjectPtr,
-    a_buffer: PyObjectPtr,
-    b_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    a_ptr: PyObjectPtr,
+    b_ptr: PyObjectPtr,
     # (batch, m, n, k, transpose_b) or (batch, m, n, k, transpose_b,
     # a_shared) — a_shared=1 broadcasts a single (m, k) A across the batch
     # (batched convolution with shared weights).
     params: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(a_buffer)
-    var c_addr = _raw_addr(c_buffer)
-    var a_addr = _raw_addr(a_buffer)
-    var b_addr = _raw_addr(b_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var c_addr = _raw_int(out_ptr)
+    var a_addr = _raw_int(a_ptr)
+    var b_addr = _raw_int(b_ptr)
     var batch = _raw_tuple_int(params, 0)
     var m = _raw_tuple_int(params, 1)
     var n = _raw_tuple_int(params, 2)
@@ -1914,6 +2051,26 @@ def _bmm_go(
     if _raw_tuple_len(params) > 5 and _raw_tuple_int(params, 5) != 0:
         a_bstride = 0
     var ctx = _raw_ctx(device_context_ptr)
+
+    if ctx.api() == "cpu":
+        _cpu_gemm_dtype_dispatch(
+            dtype,
+            c_addr,
+            a_addr,
+            b_addr,
+            batch,
+            m,
+            n,
+            k,
+            a_bstride,
+            transpose_b != 0,
+            0,
+            0,
+            0,
+            0,
+            ctx,
+        )
+        return
 
     _gemm_dtype_dispatch(
         dtype,
@@ -2109,12 +2266,13 @@ def _bias_add_row_dispatcher(
 
 
 def _matmul_bias_go(
-    c_buffer: PyObjectPtr,
-    a_buffer: PyObjectPtr,
-    b_buffer: PyObjectPtr,
-    bias_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    a_ptr: PyObjectPtr,
+    b_ptr: PyObjectPtr,
+    bias_ptr: PyObjectPtr,
     # (m, n, k, transpose_b)
     params: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
     """C = A @ B (+ bias broadcast over rows) in one Python-visible call.
@@ -2124,16 +2282,36 @@ def _matmul_bias_go(
     layer and each Python->Mojo binding call costs a few microseconds of
     argument unwrapping.
     """
-    var dtype = _raw_dtype(a_buffer)
-    var c_addr = _raw_addr(c_buffer)
-    var a_addr = _raw_addr(a_buffer)
-    var b_addr = _raw_addr(b_buffer)
-    var bias_addr = _raw_addr(bias_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var c_addr = _raw_int(out_ptr)
+    var a_addr = _raw_int(a_ptr)
+    var b_addr = _raw_int(b_ptr)
+    var bias_addr = _raw_int(bias_ptr)
     var m = _raw_tuple_int(params, 0)
     var n = _raw_tuple_int(params, 1)
     var k = _raw_tuple_int(params, 2)
     var transpose_b = _raw_tuple_int(params, 3)
     var ctx = _raw_ctx(device_context_ptr)
+
+    if ctx.api() == "cpu":
+        _cpu_gemm_dtype_dispatch(
+            dtype,
+            c_addr,
+            a_addr,
+            b_addr,
+            1,
+            m,
+            n,
+            k,
+            m * k,
+            transpose_b != 0,
+            0,
+            0,
+            0,
+            bias_addr,
+            ctx,
+        )
+        return
 
     # Fused-epilogue path: the float32 pipe3 tile kernels add the bias in
     # the GEMM epilogue, saving a full extra read+write of C per call.
@@ -2190,7 +2368,7 @@ def _matmul_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _matmul_go(args[0], args[1], args[2], args[3], args[4])
+        _matmul_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -2202,7 +2380,7 @@ def _bmm_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _bmm_go(args[0], args[1], args[2], args[3], args[4])
+        _bmm_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -2214,7 +2392,9 @@ def _matmul_bias_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _matmul_bias_go(args[0], args[1], args[2], args[3], args[4], args[5])
+        _matmul_bias_go(
+            args[0], args[1], args[2], args[3], args[4], args[5], args[6]
+        )
     except:
         pass
     return _raw_ret_none()
@@ -2233,8 +2413,8 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
             _matmul_dispatcher,
             "Matmul",
             docstring=(
-                "C = A @ B (row-major, optional transposed B), pure Mojo"
-                " kernels, GPU only"
+                "C = A @ B (row-major, optional transposed B); pure Mojo"
+                " tiled kernels on GPU, plain parallel loops on CPU"
             ),
         )
         b.def_py_c_function(
@@ -2249,8 +2429,8 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
             _bmm_dispatcher,
             "Bmm",
             docstring=(
-                "batched C = A @ B (rank 3, optional transposed B), pure Mojo"
-                " kernels, GPU only"
+                "batched C = A @ B (rank 3, optional transposed B); pure Mojo"
+                " tiled kernels on GPU, plain parallel loops on CPU"
             ),
         )
         b.def_function[_matmul_vendor_dispatcher](
