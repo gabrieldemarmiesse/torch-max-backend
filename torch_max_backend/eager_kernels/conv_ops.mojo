@@ -128,9 +128,7 @@ def _im2col_go(
     var dil_h = _raw_tuple_int(params, 10)
     var dil_w = _raw_tuple_int(params, 11)
     var channels = _raw_tuple_int(params, 12)
-    var batch = (
-        _raw_tuple_int(params, 13) if _raw_tuple_len(params) > 13 else 1
-    )
+    var batch = _raw_tuple_int(params, 13) if _raw_tuple_len(params) > 13 else 1
     var ctx = _raw_ctx(device_context_ptr)
 
     var handled = False

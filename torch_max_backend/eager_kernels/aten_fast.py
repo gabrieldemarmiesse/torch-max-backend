@@ -2426,7 +2426,12 @@ def fast_aten_any(input, dim=None, keepdim=False):
 @no_type_check
 def fast_aten__log_softmax(input, dim, half_to_float=False):
     t = _t(input)
-    if t is None or t._numel == 0 or t._dtype not in _FLOAT_DTYPES or not isinstance(dim, int):
+    if (
+        t is None
+        or t._numel == 0
+        or t._dtype not in _FLOAT_DTYPES
+        or not isinstance(dim, int)
+    ):
         return NOT_HANDLED
     # half_to_float: half input, float32 output (torch computes in fp32).
     if half_to_float:
@@ -3244,7 +3249,12 @@ def fast_aten_scaled_dot_product_attention(
 @no_type_check
 def fast_aten__softmax(input, dim, half_to_float=False):
     t = _t(input)
-    if t is None or t._numel == 0 or t._dtype not in _FLOAT_DTYPES or not isinstance(dim, int):
+    if (
+        t is None
+        or t._numel == 0
+        or t._dtype not in _FLOAT_DTYPES
+        or not isinstance(dim, int)
+    ):
         return NOT_HANDLED
     # half_to_float: half input, float32 output (torch computes in fp32).
     if half_to_float:

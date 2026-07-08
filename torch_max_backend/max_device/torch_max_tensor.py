@@ -129,9 +129,7 @@ class TorchMaxTensor(torch.Tensor):
         numel = 1
         for s in shape:
             numel *= s
-        holder, ptr = _holder_mod().alloc(
-            _ctx_ptr(device), numel * dtype.size_in_bytes
-        )
+        holder, ptr = _holder_mod().alloc(_ctx_ptr(device), numel * dtype.size_in_bytes)
         return cls._make(
             holder,
             ptr,
@@ -145,7 +143,9 @@ class TorchMaxTensor(torch.Tensor):
 
     @classmethod
     @no_type_check
-    def _view_of(cls, base: "TorchMaxTensor", shape, strides, offset) -> "TorchMaxTensor":
+    def _view_of(
+        cls, base: "TorchMaxTensor", shape, strides, offset
+    ) -> "TorchMaxTensor":
         """A zero-copy view: shares base's holder, new layout metadata.
 
         `offset` is absolute, in elements from the allocation start.

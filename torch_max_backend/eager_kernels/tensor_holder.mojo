@@ -109,7 +109,9 @@ def _ctx_from(ctx_ptr: PythonObject) raises -> DeviceContext:
 
 
 @always_inline
-def _u8_ptr(addr: Int) -> UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin]:
+def _u8_ptr(
+    addr: Int,
+) -> UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin]:
     return _make_ptr[DType.uint8](addr)
 
 
