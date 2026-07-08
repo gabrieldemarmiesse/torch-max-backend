@@ -42,6 +42,7 @@ _MOJO_MODULES = (
     "logic_ops",
     "matmul_ops",
     "conv_ops",
+    "reduction_ops",
 )
 
 

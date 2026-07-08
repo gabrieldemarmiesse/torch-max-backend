@@ -16,6 +16,7 @@ from max.experimental.torch.torch import torch_dtype_to_max
 from torch_max_backend.max_device.torch_max_tensor import (
     TorchMaxTensor,
     _copy_strided_into,
+    _rebind_payload,
     find_equivalent_max_device,
 )
 
@@ -136,7 +137,11 @@ def _out_variant(op_name: str, fast_name: str):
         result = getattr(aten_fast, fast_name)(*args, **kwargs)
         if result is aten_fast.NOT_HANDLED:
             raise _unsupported(op_name, args, kwargs)
-        _copy_into_tensor(out, result)
+        if tuple(result._shape) == tuple(out._shape):
+            _copy_into_tensor(out, result)
+        else:
+            # torch resizes mismatched out= tensors; rebind the payload.
+            _rebind_payload(out, result)
         return out
 
     return dispatcher
@@ -450,7 +455,10 @@ def max_device_arange_start_out(start, end, step=1, *, out) -> TorchMaxTensor:
         start, end, step, max_dtype_to_torch_dtype(out._dtype)
     )
     staged = TorchMaxTensor._from_cpu(cpu, out._device)
-    _copy_into_tensor(out, staged)
+    if tuple(staged._shape) == tuple(out._shape):
+        _copy_into_tensor(out, staged)
+    else:
+        _rebind_payload(out, staged)
     return out
 
 

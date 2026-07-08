@@ -214,6 +214,26 @@ class TorchMaxTensor(torch.Tensor):
 
 
 @no_type_check
+def _rebind_payload(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
+    """Point dst's payload at src's data — the out-variant "resize" pattern.
+
+    torch's out= ops resize `out` when the shape doesn't match; our meta
+    wrapper's torch-side shape is frozen, but nothing ever reads it — all
+    consumers use the Python-side metadata rebound here (this mirrors the
+    old `out._max_data = result` behavior).
+    """
+    dst._holder = src._holder
+    dst._ptr = src._ptr
+    dst._shape = src._shape
+    dst._strides = src._strides
+    dst._offset = src._offset
+    dst._dtype = src._dtype
+    dst._itemsize = src._itemsize
+    dst._numel = src._numel
+    dst._is_contiguous = src._is_contiguous
+
+
+@no_type_check
 def _copy_strided_into(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
     """dst[coords] = src[coords]; same shape and dtype, any strides.
 
