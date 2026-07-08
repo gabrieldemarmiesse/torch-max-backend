@@ -1,10 +1,66 @@
 # Strided owning tensors + killing the Python `driver.Buffer` (design)
 
-Status: **design, not yet implemented.** This is the plan for the next
-step after `fast_eager_design.md`. Every non-obvious claim here was
-verified with a runnable POC on an RTX 2000 Ada in this repo's venv
-(`max==26.5.0.dev2026061806`); the POC code is embedded below so a fresh
-session can re-run it without any external scratch files.
+Status: **IMPLEMENTED** on branch `eager-strided-owning-tensors`. The plan
+below is the original design; the "Implementation status" section right
+after this intro records what was actually built and where it deviates.
+Every non-obvious claim was verified with a runnable POC on an RTX 2000 Ada
+in this repo's venv (`max==26.5.0.dev2026061806`); the POC code is embedded
+below so a fresh session can re-run it without any external scratch files.
+
+## Implementation status (what was actually built)
+
+The eager `max_device` path was rewritten onto the holder. The
+torch.compile backend (`aten_functions.py`, `torch_compile_backend/`) is
+**unchanged** — this work is confined to eager mode.
+
+**Key deviation from the design — metadata lives in Python, not the Mojo
+struct.** `TensorHolder` (`eager_kernels/tensor_holder.mojo`) is a *pure
+ownership token*: it owns one byte-typed `DeviceBuffer[uint8]` and nothing
+else. All layout metadata (`_ptr`, `_shape`, `_strides` in elements,
+`_offset`, `_dtype`, `_numel`, `_itemsize`, `_device`, `_is_contiguous`)
+lives as plain Python attributes on `TorchMaxTensor`; views share the same
+holder object and CPython's refcount on it is the ownership mechanism (last
+drop → stream-ordered free). This is simpler than putting shape/strides in
+the struct and downcasting, and it makes zero-copy views pure Python (no
+Mojo call). The 52ns-downcast micro-optimization from the design was not
+pursued; unwrap is a handful of Python attribute reads instead.
+
+**Kernels** take raw `int` data pointers (storage offset pre-applied) plus
+sizes/dtypes as ints (`op_utils._raw_dtype_int`), never `driver.Buffer`
+objects. Every kernel gained a **CPU branch** (the MAX CPU device is a real
+target now that the graph fallback is gone). New shared Mojo primitives in
+`tensor_holder.mojo`: `alloc`/`alloc_from_host`/`copy_from_host`/
+`copy_to_host`/`copy_d2d`/`read_scalar`/`CopyStrided`/`StridedFill`. A new
+`reduction_ops.mojo` module holds the row reductions.
+
+**Views are zero-copy strided** (permute/transpose/t/slice/select/split/
+unbind/squeeze/unsqueeze/expand/alias/view); `reshape` is handled by a port
+of ATen's `computeStride` in the `view` impl, materializing only when the
+requested shape isn't a valid reinterpret. Broadcast-strided kernels
+(logic_ops / WhereSelect) read the real strides, so many ops run on views
+without materializing. `.contiguous()`/materialize uses the rank-4
+`PermuteCopy` fast path (the generic rank-8 `CopyStrided` is ~2× slower and
+is used only for rank > 4 / strided-destination copies).
+
+**The graph fallback is deleted.** `max_device_aten_ops.py` binds each op
+to its `aten_fast` impl or raises `NotImplementedError` naming the op. The
+`_max_data`/`MaxEagerTensor`/`driver.Buffer` slots are gone from the eager
+path entirely. Inputs the fast kernels don't cover (float64 — the GPU can't
+do it at all; training/backward ops; SDPA with an attention mask;
+isin-on-floats) raise; the eager test helpers convert that specific raise
+into an `xfail` so the suite records them as expected-unsupported.
+
+**Verified:** gpt2 runs correctly on `max_device:0` (GPU) — including under
+a **torch-CPU-only** install (`torch==2.11.0+cpu`), proving the hard
+constraint that CUDA-in-torch is not required; MAX drives the GPU via the
+CUDA driver. Batch-256 decode throughput is ~1.06× torch-CUDA (the holder
+rewrite cost ~25% vs the pre-refactor CUDA-beating 1.32×, mostly per-op
+Python dispatch + H2D syncs + attention materialization — recoverable
+later). `tests/test_eager_kernels.py` and `tests/test_max_device.py` pass;
+`test_aten_functions.py` is green (508 pass / 61 xfail, 0 hard fails).
+
+Remaining `_register_missing` raisers: `aten::_adaptive_avg_pool2d_backward`,
+`aten::gelu_backward` (training-only).
 
 ## Why
 
