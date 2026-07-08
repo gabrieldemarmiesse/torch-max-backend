@@ -24,7 +24,7 @@ from std.gpu import (
     thread_idx,
 )
 from std.gpu.host import DeviceContext
-from std.math import sqrt, exp
+from std.math import sqrt, exp, floor
 from std.memory import alloc, stack_allocation
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
@@ -1516,6 +1516,569 @@ def _cumsum_rows_go(
 
 
 # ---------------------------------------------------------------------------
+# Average pool 2D over NCHW contiguous input (torch semantics). The window at
+# output (oh, ow) covers input rows [oh*sh - ph, ...) intersected with the real
+# input; the divisor honors count_include_pad / divisor_override exactly as
+# aten's cpu_avg_pool2d does. ceil_mode is handled Python-side (only False is
+# passed here). One parallel task per output element (CPU and GPU).
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _avg_pool2d[
+    dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    in_h: Int,
+    in_w: Int,
+    out_h: Int,
+    out_w: Int,
+    kh: Int,
+    kw: Int,
+    stride_h: Int,
+    stride_w: Int,
+    pad_h: Int,
+    pad_w: Int,
+    count_include_pad: Int,
+    divisor_override: Int,
+    planes: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var ow = i % out_w
+        var oh = (i // out_w) % out_h
+        var plane = i // (out_w * out_h)
+        var in_base = plane * in_h * in_w
+
+        # Window in (possibly padded) coordinates; pool_size uses the padded
+        # extent (before clamping to the real input), matching torch.
+        var ih0 = oh * stride_h - pad_h
+        var iw0 = ow * stride_w - pad_w
+        var ih1 = min(ih0 + kh, in_h + pad_h)
+        var iw1 = min(iw0 + kw, in_w + pad_w)
+        var pool_size = (ih1 - ih0) * (iw1 - iw0)
+        ih0 = max(ih0, 0)
+        iw0 = max(iw0, 0)
+        ih1 = min(ih1, in_h)
+        iw1 = min(iw1, in_w)
+
+        if ih0 >= ih1 or iw0 >= iw1:
+            # Window entirely in padding: torch leaves the output at 0.
+            out_ptr[i] = Scalar[dtype](0)
+        else:
+            var divide_factor = 0
+            if divisor_override != 0:
+                divide_factor = divisor_override
+            elif count_include_pad != 0:
+                divide_factor = pool_size
+            else:
+                divide_factor = (ih1 - ih0) * (iw1 - iw0)
+            var total = Float32(0)
+            for ih in range(ih0, ih1):
+                var row = in_base + ih * in_w
+                for iw in range(iw0, iw1):
+                    total += in_ptr[row + iw].cast[DType.float32]()
+            out_ptr[i] = (total / Float32(divide_factor)).cast[dtype]()
+
+    _parallel_for[func](planes * out_h * out_w, ctx)
+
+
+def _avg_pool2d_go(
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
+    params: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
+) raises:
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
+    var in_h = _raw_tuple_int(params, 0)
+    var in_w = _raw_tuple_int(params, 1)
+    var out_h = _raw_tuple_int(params, 2)
+    var out_w = _raw_tuple_int(params, 3)
+    var kh = _raw_tuple_int(params, 4)
+    var kw = _raw_tuple_int(params, 5)
+    var stride_h = _raw_tuple_int(params, 6)
+    var stride_w = _raw_tuple_int(params, 7)
+    var pad_h = _raw_tuple_int(params, 8)
+    var pad_w = _raw_tuple_int(params, 9)
+    var count_include_pad = _raw_tuple_int(params, 10)
+    var divisor_override = _raw_tuple_int(params, 11)
+    var planes = _raw_tuple_int(params, 12)
+    var ctx = _raw_ctx(device_context_ptr)
+
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _avg_pool2d[dt](
+                out_addr,
+                in_addr,
+                in_h,
+                in_w,
+                out_h,
+                out_w,
+                kh,
+                kw,
+                stride_h,
+                stride_w,
+                pad_h,
+                pad_w,
+                count_include_pad,
+                divisor_override,
+                planes,
+                ctx,
+            )
+            handled = True
+    if not handled:
+        raise Error("unsupported dtype for fast avg_pool2d: " + String(dtype))
+
+
+# ---------------------------------------------------------------------------
+# Adaptive average pool 2D over NCHW contiguous input. For output cell
+# (oh, ow) the input window is [start(oh), end(oh)) x [start(ow), end(ow))
+# with torch's integer start/end index formulas; the divisor is the window
+# area (no padding). One parallel task per output element (CPU and GPU).
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _adaptive_avg_pool2d[
+    dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    in_h: Int,
+    in_w: Int,
+    out_h: Int,
+    out_w: Int,
+    planes: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var ow = i % out_w
+        var oh = (i // out_w) % out_h
+        var plane = i // (out_w * out_h)
+        var in_base = plane * in_h * in_w
+
+        # start_index(a, b, c) = (a // b) * c + ((a % b) * c) // b
+        # end_index(a, b, c)   = 1 + ((a + 1) * c - 1) // b
+        var ih0 = (oh // out_h) * in_h + ((oh % out_h) * in_h) // out_h
+        var ih1 = 1 + ((oh + 1) * in_h - 1) // out_h
+        var iw0 = (ow // out_w) * in_w + ((ow % out_w) * in_w) // out_w
+        var iw1 = 1 + ((ow + 1) * in_w - 1) // out_w
+        var area = (ih1 - ih0) * (iw1 - iw0)
+
+        var total = Float32(0)
+        for ih in range(ih0, ih1):
+            var row = in_base + ih * in_w
+            for iw in range(iw0, iw1):
+                total += in_ptr[row + iw].cast[DType.float32]()
+        out_ptr[i] = (total / Float32(area)).cast[dtype]()
+
+    _parallel_for[func](planes * out_h * out_w, ctx)
+
+
+def _adaptive_avg_pool2d_go(
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
+    params: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
+) raises:
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
+    var in_h = _raw_tuple_int(params, 0)
+    var in_w = _raw_tuple_int(params, 1)
+    var out_h = _raw_tuple_int(params, 2)
+    var out_w = _raw_tuple_int(params, 3)
+    var planes = _raw_tuple_int(params, 4)
+    var ctx = _raw_ctx(device_context_ptr)
+
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _adaptive_avg_pool2d[dt](
+                out_addr, in_addr, in_h, in_w, out_h, out_w, planes, ctx
+            )
+            handled = True
+    if not handled:
+        raise Error(
+            "unsupported dtype for fast adaptive_avg_pool2d: " + String(dtype)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Group norm: normalize each (sample, group) over its C/group channels AND all
+# spatial elements together, then apply the per-channel affine. Input is
+# viewed as (rows = N*group, cols = (C/group) * HxW) — the group's elements are
+# a contiguous row because the input is NC(HxW) contiguous. Same two-pass
+# mean/variance as layer norm; mean/rstd are float32, shape (N, group). The GPU
+# path launches one block per row (row counts are small: N*group); the CPU
+# path runs one task per row.
+# ---------------------------------------------------------------------------
+
+
+@__llvm_metadata(
+    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(ROWRED_THREADS))
+)
+@__name(t"group_norm_block_{dtype}")
+def _group_norm_block_kernel[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    mean_out_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    rstd_out_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    gamma_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    beta_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    eps: Float32,
+    cols: Int,
+    hxw: Int,
+    group: Int,
+    cpg: Int,
+):
+    """One block per (sample, group) row (grid.x = N*group). Same shared-memory
+    mean/variance reduction as `_layer_norm_block_kernel`; the affine is applied
+    per channel, where channel = (row % group) * cpg + (position // hxw)."""
+    var r = block_idx.x
+    var tid = thread_idx.x
+    var g = Int(r) % group
+    var base = r * cols
+
+    var red = stack_allocation[
+        ROWRED_THREADS, DType.float32, address_space=AddressSpace.SHARED
+    ]()
+    var bcast = stack_allocation[
+        2, DType.float32, address_space=AddressSpace.SHARED
+    ]()
+
+    var s = Float32(0)
+    for j in range(tid, cols, ROWRED_THREADS):
+        s += in_ptr[base + j].cast[DType.float32]()
+    red[tid] = s
+    barrier()
+    var stride = ROWRED_THREADS // 2
+    for _ in range(ROWRED_STAGES):
+        if tid < stride:
+            red[tid] += red[tid + stride]
+        barrier()
+        stride //= 2
+    if tid == 0:
+        bcast[0] = red[0] / Float32(cols)
+    barrier()
+    var mean = bcast[0]
+
+    var vs = Float32(0)
+    for j in range(tid, cols, ROWRED_THREADS):
+        var d = in_ptr[base + j].cast[DType.float32]() - mean
+        vs += d * d
+    red[tid] = vs
+    barrier()
+    stride = ROWRED_THREADS // 2
+    for _ in range(ROWRED_STAGES):
+        if tid < stride:
+            red[tid] += red[tid + stride]
+        barrier()
+        stride //= 2
+    if tid == 0:
+        var rstd0 = 1.0 / sqrt(red[0] / Float32(cols) + eps)
+        bcast[1] = rstd0
+        mean_out_ptr[r] = mean
+        rstd_out_ptr[r] = rstd0
+    barrier()
+    var rstd = bcast[1]
+
+    for j in range(tid, cols, ROWRED_THREADS):
+        var c = g * cpg + j // hxw
+        var x = in_ptr[base + j].cast[DType.float32]()
+        var gm = gamma_ptr[c].cast[DType.float32]()
+        var bt = beta_ptr[c].cast[DType.float32]()
+        out_ptr[base + j] = ((x - mean) * rstd * gm + bt).cast[dtype]()
+
+
+@always_inline
+def _group_norm[
+    dtype: DType
+](
+    out_addr: Int,
+    mean_out_addr: Int,
+    rstd_out_addr: Int,
+    in_addr: Int,
+    gamma_addr: Int,
+    beta_addr: Int,
+    eps: Float32,
+    rows: Int,
+    cols: Int,
+    hxw: Int,
+    group: Int,
+    cpg: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var mean_out_ptr = _make_ptr[DType.float32](mean_out_addr)
+    var rstd_out_ptr = _make_ptr[DType.float32](rstd_out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+    var gamma_ptr = _make_ptr[dtype](gamma_addr)
+    var beta_ptr = _make_ptr[dtype](beta_addr)
+
+    if ctx.api() == "cpu":
+
+        @always_inline
+        @parameter
+        @__copy_capture(
+            out_ptr, mean_out_ptr, rstd_out_ptr, in_ptr, gamma_ptr, beta_ptr
+        )
+        def func[width: Int, alignment: Int = 1](idx: Coord):
+            var r = Int(idx[0].value())
+            var g = r % group
+            var base = r * cols
+            var total = Float32(0)
+            for j in range(cols):
+                total += in_ptr[base + j].cast[DType.float32]()
+            var mean = total / Float32(cols)
+            var var_sum = Float32(0)
+            for j in range(cols):
+                var d = in_ptr[base + j].cast[DType.float32]() - mean
+                var_sum += d * d
+            var rstd = 1.0 / sqrt(var_sum / Float32(cols) + eps)
+            for j in range(cols):
+                var c = g * cpg + j // hxw
+                var x = in_ptr[base + j].cast[DType.float32]()
+                var gm = gamma_ptr[c].cast[DType.float32]()
+                var bt = beta_ptr[c].cast[DType.float32]()
+                out_ptr[base + j] = ((x - mean) * rstd * gm + bt).cast[dtype]()
+            mean_out_ptr[r] = mean
+            rstd_out_ptr[r] = rstd
+
+        _parallel_for[func](rows, ctx)
+    else:
+        comptime if has_accelerator():
+            _enqueue_cached[_group_norm_block_kernel[dtype]](
+                ctx,
+                String(t"group_norm_block_{dtype}"),
+                rows,
+                1,
+                1,
+                ROWRED_THREADS,
+                out_ptr.as_unsafe_any_origin(),
+                mean_out_ptr.as_unsafe_any_origin(),
+                rstd_out_ptr.as_unsafe_any_origin(),
+                in_ptr.as_unsafe_any_origin().as_immutable(),
+                gamma_ptr.as_unsafe_any_origin().as_immutable(),
+                beta_ptr.as_unsafe_any_origin().as_immutable(),
+                eps,
+                cols,
+                hxw,
+                group,
+                cpg,
+            )
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
+
+def _group_norm_go(
+    out_ptr_obj: PyObjectPtr,
+    mean_out_ptr_obj: PyObjectPtr,
+    rstd_out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
+    gamma_ptr_obj: PyObjectPtr,
+    beta_ptr_obj: PyObjectPtr,
+    params: PyObjectPtr,  # (eps, rows, cols, hxw, group, cpg)
+    dtype_obj: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
+) raises:
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var mean_out_addr = _raw_int(mean_out_ptr_obj)
+    var rstd_out_addr = _raw_int(rstd_out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
+    var gamma_addr = _raw_int(gamma_ptr_obj)
+    var beta_addr = _raw_int(beta_ptr_obj)
+    var eps_val = Float32(_raw_tuple_f64(params, 0))
+    var rows_val = _raw_tuple_int(params, 1)
+    var cols_val = _raw_tuple_int(params, 2)
+    var hxw_val = _raw_tuple_int(params, 3)
+    var group_val = _raw_tuple_int(params, 4)
+    var cpg_val = _raw_tuple_int(params, 5)
+    var ctx = _raw_ctx(device_context_ptr)
+
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _group_norm[dt](
+                out_addr,
+                mean_out_addr,
+                rstd_out_addr,
+                in_addr,
+                gamma_addr,
+                beta_addr,
+                eps_val,
+                rows_val,
+                cols_val,
+                hxw_val,
+                group_val,
+                cpg_val,
+                ctx,
+            )
+            handled = True
+    if not handled:
+        raise Error("unsupported dtype for fast group_norm: " + String(dtype))
+
+
+# ---------------------------------------------------------------------------
+# Bilinear upsample 2D over NCHW contiguous input. The per-axis scale ratio and
+# the align_corners flag are resolved Python-side (area_pixel_compute_scale);
+# the kernel computes the source coordinate, the two neighbor indices, and the
+# 1D lambda weights exactly as torch's compute_source_index_and_lambda, then
+# blends the four corners. One parallel task per output element (CPU and GPU).
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _src_index_lambda(
+    ratio: Float32,
+    dst: Int,
+    in_size: Int,
+    out_size: Int,
+    align_corners: Int,
+) -> Tuple[Int, Int, Float32, Float32]:
+    """torch compute_source_index_and_lambda for one axis: returns the two
+    neighbor indices (idx0, idx1) and their weights (lam0, lam1)."""
+    if out_size == in_size:
+        return (dst, dst, Float32(1), Float32(0))
+    var real: Float32
+    if align_corners != 0:
+        real = ratio * Float32(dst)
+    else:
+        real = ratio * (Float32(dst) + 0.5) - 0.5
+        if real < 0.0:
+            real = 0.0
+    var idx0 = Int(floor(real))
+    if idx0 > in_size - 1:
+        idx0 = in_size - 1
+    var lam1 = real - Float32(idx0)
+    if lam1 < 0.0:
+        lam1 = 0.0
+    if lam1 > 1.0:
+        lam1 = 1.0
+    var idx1 = idx0 + 1 if idx0 < in_size - 1 else idx0
+    var lam0 = Float32(1) - lam1
+    return (idx0, idx1, lam0, lam1)
+
+
+@always_inline
+def _upsample_bilinear2d[
+    dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    ratio_h: Float32,
+    ratio_w: Float32,
+    in_h: Int,
+    in_w: Int,
+    out_h: Int,
+    out_w: Int,
+    planes: Int,
+    align_corners: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var ow = i % out_w
+        var oh = (i // out_w) % out_h
+        var plane = i // (out_w * out_h)
+        var in_base = plane * in_h * in_w
+
+        var hh = _src_index_lambda(ratio_h, oh, in_h, out_h, align_corners)
+        var ih0 = hh[0]
+        var ih1 = hh[1]
+        var h0 = hh[2]
+        var h1 = hh[3]
+        var ww = _src_index_lambda(ratio_w, ow, in_w, out_w, align_corners)
+        var iw0 = ww[0]
+        var iw1 = ww[1]
+        var w0 = ww[2]
+        var w1 = ww[3]
+
+        var r0 = in_base + ih0 * in_w
+        var r1 = in_base + ih1 * in_w
+        var v00 = in_ptr[r0 + iw0].cast[DType.float32]()
+        var v01 = in_ptr[r0 + iw1].cast[DType.float32]()
+        var v10 = in_ptr[r1 + iw0].cast[DType.float32]()
+        var v11 = in_ptr[r1 + iw1].cast[DType.float32]()
+        var res = h0 * (w0 * v00 + w1 * v01) + h1 * (w0 * v10 + w1 * v11)
+        out_ptr[i] = res.cast[dtype]()
+
+    _parallel_for[func](planes * out_h * out_w, ctx)
+
+
+def _upsample_bilinear2d_go(
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
+    params: PyObjectPtr,  # (ratio_h, ratio_w, in_h, in_w, out_h, out_w, planes, align_corners)
+    dtype_obj: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
+) raises:
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
+    var ratio_h = Float32(_raw_tuple_f64(params, 0))
+    var ratio_w = Float32(_raw_tuple_f64(params, 1))
+    var in_h = _raw_tuple_int(params, 2)
+    var in_w = _raw_tuple_int(params, 3)
+    var out_h = _raw_tuple_int(params, 4)
+    var out_w = _raw_tuple_int(params, 5)
+    var planes = _raw_tuple_int(params, 6)
+    var align_corners = _raw_tuple_int(params, 7)
+    var ctx = _raw_ctx(device_context_ptr)
+
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            _upsample_bilinear2d[dt](
+                out_addr,
+                in_addr,
+                ratio_h,
+                ratio_w,
+                in_h,
+                in_w,
+                out_h,
+                out_w,
+                planes,
+                align_corners,
+                ctx,
+            )
+            handled = True
+    if not handled:
+        raise Error(
+            "unsupported dtype for fast upsample_bilinear2d: " + String(dtype)
+        )
+
+
+# ---------------------------------------------------------------------------
 # METH_FASTCALL wrappers: raw CPython argument unpacking (no owning
 # PythonObject per argument). Argument types are guaranteed by the internal
 # Python callers; raise sites are unsupported-dtype guards gated upstream.
@@ -1621,6 +2184,64 @@ def _max_pool2d_dispatcher(
 ) abi("C") -> PyObjectPtr:
     try:
         _max_pool2d_go(args[0], args[1], args[2], args[3], args[4], args[5])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _avg_pool2d_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _avg_pool2d_go(args[0], args[1], args[2], args[3], args[4])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _adaptive_avg_pool2d_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _adaptive_avg_pool2d_go(args[0], args[1], args[2], args[3], args[4])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _group_norm_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _group_norm_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+            args[8],
+        )
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _upsample_bilinear2d_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _upsample_bilinear2d_go(args[0], args[1], args[2], args[3], args[4])
     except:
         pass
     return _raw_ret_none()
@@ -1758,6 +2379,32 @@ def PyInit_nn_ops() abi("C") -> PythonObject:
                 "max pool over NCHW contiguous input, returns values and int64"
                 " plane indices"
             ),
+        )
+        b.def_py_c_function(
+            _avg_pool2d_dispatcher,
+            "AvgPool2d",
+            docstring=(
+                "average pool over NCHW contiguous input (count_include_pad /"
+                " divisor_override honored)"
+            ),
+        )
+        b.def_py_c_function(
+            _adaptive_avg_pool2d_dispatcher,
+            "AdaptiveAvgPool2d",
+            docstring="adaptive average pool over NCHW contiguous input",
+        )
+        b.def_py_c_function(
+            _group_norm_dispatcher,
+            "GroupNorm",
+            docstring=(
+                "group norm over NC(HxW) contiguous input; writes float32"
+                " mean/rstd per (sample, group)"
+            ),
+        )
+        b.def_py_c_function(
+            _upsample_bilinear2d_dispatcher,
+            "UpsampleBilinear2d",
+            docstring="bilinear upsample over NCHW contiguous input",
         )
         b.def_py_c_function(
             _gather0_dispatcher,
