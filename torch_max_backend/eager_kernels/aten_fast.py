@@ -144,10 +144,7 @@ def _copy_into(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
         return
     if dst._is_contiguous and src._is_contiguous:
         eager_kernels.tensor_holder.copy_d2d(
-            _ctx_ptr(dst._device),
-            dst._ptr,
-            src._ptr,
-            dst._numel * dst._itemsize,
+            _ctx_ptr(dst._device), dst._ptr, src._ptr, dst._numel * dst._itemsize
         )
     else:
         _copy_strided_into(dst, src)
@@ -177,12 +174,7 @@ def _try_binary(mojo_fn, lhs, rhs):
     out = _alloc(a._shape, a._dtype, a._device)
     if out._numel > 0:
         mojo_fn(
-            out._ptr,
-            a._ptr,
-            b._ptr,
-            out._numel,
-            a._dtype.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, b._ptr, out._numel, a._dtype.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -215,12 +207,7 @@ def _try_bool_and(lhs, rhs):
     out = _alloc(a._shape, DType.bool, a._device)
     if out._numel > 0:
         eager_kernels.elementwise_ops.Mul(
-            out._ptr,
-            a._ptr,
-            b._ptr,
-            out._numel,
-            DType.uint8.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, b._ptr, out._numel, DType.uint8.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -255,12 +242,7 @@ def _try_int_scalar(mojo_fn, x, scalar):
     out = _alloc(a._shape, a._dtype, a._device)
     if out._numel > 0:
         mojo_fn(
-            out._ptr,
-            a._ptr,
-            scalar,
-            out._numel,
-            a._dtype.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, scalar, out._numel, a._dtype.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -547,7 +529,11 @@ def fast_aten_add_(input, other, alpha=1):
         return input
     # General path: functional result, then a (strided-safe) copy back.
     result = fast_aten_add(input, other, alpha)
-    if result is NOT_HANDLED or result._shape != dst._shape or result._dtype != dst._dtype:
+    if (
+        result is NOT_HANDLED
+        or result._shape != dst._shape
+        or result._dtype != dst._dtype
+    ):
         return None
     _copy_into(dst, result)
     return input
@@ -560,7 +546,11 @@ def fast_aten_sub(input, other, alpha=1):
         if other is None:
             return NOT_HANDLED
     result = _try_binary(eager_kernels.elementwise_ops.Sub, input, other)
-    if result is None and isinstance(other, int | float) and not isinstance(other, bool):
+    if (
+        result is None
+        and isinstance(other, int | float)
+        and not isinstance(other, bool)
+    ):
         result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, -other)
         if result is None and isinstance(other, int):
             result = _try_int_scalar(
@@ -622,11 +612,7 @@ def fast_aten_div(input, other, *, rounding_mode=None):
         if b is not None:
             if b._device != a._device:
                 return NOT_HANDLED
-            rhs = (
-                _cast_tensor(b, DType.float32)
-                if b._dtype != DType.float32
-                else b
-            )
+            rhs = _cast_tensor(b, DType.float32) if b._dtype != DType.float32 else b
         elif isinstance(other, int | float) and not isinstance(other, bool):
             rhs = other
         else:
@@ -834,6 +820,177 @@ def fast_aten_isin(elements, test_elements, *, assume_unique=False, invert=False
     return out
 
 
+# ---------------------------------------------------------------------------
+# Binary/ternary extras: remainder, floor_divide, pow(Tensor,Tensor),
+# logical_and/xor, clamp, addcmul/addcdiv. All ride the broadcast-strided
+# kernels (real strides, no materialization) except clamp, which is a
+# contiguous unary.
+# ---------------------------------------------------------------------------
+
+
+@no_type_check
+def fast_aten_remainder(input, other):
+    # Divisor-signed remainder (Python/torch `%`), float and int dtypes.
+    result = _try_binary_bcast("RemainderBcast", input, other)
+    if result is None:
+        result = _try_binary_bcast("RemainderBcast", _tc(input), _tc(other))
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_floor_divide(input, other):
+    # floor(input / other), float and int dtypes.
+    result = _try_binary_bcast("FloorDivBcast", input, other)
+    if result is None:
+        result = _try_binary_bcast("FloorDivBcast", _tc(input), _tc(other))
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_pow_tensor_tensor(input, exponent):
+    # Float-only (the kernel raises on ints, which would leave the output
+    # unwritten); gate here so unsupported dtypes fall through cleanly.
+    a = _t(input)
+    if a is None or a._dtype not in _FLOAT_DTYPES:
+        return NOT_HANDLED
+    result = _try_binary_bcast("PowBcast", input, exponent)
+    if result is None:
+        result = _try_binary_bcast("PowBcast", _tc(input), _tc(exponent))
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def _try_logical(kernel_name, input, other):
+    """logical_and / logical_xor: bool output from any input dtype pair.
+
+    Same-dtype operands (in the bcast set) test nonzero-ness inline with no
+    materialization; mixed dtypes are cast to bool first (which also does the
+    nonzero test) and combined through the uint8 dispatch.
+    """
+    a = _t(input)
+    b = _t(other)
+    if a is None or b is None or a._device != b._device:
+        return None
+    if a._dtype == b._dtype and a._dtype in _BCAST_DTYPES:
+        da, db, dtype = a, b, a._dtype
+    elif a._dtype == DType.bool and b._dtype == DType.bool:
+        da, db, dtype = a, b, DType.uint8
+    else:
+        # Mixed dtypes: reduce each to bool (nonzero test) via Cast.
+        if a._dtype not in _CAST_DTYPES or b._dtype not in _CAST_DTYPES:
+            return None
+        da = a if a._dtype == DType.bool else _cast_tensor(a, DType.bool)
+        db = b if b._dtype == DType.bool else _cast_tensor(b, DType.bool)
+        dtype = DType.uint8
+    meta = _bcast_meta(da, db)
+    if meta is None:
+        return None
+    out = _alloc(meta[0], DType.bool, a._device)
+    if out._numel > 0:
+        _launch_bcast(
+            getattr(eager_kernels.logic_ops, kernel_name), out, (da, db), meta, dtype
+        )
+    return out
+
+
+@no_type_check
+def fast_aten_logical_and(input, other):
+    result = _try_logical("LogicalAndBcast", input, other)
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_logical_xor(input, other):
+    result = _try_logical("LogicalXorBcast", input, other)
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_clamp(input, min=None, max=None):
+    a = _tc(input)
+    if a is None or a._dtype not in _BCAST_DTYPES:
+        return NOT_HANDLED
+    if min is None and max is None:
+        return NOT_HANDLED
+    for bound in (min, max):
+        if bound is not None and not isinstance(bound, int | float):
+            return NOT_HANDLED
+    has_min = min is not None
+    has_max = max is not None
+    lo = float(min) if has_min else 0.0
+    hi = float(max) if has_max else 0.0
+    out = _alloc(a._shape, a._dtype, a._device)
+    if out._numel > 0:
+        eager_kernels.logic_ops.ClampScalar(
+            out._ptr,
+            a._ptr,
+            lo,
+            hi,
+            1 if has_min else 0,
+            1 if has_max else 0,
+            out._numel,
+            a._dtype.value,
+            _ctx_ptr(a._device),
+        )
+    return out
+
+
+@no_type_check
+def _try_addc(kernel_name, self, tensor1, tensor2, value, allow_int):
+    a = _t(self)
+    b = _t(tensor1)
+    c = _t(tensor2)
+    if a is None or b is None or c is None:
+        return NOT_HANDLED
+    if a._device != b._device or a._device != c._device:
+        return NOT_HANDLED
+    dtype = a._dtype
+    if b._dtype != dtype or c._dtype != dtype:
+        return NOT_HANDLED
+    if dtype in _FLOAT_DTYPES:
+        pass
+    elif allow_int and dtype in (
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+        DType.uint8,
+    ):
+        pass
+    else:
+        return NOT_HANDLED
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return NOT_HANDLED
+    meta = _bcast_meta(a, b, c)
+    if meta is None:
+        return NOT_HANDLED
+    out_shape, dims, strides = meta
+    out = _alloc(out_shape, dtype, a._device)
+    if out._numel > 0:
+        params = tuple(dims) + tuple(s for st in strides for s in st)
+        getattr(eager_kernels.logic_ops, kernel_name)(
+            out._ptr,
+            a._ptr,
+            b._ptr,
+            c._ptr,
+            params,
+            float(value),
+            dtype.value,
+            _ctx_ptr(a._device),
+        )
+    return out
+
+
+@no_type_check
+def fast_aten_addcmul(self, tensor1, tensor2, value=1):
+    return _try_addc("AddcmulBcast", self, tensor1, tensor2, value, True)
+
+
+@no_type_check
+def fast_aten_addcdiv(self, tensor1, tensor2, value=1):
+    return _try_addc("AddcdivBcast", self, tensor1, tensor2, value, False)
+
+
 @no_type_check
 def fast_aten_where(condition, input, other):
     cond = _t(condition)
@@ -997,9 +1154,7 @@ def _compute_view_strides(old_shape, old_strides, new_shape):
             old_shape[tensor_d - 1] != 1
             and old_strides[tensor_d - 1] != tensor_numel * chunk_base_stride
         ):
-            while view_d >= 0 and (
-                view_numel < tensor_numel or new_shape[view_d] == 1
-            ):
+            while view_d >= 0 and (view_numel < tensor_numel or new_shape[view_d] == 1):
                 new_strides[view_d] = view_numel * chunk_base_stride
                 view_numel *= new_shape[view_d]
                 view_d -= 1
@@ -1190,9 +1345,7 @@ def fast_aten_slice(input, dim=0, start=None, end=None, step=1):
     length = max(end - start, 0)
     length = -(-length // step)  # ceil div for step > 1
     new_shape = t._shape[:dim] + (length,) + t._shape[dim + 1 :]
-    new_strides = (
-        t._strides[:dim] + (t._strides[dim] * step,) + t._strides[dim + 1 :]
-    )
+    new_strides = t._strides[:dim] + (t._strides[dim] * step,) + t._strides[dim + 1 :]
     new_offset = t._offset + start * t._strides[dim]
     return _view_of(t, new_shape, new_strides, new_offset)
 
@@ -1372,11 +1525,7 @@ def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, e
         _ctx_ptr(a._device),
     )
     # Inference mode returns empty (0,) tensors for the saved stats.
-    return (
-        out,
-        _alloc((0,), a._dtype, a._device),
-        _alloc((0,), a._dtype, a._device),
-    )
+    return (out, _alloc((0,), a._dtype, a._device), _alloc((0,), a._dtype, a._device))
 
 
 @no_type_check
@@ -1732,13 +1881,7 @@ def fast_aten_linear(input, weight, bias=None):
         ctx = _ctx_ptr(a._device)
         if bias_t is not None:
             eager_kernels.matmul_ops.MatmulBias(
-                out._ptr,
-                a._ptr,
-                w._ptr,
-                bias_t._ptr,
-                (m, n, k, 1),
-                a._dtype.value,
-                ctx,
+                out._ptr, a._ptr, w._ptr, bias_t._ptr, (m, n, k, 1), a._dtype.value, ctx
             )
         else:
             eager_kernels.matmul_ops.Matmul(
@@ -2021,15 +2164,7 @@ def fast_aten__softmax(input, dim, half_to_float=False):
     rows = a._numel // cols
     out = _alloc(a._shape, a._dtype, a._device)
     eager_kernels.nn_ops.SoftmaxRows(
-        out._ptr,
-        a._ptr,
-        rows,
-        cols,
-        1.0,
-        0,
-        1,
-        a._dtype.value,
-        _ctx_ptr(a._device),
+        out._ptr, a._ptr, rows, cols, 1.0, 0, 1, a._dtype.value, _ctx_ptr(a._device)
     )
     return out
 

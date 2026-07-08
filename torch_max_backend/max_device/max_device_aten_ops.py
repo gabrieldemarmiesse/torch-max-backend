@@ -314,9 +314,7 @@ def max_device_empty_like(
     memory_format=None,
 ) -> TorchMaxTensor:
     max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
-    max_device = (
-        self._device if device is None else find_equivalent_max_device(device)
-    )
+    max_device = self._device if device is None else find_equivalent_max_device(device)
     return TorchMaxTensor._alloc(self._shape, max_dtype, max_device)
 
 
@@ -364,9 +362,7 @@ def max_device_full_like(
     memory_format=None,
 ) -> TorchMaxTensor:
     max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
-    max_device = (
-        self._device if device is None else find_equivalent_max_device(device)
-    )
+    max_device = self._device if device is None else find_equivalent_max_device(device)
     result = _fast().fast_filled(self._shape, fill_value, max_dtype, max_device)
     if result is None:
         raise _unsupported("aten::full_like", (self, fill_value))
@@ -451,9 +447,7 @@ def max_device_arange(
 def max_device_arange_start_out(start, end, step=1, *, out) -> TorchMaxTensor:
     # torch.arange(start, end, step, device=...) dispatches to the out
     # variant with a pre-allocated `out` of the right size and dtype.
-    cpu = _host_arange_tensor(
-        start, end, step, max_dtype_to_torch_dtype(out._dtype)
-    )
+    cpu = _host_arange_tensor(start, end, step, max_dtype_to_torch_dtype(out._dtype))
     staged = TorchMaxTensor._from_cpu(cpu, out._device)
     if tuple(staged._shape) == tuple(out._shape):
         _copy_into_tensor(out, staged)
@@ -469,9 +463,9 @@ def max_device_normal_(
 ) -> TorchMaxTensor:
     if generator is not None:
         raise _unsupported("aten::normal_ (generator)", (self,))
-    cpu = torch.empty(
-        self._shape, dtype=max_dtype_to_torch_dtype(self._dtype)
-    ).normal_(mean, std)
+    cpu = torch.empty(self._shape, dtype=max_dtype_to_torch_dtype(self._dtype)).normal_(
+        mean, std
+    )
     staged = TorchMaxTensor._from_cpu(cpu, self._device)
     _copy_into_tensor(self, staged)
     return self
@@ -484,9 +478,7 @@ def max_device_normal_(
 
 @register_aten_op("aten::add_.Tensor")
 @no_type_check
-def max_device_add_(
-    self: TorchMaxTensor, other, alpha: float = 1.0
-) -> TorchMaxTensor:
+def max_device_add_(self: TorchMaxTensor, other, alpha: float = 1.0) -> TorchMaxTensor:
     result = _fast().fast_aten_add_(self, other, alpha)
     if result is None:
         raise _unsupported("aten::add_.Tensor", (self, other))
@@ -556,6 +548,8 @@ _register_fast(
 _register_fast("aten::_softmax", "fast_aten__softmax")
 _register_fast("aten::_unsafe_view", "fast_aten__unsafe_view")
 _register_fast("aten::add.Tensor", "fast_aten_add")
+_register_fast("aten::addcdiv", "fast_aten_addcdiv")
+_register_fast("aten::addcmul", "fast_aten_addcmul")
 _register_fast("aten::addmm", "fast_aten_addmm")
 _register_fast("aten::alias", "fast_aten_alias")
 _register_fast("aten::all", "fast_aten_all")
@@ -570,6 +564,7 @@ _register_fast("aten::bitwise_xor.Scalar", "fast_aten_bitwise_xor")
 _register_fast("aten::bitwise_xor.Tensor", "fast_aten_bitwise_xor")
 _register_fast("aten::bmm", "fast_aten_bmm")
 _register_fast("aten::cat", "fast_aten_cat")
+_register_fast("aten::clamp", "fast_aten_clamp")
 _register_fast("aten::clone", "fast_aten_clone")
 _register_fast("aten::convolution", "fast_aten_convolution")
 _register_fast("aten::cumsum", "fast_aten_cumsum")
@@ -582,6 +577,9 @@ _register_fast("aten::eq.Tensor", "fast_aten_eq")
 _register_fast("aten::exp", "fast_aten_exp")
 _register_fast("aten::expand", "fast_aten_expand")
 _register_fast("aten::fill.Scalar", "fast_aten_fill_scalar")
+_register_fast("aten::floor_divide", "fast_aten_floor_divide")
+_register_fast("aten::floor_divide.Scalar", "fast_aten_floor_divide")
+_register_fast("aten::floordiv", "fast_aten_floor_divide")
 _register_fast("aten::ge", "fast_aten_ge")
 _register_fast("aten::ge.Scalar", "fast_aten_ge")
 _register_fast("aten::ge.Tensor", "fast_aten_ge")
@@ -593,15 +591,15 @@ _register_fast("aten::le", "fast_aten_le")
 _register_fast("aten::le.Scalar", "fast_aten_le")
 _register_fast("aten::le.Tensor", "fast_aten_le")
 _register_fast("aten::linear", "fast_aten_linear")
+_register_fast("aten::logical_and", "fast_aten_logical_and")
+_register_fast("aten::logical_xor", "fast_aten_logical_xor")
 _register_fast("aten::lt", "fast_aten_lt")
 _register_fast("aten::lt.Scalar", "fast_aten_lt")
 _register_fast("aten::lt.Tensor", "fast_aten_lt")
 _register_fast("aten::masked_fill.Scalar", "fast_aten_masked_fill")
 _register_fast("aten::masked_fill.Tensor", "fast_aten_masked_fill")
 _register_fast("aten::max", "fast_aten_max")
-_register_fast(
-    "aten::max_pool2d_with_indices", "fast_aten_max_pool2d_with_indices"
-)
+_register_fast("aten::max_pool2d_with_indices", "fast_aten_max_pool2d_with_indices")
 _register_fast("aten::maximum", "fast_aten_maximum")
 _register_fast("aten::mean", "fast_aten_mean")
 # Registering the base name only covers the default overload; mean.dim would
@@ -617,7 +615,11 @@ _register_fast("aten::ne.Scalar", "fast_aten_ne")
 _register_fast("aten::ne.Tensor", "fast_aten_ne")
 _register_fast("aten::permute", "fast_aten_permute")
 _register_fast("aten::pow.Tensor_Scalar", "fast_aten_pow")
+_register_fast("aten::pow.Tensor_Tensor", "fast_aten_pow_tensor_tensor")
 _register_fast("aten::relu", "fast_aten_relu")
+_register_fast("aten::remainder.Scalar", "fast_aten_remainder")
+_register_fast("aten::remainder.Scalar_Tensor", "fast_aten_remainder")
+_register_fast("aten::remainder.Tensor", "fast_aten_remainder")
 _register_fast(
     "aten::scaled_dot_product_attention", "fast_aten_scaled_dot_product_attention"
 )
@@ -650,8 +652,6 @@ _register_missing("aten::_scaled_dot_product_efficient_attention")
 _register_missing("aten::_scaled_dot_product_flash_attention")
 _register_missing("aten::abs")
 _register_missing("aten::acos")
-_register_missing("aten::addcdiv")
-_register_missing("aten::addcmul")
 _register_missing("aten::amax")
 _register_missing("aten::amin")
 _register_missing("aten::all.dim")
@@ -662,28 +662,22 @@ _register_missing("aten::asinh")
 _register_missing("aten::atanh")
 _register_missing("aten::avg_pool2d")
 _register_missing("aten::ceil")
-_register_missing("aten::clamp")
 _register_missing("aten::cos")
 _register_missing("aten::cosh")
 _register_missing("aten::erf")
 _register_missing("aten::floor")
-_register_missing("aten::floordiv")
 _register_missing("aten::gelu")
 _register_missing("aten::gelu_backward")
 _register_missing("aten::index.Tensor")
 _register_missing("aten::isnan")
 _register_missing("aten::log")
 _register_missing("aten::log1p")
-_register_missing("aten::logical_and")
 _register_missing("aten::logical_not")
-_register_missing("aten::logical_xor")
 _register_missing("aten::min")
 _register_missing("aten::native_group_norm")
 _register_missing("aten::neg")
 _register_missing("aten::nonzero")
-_register_missing("aten::pow.Tensor_Tensor")
 _register_missing("aten::reciprocal")
-_register_missing("aten::remainder")
 _register_missing("aten::repeat")
 _register_missing("aten::rsqrt")
 _register_missing("aten::scatter.src")

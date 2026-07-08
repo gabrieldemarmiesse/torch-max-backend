@@ -23,6 +23,7 @@
 
 from std.os import abort
 from std.gpu.host import DeviceContext
+from std.math import pow
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
@@ -35,6 +36,7 @@ from op_utils import (
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
+    _raw_f64,
     _raw_int,
     _raw_ret_none,
     _raw_tuple_int,
@@ -70,6 +72,9 @@ comptime BOP_MIN = 5
 comptime BOP_AND = 6
 comptime BOP_OR = 7
 comptime BOP_XOR = 8
+comptime BOP_REMAINDER = 9
+comptime BOP_FLOORDIV = 10
+comptime BOP_POW = 11
 
 
 @always_inline
@@ -93,8 +98,10 @@ def _bin_bcast[
     total: Int,
     ctx: DeviceContext,
 ) raises:
-    comptime if op_code == BOP_DIV and not dtype.is_floating_point():
-        raise Error("integer/bool div is not supported in the fast path")
+    comptime if (
+        op_code == BOP_DIV or op_code == BOP_POW
+    ) and not dtype.is_floating_point():
+        raise Error("integer/bool div/pow is not supported in the fast path")
     else:
         comptime if (
             op_code == BOP_AND or op_code == BOP_OR or op_code == BOP_XOR
@@ -136,6 +143,25 @@ def _bin_bcast[
                     out_ptr[i] = a | b
                 comptime if op_code == BOP_XOR:
                     out_ptr[i] = a ^ b
+                comptime if op_code == BOP_REMAINDER:
+                    # Mojo's `%` follows the divisor's sign (Python/torch
+                    # semantics) for both signed integers and floats.
+                    out_ptr[i] = a % b
+                comptime if op_code == BOP_FLOORDIV:
+                    # `//` = floor(a / b), matching torch.floor_divide for
+                    # both float and integer dtypes.
+                    out_ptr[i] = a // b
+                comptime if op_code == BOP_POW:
+                    # Float only (gated above); accumulate halves in
+                    # float32 to match torch's numerics.
+                    comptime if (
+                        dtype == DType.float16 or dtype == DType.bfloat16
+                    ):
+                        out_ptr[i] = pow(
+                            a.cast[DType.float32](), b.cast[DType.float32]()
+                        ).cast[dtype]()
+                    else:
+                        out_ptr[i] = pow(a, b)
 
             _parallel_for[func](total, ctx)
 
@@ -150,6 +176,8 @@ comptime COP_LT = 2
 comptime COP_LE = 3
 comptime COP_GT = 4
 comptime COP_GE = 5
+comptime COP_LAND = 6
+comptime COP_LXOR = 7
 
 
 @always_inline
@@ -202,6 +230,15 @@ def _cmp_bcast[
             out_ptr[i] = Scalar[DType.bool](a > b)
         comptime if op_code == COP_GE:
             out_ptr[i] = Scalar[DType.bool](a >= b)
+        comptime if op_code == COP_LAND or op_code == COP_LXOR:
+            # Logical ops test each operand for nonzero-ness, then combine.
+            # Output is bool regardless of the (arbitrary) input dtype.
+            var la = a != Scalar[dtype](0)
+            var lb = b != Scalar[dtype](0)
+            comptime if op_code == COP_LAND:
+                out_ptr[i] = la & lb
+            comptime if op_code == COP_LXOR:
+                out_ptr[i] = la ^ lb
 
     _parallel_for[func](total, ctx)
 
@@ -532,6 +569,308 @@ def _isin_dispatcher(
 
 
 # ---------------------------------------------------------------------------
+# clamp(self, min?, max?): out = min(max(x, lo), hi), each bound optional.
+# Bounds arrive as Float64 and are cast to the tensor dtype (exact for the
+# small integer bounds torch passes). Contiguous unary; the Python side
+# materializes strided inputs first.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _clamp_scalar[
+    dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    lo: Float64,
+    hi: Float64,
+    has_min: Int,
+    has_max: Int,
+    size: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+    var lo_s = lo.cast[dtype]()
+    var hi_s = hi.cast[dtype]()
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr, lo_s, hi_s, has_min, has_max)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var v = in_ptr[i]
+        if has_min != 0:
+            v = max(v, lo_s)
+        if has_max != 0:
+            v = min(v, hi_s)
+        out_ptr[i] = v
+
+    _parallel_for[func](size, ctx)
+
+
+def _clamp_scalar_go(
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
+    lo: PyObjectPtr,
+    hi: PyObjectPtr,
+    has_min: PyObjectPtr,
+    has_max: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var dtype_val = _raw_dtype_int(dtype)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
+    var lo_v = _raw_f64(lo)
+    var hi_v = _raw_f64(hi)
+    var has_min_v = _raw_int(has_min)
+    var has_max_v = _raw_int(has_max)
+    var size = _raw_int(numel)
+    var ctx = _raw_ctx(ctx_ptr)
+
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+        DType.uint8,
+    ]:
+        if dtype_val == dt:
+            _clamp_scalar[dt](
+                out_addr,
+                in_addr,
+                lo_v,
+                hi_v,
+                has_min_v,
+                has_max_v,
+                size,
+                ctx,
+            )
+            handled = True
+    if not handled:
+        raise Error("unsupported dtype for fast clamp: " + String(dtype_val))
+
+
+def _clamp_scalar_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _clamp_scalar_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+            args[8],
+        )
+    except:
+        pass
+    return _raw_ret_none()
+
+
+# ---------------------------------------------------------------------------
+# Ternary broadcast: addcmul = self + value * (t1 * t2)
+#                     addcdiv = self + value * (t1 / t2)
+# out is contiguous with dims d0..d3; self/t1/t2 are indexed with their own
+# strides (0 on broadcast dims). Half precision accumulates in float32.
+# addcdiv is float-only (torch errors for integer inputs); addcmul also
+# handles integer dtypes.
+# ---------------------------------------------------------------------------
+
+comptime TOP_ADDCMUL = 0
+comptime TOP_ADDCDIV = 1
+
+
+@always_inline
+def _ternary_bcast[
+    dtype: DType, op_code: Int
+](
+    out_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    c_addr: Int,
+    d1: Int,
+    d2: Int,
+    d3: Int,
+    as0: Int,
+    as1: Int,
+    as2: Int,
+    as3: Int,
+    bs0: Int,
+    bs1: Int,
+    bs2: Int,
+    bs3: Int,
+    cs0: Int,
+    cs1: Int,
+    cs2: Int,
+    cs3: Int,
+    value: Float64,
+    total: Int,
+    ctx: DeviceContext,
+) raises:
+    comptime if op_code == TOP_ADDCDIV and not dtype.is_floating_point():
+        raise Error("integer addcdiv is not supported in the fast path")
+    else:
+        var out_ptr = _make_ptr[dtype](out_addr)
+        var a_ptr = _make_ptr[dtype](a_addr)
+        var b_ptr = _make_ptr[dtype](b_addr)
+        var c_ptr = _make_ptr[dtype](c_addr)
+
+        @always_inline
+        @parameter
+        @__copy_capture(out_ptr, a_ptr, b_ptr, c_ptr, value)
+        def func[width: Int, alignment: Int = 1](idx: Coord):
+            var i = Int(idx[0].value())
+            var i3 = i % d3
+            var rest = i // d3
+            var i2 = rest % d2
+            rest = rest // d2
+            var i1 = rest % d1
+            var i0 = rest // d1
+            var a = a_ptr[i0 * as0 + i1 * as1 + i2 * as2 + i3 * as3]
+            var b = b_ptr[i0 * bs0 + i1 * bs1 + i2 * bs2 + i3 * bs3]
+            var c = c_ptr[i0 * cs0 + i1 * cs1 + i2 * cs2 + i3 * cs3]
+            comptime if dtype == DType.float16 or dtype == DType.bfloat16:
+                var af = a.cast[DType.float32]()
+                var bf = b.cast[DType.float32]()
+                var cf = c.cast[DType.float32]()
+                var vf = value.cast[DType.float32]()
+                comptime if op_code == TOP_ADDCMUL:
+                    out_ptr[i] = (af + vf * (bf * cf)).cast[dtype]()
+                else:
+                    out_ptr[i] = (af + vf * (bf / cf)).cast[dtype]()
+            elif dtype.is_floating_point():
+                var v = value.cast[dtype]()
+                comptime if op_code == TOP_ADDCMUL:
+                    out_ptr[i] = a + v * (b * c)
+                else:
+                    out_ptr[i] = a + v * (b / c)
+            else:
+                # Integer addcmul: value is an exact integer scalar.
+                var v = value.cast[dtype]()
+                out_ptr[i] = a + v * (b * c)
+
+        _parallel_for[func](total, ctx)
+
+
+def _ternary_bcast_go[
+    op_code: Int
+](
+    out_ptr: PyObjectPtr,
+    a_ptr: PyObjectPtr,
+    b_ptr: PyObjectPtr,
+    c_ptr: PyObjectPtr,
+    params: PyObjectPtr,  # (d0..d3, as0..as3, bs0..bs3, cs0..cs3)
+    value: PyObjectPtr,
+    dtype: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var dtype_val = _raw_dtype_int(dtype)
+    var out_addr = _raw_int(out_ptr)
+    var a_addr = _raw_int(a_ptr)
+    var b_addr = _raw_int(b_ptr)
+    var c_addr = _raw_int(c_ptr)
+    var d0 = _raw_tuple_int(params, 0)
+    var d1 = _raw_tuple_int(params, 1)
+    var d2 = _raw_tuple_int(params, 2)
+    var d3 = _raw_tuple_int(params, 3)
+    var as0 = _raw_tuple_int(params, 4)
+    var as1 = _raw_tuple_int(params, 5)
+    var as2 = _raw_tuple_int(params, 6)
+    var as3 = _raw_tuple_int(params, 7)
+    var bs0 = _raw_tuple_int(params, 8)
+    var bs1 = _raw_tuple_int(params, 9)
+    var bs2 = _raw_tuple_int(params, 10)
+    var bs3 = _raw_tuple_int(params, 11)
+    var cs0 = _raw_tuple_int(params, 12)
+    var cs1 = _raw_tuple_int(params, 13)
+    var cs2 = _raw_tuple_int(params, 14)
+    var cs3 = _raw_tuple_int(params, 15)
+    var value_v = _raw_f64(value)
+    var total = d0 * d1 * d2 * d3
+    var ctx = _raw_ctx(ctx_ptr)
+
+    @always_inline
+    @parameter
+    def run[dt: DType]() raises:
+        _ternary_bcast[dt, op_code](
+            out_addr,
+            a_addr,
+            b_addr,
+            c_addr,
+            d1,
+            d2,
+            d3,
+            as0,
+            as1,
+            as2,
+            as3,
+            bs0,
+            bs1,
+            bs2,
+            bs3,
+            cs0,
+            cs1,
+            cs2,
+            cs3,
+            value_v,
+            total,
+            ctx,
+        )
+
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.int8,
+        DType.int16,
+        DType.int32,
+        DType.int64,
+        DType.uint8,
+    ]:
+        if dtype_val == dt:
+            run[dt]()
+            handled = True
+    if not handled:
+        raise Error("unsupported dtype for fast addc* op: " + String(dtype_val))
+
+
+def _ternary_bcast_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _ternary_bcast_go[op_code](
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+        )
+    except:
+        pass
+    return _raw_ret_none()
+
+
+# ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
 
@@ -586,6 +925,21 @@ def PyInit_logic_ops() abi("C") -> PythonObject:
             docstring="out = lhs ^ rhs (broadcast strides, int)",
         )
         b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_REMAINDER],
+            "RemainderBcast",
+            docstring="out = lhs % rhs (broadcast strides, divisor-signed)",
+        )
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_FLOORDIV],
+            "FloorDivBcast",
+            docstring="out = floor(lhs / rhs) (broadcast strides)",
+        )
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_POW],
+            "PowBcast",
+            docstring="out = lhs ** rhs (broadcast strides, float)",
+        )
+        b.def_py_c_function(
             _cmp_bcast_dispatcher[COP_EQ],
             "EqBcast",
             docstring="out = lhs == rhs -> bool (broadcast strides)",
@@ -616,6 +970,16 @@ def PyInit_logic_ops() abi("C") -> PythonObject:
             docstring="out = lhs >= rhs -> bool (broadcast strides)",
         )
         b.def_py_c_function(
+            _cmp_bcast_dispatcher[COP_LAND],
+            "LogicalAndBcast",
+            docstring="out = (lhs != 0) and (rhs != 0) -> bool",
+        )
+        b.def_py_c_function(
+            _cmp_bcast_dispatcher[COP_LXOR],
+            "LogicalXorBcast",
+            docstring="out = (lhs != 0) xor (rhs != 0) -> bool",
+        )
+        b.def_py_c_function(
             _bitwise_not_dispatcher,
             "BitwiseNot",
             docstring="out = ~x (bool/int, contiguous)",
@@ -624,6 +988,21 @@ def PyInit_logic_ops() abi("C") -> PythonObject:
             _isin_dispatcher,
             "IsIn",
             docstring="out[i] = x[i] in test (int dtypes) ^ invert",
+        )
+        b.def_py_c_function(
+            _clamp_scalar_dispatcher,
+            "ClampScalar",
+            docstring="out = min(max(x, lo), hi) with optional bounds",
+        )
+        b.def_py_c_function(
+            _ternary_bcast_dispatcher[TOP_ADDCMUL],
+            "AddcmulBcast",
+            docstring="out = self + value * (t1 * t2) (broadcast strides)",
+        )
+        b.def_py_c_function(
+            _ternary_bcast_dispatcher[TOP_ADDCDIV],
+            "AddcdivBcast",
+            docstring="out = self + value * (t1 / t2) (broadcast strides)",
         )
         return b.finalize()
     except e:
