@@ -778,12 +778,27 @@ def fast_aten_sign(x):
 
 
 @no_type_check
+def _int_unary_identity(x):
+    """ceil/floor on integer tensors is the identity in torch; return a copy."""
+    a = _t(x)
+    if a is not None and a._dtype in _BITWISE_DTYPES and a._dtype != DType.bool:
+        return a._materialize_contiguous()
+    return None
+
+
+@no_type_check
 def fast_aten_ceil(x):
+    result = _int_unary_identity(x)
+    if result is not None:
+        return result
     return _unary_op(eager_kernels.elementwise_ops.Ceil, x)
 
 
 @no_type_check
 def fast_aten_floor(x):
+    result = _int_unary_identity(x)
+    if result is not None:
+        return result
     return _unary_op(eager_kernels.elementwise_ops.Floor, x)
 
 
@@ -2011,41 +2026,49 @@ def fast_aten__native_batch_norm_legit_no_training(
 @no_type_check
 def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
     a = _tc(input)
+    k = len(normalized_shape)
     if (
-        a is not None
-        and a._numel > 0
-        and a._dtype in _FLOAT_DTYPES
-        and len(normalized_shape) == 1
-        and len(a._shape) >= 1
-        and a._shape[-1] == normalized_shape[0]
+        a is None
+        or a._numel == 0
+        or a._dtype not in _FLOAT_DTYPES
+        or k < 1
+        or len(a._shape) < k
+        or tuple(a._shape[-k:]) != tuple(normalized_shape)
     ):
+        return NOT_HANDLED
+    cols = 1
+    for s in normalized_shape:
+        cols *= s
+    rows = a._numel // cols
+    # weight/bias are optional (no-affine layer norm): default to 1s / 0s.
+    if weight is not None:
         gamma = _tc(weight)
+        if gamma is None or gamma._dtype != a._dtype or gamma._numel != cols:
+            return NOT_HANDLED
+    else:
+        gamma = fast_filled((cols,), 1.0, a._dtype, a._device)
+    if bias is not None:
         beta = _tc(bias)
-        if (
-            gamma is not None
-            and beta is not None
-            and gamma._dtype == a._dtype
-            and beta._dtype == a._dtype
-        ):
-            cols = a._shape[-1]
-            rows = a._numel // cols
-            out = _alloc(a._shape, a._dtype, a._device)
-            stat_shape = tuple(a._shape[:-1]) + (1,)
-            mean = _alloc(stat_shape, DType.float32, a._device)
-            rstd = _alloc(stat_shape, DType.float32, a._device)
-            eager_kernels.nn_ops.LayerNorm(
-                out._ptr,
-                mean._ptr,
-                rstd._ptr,
-                a._ptr,
-                gamma._ptr,
-                beta._ptr,
-                (float(eps), rows, cols),
-                a._dtype.value,
-                _ctx_ptr(a._device),
-            )
-            return out, mean, rstd
-    return NOT_HANDLED
+        if beta is None or beta._dtype != a._dtype or beta._numel != cols:
+            return NOT_HANDLED
+    else:
+        beta = fast_filled((cols,), 0.0, a._dtype, a._device)
+    out = _alloc(a._shape, a._dtype, a._device)
+    stat_shape = tuple(a._shape[:-k]) + (1,) * k
+    mean = _alloc(stat_shape, DType.float32, a._device)
+    rstd = _alloc(stat_shape, DType.float32, a._device)
+    eager_kernels.nn_ops.LayerNorm(
+        out._ptr,
+        mean._ptr,
+        rstd._ptr,
+        a._ptr,
+        gamma._ptr,
+        beta._ptr,
+        (float(eps), rows, cols),
+        a._dtype.value,
+        _ctx_ptr(a._device),
+    )
+    return out, mean, rstd
 
 
 # ---------------------------------------------------------------------------
@@ -2403,14 +2426,13 @@ def fast_aten_any(input, dim=None, keepdim=False):
 @no_type_check
 def fast_aten__log_softmax(input, dim, half_to_float=False):
     t = _t(input)
-    if (
-        t is None
-        or t._numel == 0
-        or t._dtype not in _FLOAT_DTYPES
-        or half_to_float
-        or not isinstance(dim, int)
-    ):
+    if t is None or t._numel == 0 or t._dtype not in _FLOAT_DTYPES or not isinstance(dim, int):
         return NOT_HANDLED
+    # half_to_float: half input, float32 output (torch computes in fp32).
+    if half_to_float:
+        if t._dtype not in (DType.float16, DType.bfloat16):
+            return NOT_HANDLED
+        t = _cast_tensor(t, DType.float32)
     rank = len(t._shape)
     if rank == 0:
         return fast_filled((), 0.0, t._dtype, t._device)
@@ -2418,8 +2440,9 @@ def fast_aten__log_softmax(input, dim, half_to_float=False):
     if dim != rank - 1:
         # log_softmax(x, d) = log_softmax(x.transpose(d, -1), -1).T; both
         # transposes are zero-copy, the inner one materializes once.
+        # (t is already fp32 here if half_to_float was set, so pass False.)
         swapped = fast_aten_transpose(t, dim, rank - 1)
-        result = fast_aten__log_softmax(swapped, rank - 1, half_to_float)
+        result = fast_aten__log_softmax(swapped, rank - 1, False)
         if result is NOT_HANDLED:
             return NOT_HANDLED
         return fast_aten_transpose(result, dim, rank - 1)
@@ -3221,14 +3244,13 @@ def fast_aten_scaled_dot_product_attention(
 @no_type_check
 def fast_aten__softmax(input, dim, half_to_float=False):
     t = _t(input)
-    if (
-        t is None
-        or t._numel == 0
-        or t._dtype not in _FLOAT_DTYPES
-        or half_to_float
-        or not isinstance(dim, int)
-    ):
+    if t is None or t._numel == 0 or t._dtype not in _FLOAT_DTYPES or not isinstance(dim, int):
         return NOT_HANDLED
+    # half_to_float: half input, float32 output (torch computes in fp32).
+    if half_to_float:
+        if t._dtype not in (DType.float16, DType.bfloat16):
+            return NOT_HANDLED
+        t = _cast_tensor(t, DType.float32)
     rank = len(t._shape)
     if rank == 0:
         return fast_filled((), 1.0, t._dtype, t._device)
@@ -3236,8 +3258,9 @@ def fast_aten__softmax(input, dim, half_to_float=False):
     if dim != rank - 1:
         # softmax(x, d) = softmax(x.transpose(d, -1), -1).transpose(d, -1);
         # both transposes are zero-copy, the inner one materializes once.
+        # (t is already fp32 here if half_to_float was set, so pass False.)
         swapped = fast_aten_transpose(t, dim, rank - 1)
-        result = fast_aten__softmax(swapped, rank - 1, half_to_float)
+        result = fast_aten__softmax(swapped, rank - 1, False)
         if result is NOT_HANDLED:
             return NOT_HANDLED
         return fast_aten_transpose(result, dim, rank - 1)
