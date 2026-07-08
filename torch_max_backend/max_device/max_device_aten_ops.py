@@ -7,12 +7,14 @@ Every op is either bound to its fast implementation in
 docs/strided_owning_tensors_design.md.
 """
 
+import functools
 from collections.abc import Callable
 from typing import no_type_check
 
 import torch
 from max.experimental.torch.torch import torch_dtype_to_max
 
+import torch_max_backend.is_running_tests
 from torch_max_backend.max_device.torch_max_tensor import (
     TorchMaxTensor,
     _copy_strided_into,
@@ -23,6 +25,12 @@ from torch_max_backend.max_device.torch_max_tensor import (
 # Global registry for functions to register
 _aten_ops_registry: list[tuple[str, Callable]] = []
 
+# Under tests, each registered op's dispatcher is wrapped with a call
+# counter so `CallChecker` can assert the backend's impl for a given op ran
+# — uniformly for fast, custom, and out-variant registrations (see
+# torch_max_backend/testing.py). Keyed by the aten op name.
+EAGER_CALL_COUNTERS: dict[str, Callable] = {}
+
 
 def register_aten_op(op_name: str):
     """Decorator to mark a function for aten op registration.
@@ -32,6 +40,17 @@ def register_aten_op(op_name: str):
     """
 
     def decorator(func: Callable) -> Callable:
+        if torch_max_backend.is_running_tests.IS_RUNNING_TESTS:
+
+            @functools.wraps(func)
+            def counted(*args, **kwargs):
+                counted.call_count += 1
+                return func(*args, **kwargs)
+
+            counted.call_count = 0
+            EAGER_CALL_COUNTERS[op_name] = counted
+            _aten_ops_registry.append((op_name, counted))
+            return counted
         _aten_ops_registry.append((op_name, func))
         return func
 
@@ -319,6 +338,76 @@ def max_device_empty_like(
 
 
 @no_type_check
+def _new_factory_device(self: TorchMaxTensor, device):
+    """Target MAX device for a `new_*` factory. torch passes `self`'s device
+    (whose torch-side index is the phantom 0) when the caller doesn't
+    override it, so default to `self`'s real MAX device; only an explicit
+    CPU request is honored differently."""
+    if device is None:
+        return self._device
+    torch_dev = torch.device(device) if not isinstance(device, torch.device) else device
+    if torch_dev.type == "cpu":
+        return find_equivalent_max_device(torch_dev)
+    return self._device
+
+
+@register_aten_op("aten::new_empty")
+@no_type_check
+def max_device_new_empty(
+    self: TorchMaxTensor, size, *, dtype=None, layout=None, device=None, pin_memory=None
+) -> TorchMaxTensor:
+    max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
+    return TorchMaxTensor._alloc(
+        tuple(size), max_dtype, _new_factory_device(self, device)
+    )
+
+
+@register_aten_op("aten::new_zeros")
+@no_type_check
+def max_device_new_zeros(
+    self: TorchMaxTensor, size, *, dtype=None, layout=None, device=None, pin_memory=None
+) -> TorchMaxTensor:
+    max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
+    result = _fast().fast_filled(size, 0, max_dtype, _new_factory_device(self, device))
+    if result is None:
+        raise _unsupported("aten::new_zeros", (self,))
+    return result
+
+
+@register_aten_op("aten::new_ones")
+@no_type_check
+def max_device_new_ones(
+    self: TorchMaxTensor, size, *, dtype=None, layout=None, device=None, pin_memory=None
+) -> TorchMaxTensor:
+    max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
+    result = _fast().fast_filled(size, 1, max_dtype, _new_factory_device(self, device))
+    if result is None:
+        raise _unsupported("aten::new_ones", (self,))
+    return result
+
+
+@register_aten_op("aten::new_full")
+@no_type_check
+def max_device_new_full(
+    self: TorchMaxTensor,
+    size,
+    fill_value,
+    *,
+    dtype=None,
+    layout=None,
+    device=None,
+    pin_memory=None,
+) -> TorchMaxTensor:
+    max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
+    result = _fast().fast_filled(
+        size, fill_value, max_dtype, _new_factory_device(self, device)
+    )
+    if result is None:
+        raise _unsupported("aten::new_full", (self,))
+    return result
+
+
+@no_type_check
 def _fast_filled_tensor(size, value, dtype, device):
     """Filled-tensor factory (alloc + Fill), or raises."""
     try:
@@ -536,8 +625,23 @@ register_aten_op("aten::isin.Tensor_Tensor_out")(
 
 
 # ----------------------------------------------------------------------------------
-# min.dim_min: out-variant returning (values, indices) along one dim.
+# min along one dim: functional (values, indices) + out= variant.
 # ----------------------------------------------------------------------------------
+
+
+@register_aten_op("aten::min.dim")
+@no_type_check
+def max_device_min_dim(
+    input: TorchMaxTensor, dim: int, keepdim: bool = False
+) -> tuple[TorchMaxTensor, TorchMaxTensor]:
+    """Functional torch.min(x, dim): (values, indices). Registered so torch
+    doesn't synthesize it from the out= variant (which would allocate the
+    outputs on the phantom index-0 device)."""
+    aten_fast = _fast()
+    result = aten_fast.fast_aten_min_dim(input, dim, keepdim)
+    if result is aten_fast.NOT_HANDLED:
+        raise _unsupported("aten::min.dim", (input,))
+    return result
 
 
 @register_aten_op("aten::min.dim_min")

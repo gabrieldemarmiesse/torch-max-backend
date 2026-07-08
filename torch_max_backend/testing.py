@@ -24,28 +24,66 @@ class CallChecker:
         self._counts_before_starting_to_check = None
 
     @staticmethod
-    def _fast_twin(func: Callable) -> Callable | None:
-        """The aten_fast.fast_<name> counterpart of an aten_functions twin,
-        if one exists and is instrumented with a call counter."""
+    def _fast_twins(func: Callable) -> list[Callable]:
+        """The aten_fast counterparts of an aten_functions twin.
+
+        Matches `fast_<name>` and its variants `fast_<name>_<suffix>` (e.g.
+        `aten_min` -> `fast_aten_min`, `fast_aten_min_dim`), so a test that
+        registers the base op accepts whichever specialized fast impl the
+        inputs routed to. Only instrumented (call-counted) functions match.
+        """
         name = getattr(func, "__name__", "")
         if not name.startswith("aten"):
-            return None
+            return []
         try:
             from torch_max_backend.eager_kernels import aten_fast
         except Exception:
-            return None
-        twin = getattr(aten_fast, f"fast_{name}", None)
-        if twin is not None and hasattr(twin, "call_count"):
-            return twin
-        return None
+            return []
+        base = f"fast_{name}"
+        twins = []
+        for attr in dir(aten_fast):
+            if attr == base or attr.startswith(base + "_"):
+                cand = getattr(aten_fast, attr)
+                if hasattr(cand, "call_count"):
+                    twins.append(cand)
+        return twins
+
+    @staticmethod
+    def _eager_twins(func: Callable) -> list[Callable]:
+        """The instrumented max_device registration(s) whose op matches an
+        aten_functions twin. Covers ops implemented as custom / out-variant
+        registrations (empty_like, mean.out, normal_, ...) that don't route
+        through an aten_fast.fast_* function, so nothing else observes them.
+        """
+        name = getattr(func, "__name__", "")
+        if not name.startswith("aten_"):
+            return []
+        base = name[len("aten_") :]  # e.g. "empty_like", "mean_out", "_log_softmax"
+        try:
+            from torch_max_backend.max_device.max_device_aten_ops import (
+                EAGER_CALL_COUNTERS,
+            )
+        except Exception:
+            return []
+        candidates = {f"aten::{base}"}
+        if "_" in base:
+            head, tail = base.rsplit("_", 1)
+            candidates.add(f"aten::{head}.{tail}")  # mean_out -> aten::mean.out
+        prefix = f"aten::{base}."
+        twins = []
+        for op_name, counter in EAGER_CALL_COUNTERS.items():
+            if op_name in candidates or op_name.startswith(prefix):
+                twins.append(counter)
+        return twins
 
     def register(self, *funcs: Callable):
         expanded: list[Callable] = []
         for func in funcs:
-            expanded.append(func)
-            twin = self._fast_twin(func)
-            if twin is not None and twin not in expanded:
-                expanded.append(twin)
+            if func not in expanded:
+                expanded.append(func)
+            for twin in self._fast_twins(func) + self._eager_twins(func):
+                if twin not in expanded:
+                    expanded.append(twin)
         self._functions_to_check = tuple(expanded)
         self._counts_before_starting_to_check = [
             f.call_count for f in self._functions_to_check

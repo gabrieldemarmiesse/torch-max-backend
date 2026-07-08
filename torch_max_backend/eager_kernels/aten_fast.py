@@ -956,11 +956,14 @@ def fast_aten_bitwise_not(input):
     a = _tc(input)
     if a is None or a._dtype not in _BITWISE_DTYPES:
         return NOT_HANDLED
+    # bitwise_not on bool is logical negation (0<->1), NOT a byte complement
+    # (~0 == 255 in uint8), so route bool through the logical-not path.
+    if a._dtype == DType.bool:
+        return fast_aten_logical_not(a)
     out = _alloc(a._shape, a._dtype, a._device)
-    dtype = DType.uint8 if a._dtype == DType.bool else a._dtype
     if out._numel > 0:
         eager_kernels.logic_ops.BitwiseNot(
-            out._ptr, a._ptr, out._numel, dtype.value, _ctx_ptr(a._device)
+            out._ptr, a._ptr, out._numel, a._dtype.value, _ctx_ptr(a._device)
         )
     return out
 
