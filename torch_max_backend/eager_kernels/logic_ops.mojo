@@ -8,21 +8,37 @@
 # dims padded to rank 4 plus per-operand strides in elements (0 for
 # broadcast dims), computed on the Python side.
 #
-# Same architecture as elementwise_ops.mojo: Python-visible functions get
-# `max.driver.Buffer` objects plus the device's DeviceContext pointer, and
-# enqueue work on MAX's own device queue (fire and forget, no sync).
+# Raw-pointer calling convention (mirrors elementwise_ops.mojo /
+# tensor_holder.mojo): every Python-visible function receives plain ints —
+# each tensor operand as one address int (storage offset already applied),
+# dtype as one `max.dtype.DType.value` int per operand role, sizes/counts as
+# ints, the dims+strides bundle as a tuple of ints (read with
+# `_raw_tuple_int`) — plus the device's DeviceContext pointer as the last
+# int. No `max.driver.Buffer` object crosses this boundary anymore.
+# Dispatchers are registered as METH_FASTCALL functions
+# (`def_py_c_function`) reading raw CPython arguments directly (see
+# op_utils), and work is enqueued on MAX's own device queue (fire and
+# forget, no sync).
 # ===----------------------------------------------------------------------=== #
 
 from std.os import abort
 from std.gpu.host import DeviceContext
 from std.python import PythonObject
+from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
 from std.sys.info import has_accelerator
 from std.utils.coord import Coord
 
 from std.algorithm.functional import elementwise
 
-from op_utils import _get_ctx, _get_dtype, _make_ptr
+from op_utils import (
+    _make_ptr,
+    _raw_ctx,
+    _raw_dtype_int,
+    _raw_int,
+    _raw_ret_none,
+    _raw_tuple_int,
+)
 
 
 @always_inline
@@ -192,7 +208,9 @@ def _cmp_bcast[
 
 # ---------------------------------------------------------------------------
 # Runtime dtype dispatch shared by both broadcast kernel families. The
-# strides/dims arrive as one 12-tuple (d0..d3, ls0..ls3, rs0..rs3).
+# strides/dims arrive as one raw CPython 12-tuple (d0..d3, ls0..ls3,
+# rs0..rs3), read element-by-element with `_raw_tuple_int` (borrowed
+# references, no refcount traffic).
 # ---------------------------------------------------------------------------
 
 
@@ -204,21 +222,21 @@ def _dispatch_bcast[
     out_addr: Int,
     l_addr: Int,
     r_addr: Int,
-    params: PythonObject,
+    params: PyObjectPtr,
     ctx: DeviceContext,
 ) raises:
-    var d0 = Int(py=params[0])
-    var d1 = Int(py=params[1])
-    var d2 = Int(py=params[2])
-    var d3 = Int(py=params[3])
-    var ls0 = Int(py=params[4])
-    var ls1 = Int(py=params[5])
-    var ls2 = Int(py=params[6])
-    var ls3 = Int(py=params[7])
-    var rs0 = Int(py=params[8])
-    var rs1 = Int(py=params[9])
-    var rs2 = Int(py=params[10])
-    var rs3 = Int(py=params[11])
+    var d0 = _raw_tuple_int(params, 0)
+    var d1 = _raw_tuple_int(params, 1)
+    var d2 = _raw_tuple_int(params, 2)
+    var d3 = _raw_tuple_int(params, 3)
+    var ls0 = _raw_tuple_int(params, 4)
+    var ls1 = _raw_tuple_int(params, 5)
+    var ls2 = _raw_tuple_int(params, 6)
+    var ls3 = _raw_tuple_int(params, 7)
+    var rs0 = _raw_tuple_int(params, 8)
+    var rs1 = _raw_tuple_int(params, 9)
+    var rs2 = _raw_tuple_int(params, 10)
+    var rs3 = _raw_tuple_int(params, 11)
     var total = d0 * d1 * d2 * d3
 
     @always_inline
@@ -284,46 +302,80 @@ def _dispatch_bcast[
         )
 
 
+def _bin_bcast_go[
+    op_code: Int
+](
+    out_ptr: PyObjectPtr,
+    lhs_ptr: PyObjectPtr,
+    rhs_ptr: PyObjectPtr,
+    params: PyObjectPtr,  # (d0..d3, ls0..ls3, rs0..rs3)
+    dtype: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    _dispatch_bcast[0, op_code](
+        _raw_dtype_int(dtype),
+        _raw_int(out_ptr),
+        _raw_int(lhs_ptr),
+        _raw_int(rhs_ptr),
+        params,
+        _raw_ctx(ctx_ptr),
+    )
+
+
+def _cmp_bcast_go[
+    op_code: Int
+](
+    out_ptr: PyObjectPtr,
+    lhs_ptr: PyObjectPtr,
+    rhs_ptr: PyObjectPtr,
+    params: PyObjectPtr,  # (d0..d3, ls0..ls3, rs0..rs3)
+    dtype: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    _dispatch_bcast[1, op_code](
+        _raw_dtype_int(dtype),
+        _raw_int(out_ptr),
+        _raw_int(lhs_ptr),
+        _raw_int(rhs_ptr),
+        params,
+        _raw_ctx(ctx_ptr),
+    )
+
+
 def _bin_bcast_dispatcher[
     op_code: Int
 ](
-    out_buffer: PythonObject,
-    lhs_buffer: PythonObject,
-    rhs_buffer: PythonObject,
-    params: PythonObject,  # (d0..d3, ls0..ls3, rs0..rs3)
-    device_context_ptr: PythonObject,
-) raises:
-    _dispatch_bcast[0, op_code](
-        _get_dtype(lhs_buffer),
-        Int(py=out_buffer._data_ptr()),
-        Int(py=lhs_buffer._data_ptr()),
-        Int(py=rhs_buffer._data_ptr()),
-        params,
-        _get_ctx(device_context_ptr),
-    )
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _bin_bcast_go[op_code](
+            args[0], args[1], args[2], args[3], args[4], args[5]
+        )
+    except:
+        pass
+    return _raw_ret_none()
 
 
 def _cmp_bcast_dispatcher[
     op_code: Int
 ](
-    out_buffer: PythonObject,
-    lhs_buffer: PythonObject,
-    rhs_buffer: PythonObject,
-    params: PythonObject,  # (d0..d3, ls0..ls3, rs0..rs3)
-    device_context_ptr: PythonObject,
-) raises:
-    _dispatch_bcast[1, op_code](
-        _get_dtype(lhs_buffer),
-        Int(py=out_buffer._data_ptr()),
-        Int(py=lhs_buffer._data_ptr()),
-        Int(py=rhs_buffer._data_ptr()),
-        params,
-        _get_ctx(device_context_ptr),
-    )
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _cmp_bcast_go[op_code](
+            args[0], args[1], args[2], args[3], args[4], args[5]
+        )
+    except:
+        pass
+    return _raw_ret_none()
 
 
 # ---------------------------------------------------------------------------
-# Bitwise not over a contiguous buffer. `~` on bool is logical not, on
+# Bitwise not over a contiguous span. `~` on bool is logical not, on
 # integers the usual complement — matching torch.
 # ---------------------------------------------------------------------------
 
@@ -345,16 +397,18 @@ def _bitwise_not[
     _parallel_for[func](size, ctx)
 
 
-def _bitwise_not_dispatcher(
-    out_buffer: PythonObject,
-    in_buffer: PythonObject,
-    device_context_ptr: PythonObject,
+def _bitwise_not_go(
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(in_buffer)
-    var out_addr = Int(py=out_buffer._data_ptr())
-    var in_addr = Int(py=in_buffer._data_ptr())
-    var size = Int(py=out_buffer.num_elements)
-    var ctx = _get_ctx(device_context_ptr)
+    var dtype_val = _raw_dtype_int(dtype)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
+    var size = _raw_int(numel)
+    var ctx = _raw_ctx(ctx_ptr)
 
     var handled = False
     comptime for dt in [
@@ -365,11 +419,25 @@ def _bitwise_not_dispatcher(
         DType.int32,
         DType.int64,
     ]:
-        if dtype == dt:
+        if dtype_val == dt:
             _bitwise_not[dt](out_addr, in_addr, size, ctx)
             handled = True
     if not handled:
-        raise Error("unsupported dtype for fast bitwise not: " + String(dtype))
+        raise Error(
+            "unsupported dtype for fast bitwise not: " + String(dtype_val)
+        )
+
+
+def _bitwise_not_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _bitwise_not_go(args[0], args[1], args[2], args[3], args[4])
+    except:
+        pass
+    return _raw_ret_none()
 
 
 # ---------------------------------------------------------------------------
@@ -412,32 +480,55 @@ def _isin[
     _parallel_for[func](size, ctx)
 
 
-def _isin_dispatcher(
-    out_buffer: PythonObject,
-    in_buffer: PythonObject,
-    test_buffer: PythonObject,
-    n_test: PythonObject,
-    invert: PythonObject,
-    device_context_ptr: PythonObject,
+def _isin_go(
+    out_ptr: PyObjectPtr,
+    el_ptr: PyObjectPtr,
+    te_ptr: PyObjectPtr,
+    el_numel: PyObjectPtr,
+    te_numel: PyObjectPtr,
+    invert: PyObjectPtr,
+    dtype: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _get_dtype(in_buffer)
-    var out_addr = Int(py=out_buffer._data_ptr())
-    var in_addr = Int(py=in_buffer._data_ptr())
-    var test_addr = Int(py=test_buffer._data_ptr())
-    var size = Int(py=out_buffer.num_elements)
-    var n_test_val = Int(py=n_test)
-    var invert_val = Int(py=invert)
-    var ctx = _get_ctx(device_context_ptr)
+    var dtype_val = _raw_dtype_int(dtype)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(el_ptr)
+    var test_addr = _raw_int(te_ptr)
+    var size = _raw_int(el_numel)
+    var n_test_val = _raw_int(te_numel)
+    var invert_val = _raw_int(invert)
+    var ctx = _raw_ctx(ctx_ptr)
 
     var handled = False
     comptime for dt in [DType.int64, DType.int32]:
-        if dtype == dt:
+        if dtype_val == dt:
             _isin[dt](
                 out_addr, in_addr, test_addr, size, n_test_val, invert_val, ctx
             )
             handled = True
     if not handled:
-        raise Error("unsupported dtype for fast isin: " + String(dtype))
+        raise Error("unsupported dtype for fast isin: " + String(dtype_val))
+
+
+def _isin_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _isin_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+        )
+    except:
+        pass
+    return _raw_ret_none()
 
 
 # ---------------------------------------------------------------------------
@@ -449,56 +540,90 @@ def _isin_dispatcher(
 def PyInit_logic_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("logic_ops")
-        b.def_function[_bin_bcast_dispatcher[BOP_ADD]](
-            "AddBcast", docstring="out = lhs + rhs (broadcast strides)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_ADD],
+            "AddBcast",
+            docstring="out = lhs + rhs (broadcast strides)",
         )
-        b.def_function[_bin_bcast_dispatcher[BOP_SUB]](
-            "SubBcast", docstring="out = lhs - rhs (broadcast strides)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_SUB],
+            "SubBcast",
+            docstring="out = lhs - rhs (broadcast strides)",
         )
-        b.def_function[_bin_bcast_dispatcher[BOP_MUL]](
-            "MulBcast", docstring="out = lhs * rhs (broadcast strides)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_MUL],
+            "MulBcast",
+            docstring="out = lhs * rhs (broadcast strides)",
         )
-        b.def_function[_bin_bcast_dispatcher[BOP_DIV]](
-            "DivBcast", docstring="out = lhs / rhs (broadcast strides, float)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_DIV],
+            "DivBcast",
+            docstring="out = lhs / rhs (broadcast strides, float)",
         )
-        b.def_function[_bin_bcast_dispatcher[BOP_MAX]](
-            "MaxBcast", docstring="out = max(lhs, rhs) (broadcast strides)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_MAX],
+            "MaxBcast",
+            docstring="out = max(lhs, rhs) (broadcast strides)",
         )
-        b.def_function[_bin_bcast_dispatcher[BOP_MIN]](
-            "MinBcast", docstring="out = min(lhs, rhs) (broadcast strides)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_MIN],
+            "MinBcast",
+            docstring="out = min(lhs, rhs) (broadcast strides)",
         )
-        b.def_function[_bin_bcast_dispatcher[BOP_AND]](
-            "AndBcast", docstring="out = lhs & rhs (broadcast strides, int)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_AND],
+            "AndBcast",
+            docstring="out = lhs & rhs (broadcast strides, int)",
         )
-        b.def_function[_bin_bcast_dispatcher[BOP_OR]](
-            "OrBcast", docstring="out = lhs | rhs (broadcast strides, int)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_OR],
+            "OrBcast",
+            docstring="out = lhs | rhs (broadcast strides, int)",
         )
-        b.def_function[_bin_bcast_dispatcher[BOP_XOR]](
-            "XorBcast", docstring="out = lhs ^ rhs (broadcast strides, int)"
+        b.def_py_c_function(
+            _bin_bcast_dispatcher[BOP_XOR],
+            "XorBcast",
+            docstring="out = lhs ^ rhs (broadcast strides, int)",
         )
-        b.def_function[_cmp_bcast_dispatcher[COP_EQ]](
-            "EqBcast", docstring="out = lhs == rhs -> bool (broadcast strides)"
+        b.def_py_c_function(
+            _cmp_bcast_dispatcher[COP_EQ],
+            "EqBcast",
+            docstring="out = lhs == rhs -> bool (broadcast strides)",
         )
-        b.def_function[_cmp_bcast_dispatcher[COP_NE]](
-            "NeBcast", docstring="out = lhs != rhs -> bool (broadcast strides)"
+        b.def_py_c_function(
+            _cmp_bcast_dispatcher[COP_NE],
+            "NeBcast",
+            docstring="out = lhs != rhs -> bool (broadcast strides)",
         )
-        b.def_function[_cmp_bcast_dispatcher[COP_LT]](
-            "LtBcast", docstring="out = lhs < rhs -> bool (broadcast strides)"
+        b.def_py_c_function(
+            _cmp_bcast_dispatcher[COP_LT],
+            "LtBcast",
+            docstring="out = lhs < rhs -> bool (broadcast strides)",
         )
-        b.def_function[_cmp_bcast_dispatcher[COP_LE]](
-            "LeBcast", docstring="out = lhs <= rhs -> bool (broadcast strides)"
+        b.def_py_c_function(
+            _cmp_bcast_dispatcher[COP_LE],
+            "LeBcast",
+            docstring="out = lhs <= rhs -> bool (broadcast strides)",
         )
-        b.def_function[_cmp_bcast_dispatcher[COP_GT]](
-            "GtBcast", docstring="out = lhs > rhs -> bool (broadcast strides)"
+        b.def_py_c_function(
+            _cmp_bcast_dispatcher[COP_GT],
+            "GtBcast",
+            docstring="out = lhs > rhs -> bool (broadcast strides)",
         )
-        b.def_function[_cmp_bcast_dispatcher[COP_GE]](
-            "GeBcast", docstring="out = lhs >= rhs -> bool (broadcast strides)"
+        b.def_py_c_function(
+            _cmp_bcast_dispatcher[COP_GE],
+            "GeBcast",
+            docstring="out = lhs >= rhs -> bool (broadcast strides)",
         )
-        b.def_function[_bitwise_not_dispatcher](
-            "BitwiseNot", docstring="out = ~x (bool/int, contiguous)"
+        b.def_py_c_function(
+            _bitwise_not_dispatcher,
+            "BitwiseNot",
+            docstring="out = ~x (bool/int, contiguous)",
         )
-        b.def_function[_isin_dispatcher](
-            "IsIn", docstring="out[i] = x[i] in test (int dtypes) ^ invert"
+        b.def_py_c_function(
+            _isin_dispatcher,
+            "IsIn",
+            docstring="out[i] = x[i] in test (int dtypes) ^ invert",
         )
         return b.finalize()
     except e:
