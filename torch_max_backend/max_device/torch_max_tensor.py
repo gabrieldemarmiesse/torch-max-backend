@@ -24,6 +24,18 @@ def _holder_mod():
     return _tensor_holder
 
 
+_data_movement = None
+
+
+def _data_movement_mod():
+    global _data_movement
+    if _data_movement is None:
+        from torch_max_backend import eager_kernels
+
+        _data_movement = eager_kernels.data_movement_ops
+    return _data_movement
+
+
 def _ctx_ptr(device: max.driver.Device) -> int:
     from torch_max_backend.eager_kernels import _ctx_ptr as ctx_ptr
 
@@ -189,7 +201,25 @@ class TorchMaxTensor(torch.Tensor):
         """A new contiguous tensor with this tensor's (strided) contents."""
         out = TorchMaxTensor._alloc(self._shape, self._dtype, self._device)
         if self._numel > 0:
-            _copy_strided_into(out, self)
+            rank = len(self._shape)
+            if rank <= 4:
+                # Hot path (attention q/k/v transposes, expand): the rank-4
+                # PermuteCopy gathers a strided source into a contiguous
+                # destination with no destination index math and half the
+                # coordinate math of the generic rank-8 CopyStrided.
+                pad = 4 - rank
+                dims4 = (1,) * pad + tuple(self._shape)
+                strides4 = (0,) * pad + tuple(self._strides)
+                _data_movement_mod().PermuteCopy(
+                    out._ptr,
+                    self._ptr,
+                    dims4,
+                    strides4,
+                    self._itemsize,
+                    _ctx_ptr(self._device),
+                )
+            else:
+                _copy_strided_into(out, self)
         return out
 
     @no_type_check
