@@ -3,9 +3,10 @@
 # layer norm, row softmax (with optional causal mask), spatial mean,
 # max pool (with indices), embedding gather, and boolean all-reduce.
 #
-# Same architecture as elementwise_ops.mojo: Python-visible functions get
-# `max.driver.Buffer` objects plus the device's DeviceContext pointer, and
-# enqueue work on MAX's own device queue (fire and forget, no sync).
+# Same architecture as elementwise_ops.mojo: Python-visible functions get raw
+# integer pointers (tensor `._ptr`, offset pre-applied) plus dtype ints and
+# the device's DeviceContext pointer, and enqueue work on MAX's own device
+# queue (fire and forget, no sync).
 #
 # Most kernels here are written as a parallel-for over independent output
 # elements or rows (`elementwise` with an inner sequential loop), so the same
@@ -24,7 +25,7 @@ from std.gpu import (
 )
 from std.gpu.host import DeviceContext
 from std.math import sqrt, exp
-from std.memory import stack_allocation
+from std.memory import alloc, stack_allocation
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from std.sys.info import has_accelerator, size_of
@@ -40,10 +41,8 @@ from op_utils import (
     FLOAT_DTYPES,
     _enqueue_cached,
     _make_ptr,
-    _raw_addr,
-    _raw_numel,
     _raw_ctx,
-    _raw_dtype,
+    _raw_dtype_int,
     _raw_f64,
     _raw_int,
     _raw_ret_none,
@@ -114,26 +113,27 @@ def _batch_norm[
 
 
 def _batch_norm_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
-    mean_buffer: PyObjectPtr,
-    var_buffer: PyObjectPtr,
-    gamma_buffer: PyObjectPtr,
-    beta_buffer: PyObjectPtr,
-    params: PyObjectPtr,  # (eps, channels, inner)
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
+    mean_ptr_obj: PyObjectPtr,
+    var_ptr_obj: PyObjectPtr,
+    gamma_ptr_obj: PyObjectPtr,
+    beta_ptr_obj: PyObjectPtr,
+    params: PyObjectPtr,  # (eps, channels, inner, total)
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
-    var mean_addr = _raw_addr(mean_buffer)
-    var var_addr = _raw_addr(var_buffer)
-    var gamma_addr = _raw_addr(gamma_buffer)
-    var beta_addr = _raw_addr(beta_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
+    var mean_addr = _raw_int(mean_ptr_obj)
+    var var_addr = _raw_int(var_ptr_obj)
+    var gamma_addr = _raw_int(gamma_ptr_obj)
+    var beta_addr = _raw_int(beta_ptr_obj)
     var eps_val = Float32(_raw_tuple_f64(params, 0))
     var channels_val = _raw_tuple_int(params, 1)
     var inner_val = _raw_tuple_int(params, 2)
-    var total = _raw_numel(out_buffer)
+    var total = _raw_tuple_int(params, 3)
     var ctx = _raw_ctx(device_context_ptr)
 
     var handled = False
@@ -316,22 +316,23 @@ def _layer_norm[
 
 
 def _layer_norm_go(
-    out_buffer: PyObjectPtr,
-    mean_out_buffer: PyObjectPtr,
-    rstd_out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
-    gamma_buffer: PyObjectPtr,
-    beta_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    mean_out_ptr_obj: PyObjectPtr,
+    rstd_out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
+    gamma_ptr_obj: PyObjectPtr,
+    beta_ptr_obj: PyObjectPtr,
     params: PyObjectPtr,  # (eps, rows, cols)
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var mean_out_addr = _raw_addr(mean_out_buffer)
-    var rstd_out_addr = _raw_addr(rstd_out_buffer)
-    var in_addr = _raw_addr(in_buffer)
-    var gamma_addr = _raw_addr(gamma_buffer)
-    var beta_addr = _raw_addr(beta_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var mean_out_addr = _raw_int(mean_out_ptr_obj)
+    var rstd_out_addr = _raw_int(rstd_out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
+    var gamma_addr = _raw_int(gamma_ptr_obj)
+    var beta_addr = _raw_int(beta_ptr_obj)
     var eps_val = Float32(_raw_tuple_f64(params, 0))
     var rows_val = _raw_tuple_int(params, 1)
     var cols_val = _raw_tuple_int(params, 2)
@@ -507,18 +508,19 @@ def _softmax_rows[
 
 
 def _softmax_rows_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
     rows: PyObjectPtr,
     cols: PyObjectPtr,
     scale: PyObjectPtr,
     causal: PyObjectPtr,
     q_len: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
     var rows_val = _raw_int(rows)
     var cols_val = _raw_int(cols)
     var scale_val = Float32(_raw_f64(scale))
@@ -549,8 +551,10 @@ def _softmax_rows_go(
 # @ V for q_len == 1, one thread block per (batch * head). Replaces the
 # bmm + softmax + bmm chain, whose m=1 GEMMs read K one row per thread
 # (uncoalesced) and which costs three kernel launches plus two scratch
-# buffers per call. GPU only; the Python side falls back to the generic
-# path on CPU or when the size caps below don't hold.
+# buffers per call. The one-thread-block-per-row launch (with the ATTN_MAX_KV
+# / ATTN_MAX_HD shared-memory caps below) is GPU only; on the CPU MAX device
+# `_attn_decode_cpu` below computes the identical math with plain per-row
+# loops and no size caps.
 # ---------------------------------------------------------------------------
 
 comptime ATTN_THREADS = 256
@@ -658,6 +662,79 @@ def _attn_decode_kernel[
 
 
 @always_inline
+def _attn_decode_cpu[
+    dtype: DType
+](
+    out_addr: Int,
+    q_addr: Int,
+    k_addr: Int,
+    v_addr: Int,
+    bh: Int,
+    kv_len: Int,
+    head_dim: Int,
+    scale: Float32,
+    ctx: DeviceContext,
+) raises:
+    """Same math as `_attn_decode_kernel`, one sequential task per (batch *
+    head) row: a max pass over the scores followed by a fused exp-sum /
+    weighted-V pass. `acc_out` is a per-row float32 scratch buffer (dynamic
+    size, so it cannot live in `stack_allocation` like the GPU version's
+    shared memory) that accumulates the output in the same precision the
+    GPU kernel uses before the final per-dtype cast.
+    """
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var q_ptr = _make_ptr[dtype](q_addr)
+    var k_ptr = _make_ptr[dtype](k_addr)
+    var v_ptr = _make_ptr[dtype](v_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, q_ptr, k_ptr, v_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var q_base = i * head_dim
+        var kv_base = i * kv_len * head_dim
+
+        var m = Float32.MIN
+        for j in range(kv_len):
+            var krow = kv_base + j * head_dim
+            var dot = Float32(0)
+            for d in range(head_dim):
+                dot += (
+                    q_ptr[q_base + d].cast[DType.float32]()
+                    * k_ptr[krow + d].cast[DType.float32]()
+                )
+            var s = dot * scale
+            if s > m:
+                m = s
+
+        var acc_out = alloc[Float32](head_dim)
+        for d in range(head_dim):
+            acc_out[d] = Float32(0)
+        var denom = Float32(0)
+        for j in range(kv_len):
+            var krow = kv_base + j * head_dim
+            var dot = Float32(0)
+            for d in range(head_dim):
+                dot += (
+                    q_ptr[q_base + d].cast[DType.float32]()
+                    * k_ptr[krow + d].cast[DType.float32]()
+                )
+            var s = dot * scale
+            var p = exp(s - m)
+            denom += p
+            var vrow = kv_base + j * head_dim
+            for d in range(head_dim):
+                acc_out[d] += p * v_ptr[vrow + d].cast[DType.float32]()
+
+        for d in range(head_dim):
+            out_ptr[q_base + d] = (acc_out[d] / denom).cast[dtype]()
+        acc_out.free()
+
+    _parallel_for[func](bh, ctx)
+
+
+@always_inline
 def _attn_decode[
     dtype: DType
 ](
@@ -671,6 +748,11 @@ def _attn_decode[
     scale: Float32,
     ctx: DeviceContext,
 ) raises:
+    if ctx.api() == "cpu":
+        _attn_decode_cpu[dtype](
+            out_addr, q_addr, k_addr, v_addr, bh, kv_len, head_dim, scale, ctx
+        )
+        return
     comptime if has_accelerator():
         _enqueue_cached[_attn_decode_kernel[dtype]](
             ctx,
@@ -692,29 +774,32 @@ def _attn_decode[
 
 
 def _attn_decode_go(
-    out_buffer: PyObjectPtr,
-    q_buffer: PyObjectPtr,
-    k_buffer: PyObjectPtr,
-    v_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    q_ptr_obj: PyObjectPtr,
+    k_ptr_obj: PyObjectPtr,
+    v_ptr_obj: PyObjectPtr,
     # (bh, kv_len, head_dim, scale)
     params: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(q_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var q_addr = _raw_addr(q_buffer)
-    var k_addr = _raw_addr(k_buffer)
-    var v_addr = _raw_addr(v_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var q_addr = _raw_int(q_ptr_obj)
+    var k_addr = _raw_int(k_ptr_obj)
+    var v_addr = _raw_int(v_ptr_obj)
     var bh = _raw_tuple_int(params, 0)
     var kv_len = _raw_tuple_int(params, 1)
     var head_dim = _raw_tuple_int(params, 2)
     var scale = Float32(_raw_tuple_f64(params, 3))
     var ctx = _raw_ctx(device_context_ptr)
 
-    if ctx.api() == "cpu":
-        raise Error("fast attn_decode is GPU-only")
-    if kv_len > ATTN_MAX_KV or head_dim > ATTN_MAX_HD or head_dim % 4 != 0:
-        raise Error("attn_decode size caps violated")
+    # The GPU kernel stages scores/Q in fixed-size shared memory; the CPU
+    # path below has no such limit, so the size caps only gate the GPU
+    # launch (and its vectorized 4-wide K loads, hence head_dim % 4).
+    if ctx.api() != "cpu":
+        if kv_len > ATTN_MAX_KV or head_dim > ATTN_MAX_HD or head_dim % 4 != 0:
+            raise Error("attn_decode size caps violated")
 
     var handled = False
     comptime for dt in FLOAT_DTYPES:
@@ -763,15 +848,16 @@ def _mean_rows[
 
 
 def _mean_rows_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
     rows: PyObjectPtr,
     cols: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
     var rows_val = _raw_int(rows)
     var cols_val = _raw_int(cols)
     var ctx = _raw_ctx(device_context_ptr)
@@ -848,16 +934,17 @@ def _max_pool2d[
 
 
 def _max_pool2d_go(
-    out_buffer: PyObjectPtr,
-    idx_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    idx_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
     params: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var idx_addr = _raw_addr(idx_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var idx_addr = _raw_int(idx_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
     var in_h = _raw_tuple_int(params, 0)
     var in_w = _raw_tuple_int(params, 1)
     var out_h = _raw_tuple_int(params, 2)
@@ -956,18 +1043,20 @@ def _gather0_data_dispatch[
 
 
 def _gather0_go(
-    out_buffer: PyObjectPtr,
-    weight_buffer: PyObjectPtr,
-    indices_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    weight_ptr_obj: PyObjectPtr,
+    indices_ptr_obj: PyObjectPtr,
+    idx_dtype_obj: PyObjectPtr,
     num_indices: PyObjectPtr,
     row_len: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(weight_buffer)
-    var idx_dtype = _raw_dtype(indices_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var weight_addr = _raw_addr(weight_buffer)
-    var indices_addr = _raw_addr(indices_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var idx_dtype = _raw_dtype_int(idx_dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var weight_addr = _raw_int(weight_ptr_obj)
+    var indices_addr = _raw_int(indices_ptr_obj)
     var num_indices_val = _raw_int(num_indices)
     var row_len_val = _raw_int(row_len)
     var ctx = _raw_ctx(device_context_ptr)
@@ -1069,14 +1158,14 @@ def _all_bool(
 
 
 def _all_bool_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
     size: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
     _all_bool(
-        _raw_addr(out_buffer),
-        _raw_addr(in_buffer),
+        _raw_int(out_ptr_obj),
+        _raw_int(in_ptr_obj),
         _raw_int(size),
         _raw_ctx(device_context_ptr),
     )
@@ -1152,14 +1241,14 @@ def _any_bool(
 
 
 def _any_bool_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
     size: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
     _any_bool(
-        _raw_addr(out_buffer),
-        _raw_addr(in_buffer),
+        _raw_int(out_ptr_obj),
+        _raw_int(in_ptr_obj),
         _raw_int(size),
         _raw_ctx(device_context_ptr),
     )
@@ -1286,15 +1375,16 @@ def _argmax_rows[
 
 
 def _argmax_rows_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
     rows: PyObjectPtr,
     cols: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
     var rows_val = _raw_int(rows)
     var cols_val = _raw_int(cols)
     var ctx = _raw_ctx(device_context_ptr)
@@ -1344,15 +1434,16 @@ def _max_rows[
 
 
 def _max_rows_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
     rows: PyObjectPtr,
     cols: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
     var rows_val = _raw_int(rows)
     var cols_val = _raw_int(cols)
     var ctx = _raw_ctx(device_context_ptr)
@@ -1401,15 +1492,16 @@ def _cumsum_rows[
 
 
 def _cumsum_rows_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr_obj: PyObjectPtr,
+    in_ptr_obj: PyObjectPtr,
     rows: PyObjectPtr,
     cols: PyObjectPtr,
+    dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var dtype = _raw_dtype_int(dtype_obj)
+    var out_addr = _raw_int(out_ptr_obj)
+    var in_addr = _raw_int(in_ptr_obj)
     var rows_val = _raw_int(rows)
     var cols_val = _raw_int(cols)
     var ctx = _raw_ctx(device_context_ptr)
@@ -1445,6 +1537,7 @@ def _batch_norm_dispatcher(
             args[5],
             args[6],
             args[7],
+            args[8],
         )
     except:
         pass
@@ -1466,6 +1559,7 @@ def _layer_norm_dispatcher(
             args[5],
             args[6],
             args[7],
+            args[8],
         )
     except:
         pass
@@ -1487,6 +1581,7 @@ def _softmax_rows_dispatcher(
             args[5],
             args[6],
             args[7],
+            args[8],
         )
     except:
         pass
@@ -1499,7 +1594,9 @@ def _attn_decode_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _attn_decode_go(args[0], args[1], args[2], args[3], args[4], args[5])
+        _attn_decode_go(
+            args[0], args[1], args[2], args[3], args[4], args[5], args[6]
+        )
     except:
         pass
     return _raw_ret_none()
@@ -1511,7 +1608,7 @@ def _mean_rows_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _mean_rows_go(args[0], args[1], args[2], args[3], args[4])
+        _mean_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -1523,7 +1620,7 @@ def _max_pool2d_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _max_pool2d_go(args[0], args[1], args[2], args[3], args[4])
+        _max_pool2d_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -1535,7 +1632,16 @@ def _gather0_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _gather0_go(args[0], args[1], args[2], args[3], args[4], args[5])
+        _gather0_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+        )
     except:
         pass
     return _raw_ret_none()
@@ -1571,7 +1677,7 @@ def _argmax_rows_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _argmax_rows_go(args[0], args[1], args[2], args[3], args[4])
+        _argmax_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -1583,7 +1689,7 @@ def _max_rows_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _max_rows_go(args[0], args[1], args[2], args[3], args[4])
+        _max_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -1595,7 +1701,7 @@ def _cumsum_rows_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _cumsum_rows_go(args[0], args[1], args[2], args[3], args[4])
+        _cumsum_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -1636,7 +1742,8 @@ def PyInit_nn_ops() abi("C") -> PythonObject:
             "AttnDecode",
             docstring=(
                 "fused q_len==1 attention: softmax(scale * q @ K^T) @ V,"
-                " one block per batch*head (GPU only)"
+                " one block per batch*head (block launch on GPU, plain loops"
+                " on CPU)"
             ),
         )
         b.def_py_c_function(
