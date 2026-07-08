@@ -144,10 +144,7 @@ def _copy_into(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
         return
     if dst._is_contiguous and src._is_contiguous:
         eager_kernels.tensor_holder.copy_d2d(
-            _ctx_ptr(dst._device),
-            dst._ptr,
-            src._ptr,
-            dst._numel * dst._itemsize,
+            _ctx_ptr(dst._device), dst._ptr, src._ptr, dst._numel * dst._itemsize
         )
     else:
         _copy_strided_into(dst, src)
@@ -177,12 +174,7 @@ def _try_binary(mojo_fn, lhs, rhs):
     out = _alloc(a._shape, a._dtype, a._device)
     if out._numel > 0:
         mojo_fn(
-            out._ptr,
-            a._ptr,
-            b._ptr,
-            out._numel,
-            a._dtype.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, b._ptr, out._numel, a._dtype.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -215,12 +207,7 @@ def _try_bool_and(lhs, rhs):
     out = _alloc(a._shape, DType.bool, a._device)
     if out._numel > 0:
         eager_kernels.elementwise_ops.Mul(
-            out._ptr,
-            a._ptr,
-            b._ptr,
-            out._numel,
-            DType.uint8.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, b._ptr, out._numel, DType.uint8.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -255,12 +242,7 @@ def _try_int_scalar(mojo_fn, x, scalar):
     out = _alloc(a._shape, a._dtype, a._device)
     if out._numel > 0:
         mojo_fn(
-            out._ptr,
-            a._ptr,
-            scalar,
-            out._numel,
-            a._dtype.value,
-            _ctx_ptr(a._device),
+            out._ptr, a._ptr, scalar, out._numel, a._dtype.value, _ctx_ptr(a._device)
         )
     return out
 
@@ -547,7 +529,11 @@ def fast_aten_add_(input, other, alpha=1):
         return input
     # General path: functional result, then a (strided-safe) copy back.
     result = fast_aten_add(input, other, alpha)
-    if result is NOT_HANDLED or result._shape != dst._shape or result._dtype != dst._dtype:
+    if (
+        result is NOT_HANDLED
+        or result._shape != dst._shape
+        or result._dtype != dst._dtype
+    ):
         return None
     _copy_into(dst, result)
     return input
@@ -560,7 +546,11 @@ def fast_aten_sub(input, other, alpha=1):
         if other is None:
             return NOT_HANDLED
     result = _try_binary(eager_kernels.elementwise_ops.Sub, input, other)
-    if result is None and isinstance(other, int | float) and not isinstance(other, bool):
+    if (
+        result is None
+        and isinstance(other, int | float)
+        and not isinstance(other, bool)
+    ):
         result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, -other)
         if result is None and isinstance(other, int):
             result = _try_int_scalar(
@@ -622,11 +612,7 @@ def fast_aten_div(input, other, *, rounding_mode=None):
         if b is not None:
             if b._device != a._device:
                 return NOT_HANDLED
-            rhs = (
-                _cast_tensor(b, DType.float32)
-                if b._dtype != DType.float32
-                else b
-            )
+            rhs = _cast_tensor(b, DType.float32) if b._dtype != DType.float32 else b
         elif isinstance(other, int | float) and not isinstance(other, bool):
             rhs = other
         else:
@@ -997,9 +983,7 @@ def _compute_view_strides(old_shape, old_strides, new_shape):
             old_shape[tensor_d - 1] != 1
             and old_strides[tensor_d - 1] != tensor_numel * chunk_base_stride
         ):
-            while view_d >= 0 and (
-                view_numel < tensor_numel or new_shape[view_d] == 1
-            ):
+            while view_d >= 0 and (view_numel < tensor_numel or new_shape[view_d] == 1):
                 new_strides[view_d] = view_numel * chunk_base_stride
                 view_numel *= new_shape[view_d]
                 view_d -= 1
@@ -1190,9 +1174,7 @@ def fast_aten_slice(input, dim=0, start=None, end=None, step=1):
     length = max(end - start, 0)
     length = -(-length // step)  # ceil div for step > 1
     new_shape = t._shape[:dim] + (length,) + t._shape[dim + 1 :]
-    new_strides = (
-        t._strides[:dim] + (t._strides[dim] * step,) + t._strides[dim + 1 :]
-    )
+    new_strides = t._strides[:dim] + (t._strides[dim] * step,) + t._strides[dim + 1 :]
     new_offset = t._offset + start * t._strides[dim]
     return _view_of(t, new_shape, new_strides, new_offset)
 
@@ -1372,11 +1354,7 @@ def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, e
         _ctx_ptr(a._device),
     )
     # Inference mode returns empty (0,) tensors for the saved stats.
-    return (
-        out,
-        _alloc((0,), a._dtype, a._device),
-        _alloc((0,), a._dtype, a._device),
-    )
+    return (out, _alloc((0,), a._dtype, a._device), _alloc((0,), a._dtype, a._device))
 
 
 @no_type_check
@@ -1624,6 +1602,347 @@ def fast_aten_max_pool2d_with_indices(
 
 
 # ---------------------------------------------------------------------------
+# NN tail: average / adaptive-average pool, group norm, bilinear upsample, and
+# the lowered SDPA variants (flash / efficient / math), all inference forward.
+# ---------------------------------------------------------------------------
+
+
+@no_type_check
+def fast_aten_avg_pool2d(
+    input,
+    kernel_size,
+    stride=None,
+    padding=0,
+    ceil_mode=False,
+    count_include_pad=True,
+    divisor_override=None,
+):
+    a = _tc(input)
+    kernel = _pair(kernel_size)
+    strides = _pair(stride) if stride not in (None, []) else kernel
+    pads = _pair(padding)
+    if (
+        a is not None
+        and a._numel > 0
+        and a._dtype in _FLOAT_DTYPES
+        and len(a._shape) == 4
+        and not ceil_mode
+        and None not in (kernel, strides, pads)
+        and (
+            divisor_override is None
+            or (isinstance(divisor_override, int) and divisor_override != 0)
+        )
+    ):
+        n, c, in_h, in_w = a._shape
+        kh, kw = kernel
+        sh, sw = strides
+        ph, pw = pads
+        out_h = (in_h + 2 * ph - kh) // sh + 1
+        out_w = (in_w + 2 * pw - kw) // sw + 1
+        if out_h > 0 and out_w > 0:
+            out = _alloc((n, c, out_h, out_w), a._dtype, a._device)
+            div = divisor_override if divisor_override is not None else 0
+            eager_kernels.nn_ops.AvgPool2d(
+                out._ptr,
+                a._ptr,
+                (
+                    in_h,
+                    in_w,
+                    out_h,
+                    out_w,
+                    kh,
+                    kw,
+                    sh,
+                    sw,
+                    ph,
+                    pw,
+                    1 if count_include_pad else 0,
+                    div,
+                    n * c,
+                ),
+                a._dtype.value,
+                _ctx_ptr(a._device),
+            )
+            return out
+    return NOT_HANDLED
+
+
+@no_type_check
+def fast_aten__adaptive_avg_pool2d(input, output_size):
+    a = _tc(input)
+    osize = _pair(output_size)
+    if (
+        a is not None
+        and a._numel > 0
+        and a._dtype in _FLOAT_DTYPES
+        and len(a._shape) == 4
+        and osize is not None
+    ):
+        n, c, in_h, in_w = a._shape
+        out_h, out_w = osize
+        if out_h > 0 and out_w > 0:
+            out = _alloc((n, c, out_h, out_w), a._dtype, a._device)
+            eager_kernels.nn_ops.AdaptiveAvgPool2d(
+                out._ptr,
+                a._ptr,
+                (in_h, in_w, out_h, out_w, n * c),
+                a._dtype.value,
+                _ctx_ptr(a._device),
+            )
+            return out
+    return NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_native_group_norm(input, weight, bias, N, C, HxW, group, eps):
+    a = _tc(input)
+    if (
+        a is not None
+        and a._numel > 0
+        and a._dtype in _FLOAT_DTYPES
+        and isinstance(group, int)
+        and group > 0
+        and isinstance(C, int)
+        and C % group == 0
+        and a._numel == N * C * HxW
+    ):
+        cpg = C // group
+        cols = cpg * HxW
+        rows = N * group
+        gamma = (
+            _tc(weight)
+            if weight is not None
+            else fast_filled((C,), 1.0, a._dtype, a._device)
+        )
+        beta = (
+            _tc(bias)
+            if bias is not None
+            else fast_filled((C,), 0.0, a._dtype, a._device)
+        )
+        if (
+            gamma is None
+            or beta is None
+            or gamma._dtype != a._dtype
+            or beta._dtype != a._dtype
+            or tuple(gamma._shape) != (C,)
+            or tuple(beta._shape) != (C,)
+        ):
+            return NOT_HANDLED
+        out = _alloc(a._shape, a._dtype, a._device)
+        mean = _alloc((N, group), DType.float32, a._device)
+        rstd = _alloc((N, group), DType.float32, a._device)
+        eager_kernels.nn_ops.GroupNorm(
+            out._ptr,
+            mean._ptr,
+            rstd._ptr,
+            a._ptr,
+            gamma._ptr,
+            beta._ptr,
+            (float(eps), rows, cols, HxW, group, cpg),
+            a._dtype.value,
+            _ctx_ptr(a._device),
+        )
+        return out, mean, rstd
+    return NOT_HANDLED
+
+
+@no_type_check
+def _area_pixel_scale(in_size, out_size, align_corners, scale):
+    """torch area_pixel_compute_scale for one axis."""
+    if align_corners:
+        return (in_size - 1) / (out_size - 1) if out_size > 1 else 0.0
+    if scale is not None and scale > 0:
+        return 1.0 / scale
+    return in_size / out_size
+
+
+@no_type_check
+def fast_aten_upsample_bilinear2d(
+    input, output_size, align_corners, scales_h=None, scales_w=None
+):
+    a = _tc(input)
+    osize = _pair(output_size)
+    if (
+        a is not None
+        and a._numel > 0
+        and a._dtype in _FLOAT_DTYPES
+        and len(a._shape) == 4
+        and osize is not None
+    ):
+        n, c, in_h, in_w = a._shape
+        out_h, out_w = osize
+        if out_h > 0 and out_w > 0:
+            ratio_h = _area_pixel_scale(in_h, out_h, align_corners, scales_h)
+            ratio_w = _area_pixel_scale(in_w, out_w, align_corners, scales_w)
+            out = _alloc((n, c, out_h, out_w), a._dtype, a._device)
+            eager_kernels.nn_ops.UpsampleBilinear2d(
+                out._ptr,
+                a._ptr,
+                (
+                    float(ratio_h),
+                    float(ratio_w),
+                    in_h,
+                    in_w,
+                    out_h,
+                    out_w,
+                    n * c,
+                    1 if align_corners else 0,
+                ),
+                a._dtype.value,
+                _ctx_ptr(a._device),
+            )
+            return out
+    return NOT_HANDLED
+
+
+@no_type_check
+def _sdpa_math_forward(query, key, value, is_causal, scale):
+    """Decomposed bmm + scale/causal softmax + bmm; returns (out, probs) both
+    as (B, H, Sq, *) views. Used by the math SDPA variant (needs the softmax
+    probabilities as a second output). Returns NOT_HANDLED for shapes/dtypes
+    the fast kernels don't cover."""
+    q = _tc(query)
+    k = _tc(key)
+    v = _tc(value)
+    if (
+        q is None
+        or k is None
+        or v is None
+        or q._dtype != k._dtype
+        or q._dtype != v._dtype
+        or q._dtype not in _FLOAT_DTYPES
+        or len(q._shape) != 4
+        or tuple(k._shape) != tuple(v._shape)
+        or tuple(q._shape[:2]) != tuple(k._shape[:2])
+        or q._shape[3] != k._shape[3]
+        or 0 in q._shape
+        or 0 in k._shape
+    ):
+        return NOT_HANDLED
+    b, h, q_len, head_dim = q._shape
+    kv_len = k._shape[2]
+    scale_val = scale if scale is not None else 1.0 / math.sqrt(head_dim)
+    ctx = _ctx_ptr(q._device)
+    dt = q._dtype.value
+    scores = _alloc((b * h, q_len, kv_len), q._dtype, q._device)
+    eager_kernels.matmul_ops.Bmm(
+        scores._ptr, q._ptr, k._ptr, (b * h, q_len, kv_len, head_dim, 1), dt, ctx
+    )
+    probs = _alloc((b * h, q_len, kv_len), q._dtype, q._device)
+    eager_kernels.nn_ops.SoftmaxRows(
+        probs._ptr,
+        scores._ptr,
+        b * h * q_len,
+        kv_len,
+        float(scale_val),
+        1 if is_causal else 0,
+        q_len,
+        dt,
+        ctx,
+    )
+    out = _alloc((b * h, q_len, head_dim), q._dtype, q._device)
+    eager_kernels.matmul_ops.Bmm(
+        out._ptr, probs._ptr, v._ptr, (b * h, q_len, head_dim, kv_len, 0), dt, ctx
+    )
+    out_shape = (b, h, q_len, head_dim)
+    out4 = _view_of(out, out_shape, _row_major_strides(out_shape), out._offset)
+    probs_shape = (b, h, q_len, kv_len)
+    probs4 = _view_of(
+        probs, probs_shape, _row_major_strides(probs_shape), probs._offset
+    )
+    return out4, probs4
+
+
+@no_type_check
+def fast_aten__scaled_dot_product_attention_math(
+    query,
+    key,
+    value,
+    attn_mask=None,
+    dropout_p=0.0,
+    is_causal=False,
+    dropout_mask=None,
+    *,
+    scale=None,
+    enable_gqa=False,
+):
+    if (
+        dropout_p != 0.0
+        or dropout_mask is not None
+        or attn_mask is not None
+        or enable_gqa
+    ):
+        return NOT_HANDLED
+    result = _sdpa_math_forward(query, key, value, is_causal, scale)
+    if result is NOT_HANDLED:
+        return NOT_HANDLED
+    out, probs = result
+    return out, probs
+
+
+@no_type_check
+def fast_aten__scaled_dot_product_flash_attention(
+    query,
+    key,
+    value,
+    dropout_p=0.0,
+    is_causal=False,
+    return_debug_mask=False,
+    *,
+    scale=None,
+):
+    if dropout_p != 0.0:
+        return NOT_HANDLED
+    out = fast_aten_scaled_dot_product_attention(
+        query, key, value, None, 0.0, is_causal, scale, False
+    )
+    if out is NOT_HANDLED:
+        return NOT_HANDLED
+    q = _t(query)
+    b, h, sq, _ = q._shape
+    sk = _t(key)._shape[2]
+    dev = q._device
+    # Auxiliary returns are only consumed by the backward pass; inference only
+    # needs the primary output. logsumexp is (B, H, Sq) float32 (matching the
+    # real kernel's shape/dtype); cum_seq_q/k are None as the dense CUDA path
+    # returns; rng_state/unused/debug_attn_mask are zero placeholders.
+    logsumexp = fast_filled((b, h, sq), 0.0, DType.float32, dev)
+    rng_state = fast_filled((2,), 0, DType.int64, dev)
+    unused = fast_filled((), 0, DType.int64, dev)
+    debug_attn_mask = _alloc((0,), q._dtype, dev)
+    return (out, logsumexp, None, None, sq, sk, rng_state, unused, debug_attn_mask)
+
+
+@no_type_check
+def fast_aten__scaled_dot_product_efficient_attention(
+    query,
+    key,
+    value,
+    attn_bias,
+    compute_log_sumexp,
+    dropout_p=0.0,
+    is_causal=False,
+    *,
+    scale=None,
+):
+    if dropout_p != 0.0 or attn_bias is not None:
+        return NOT_HANDLED
+    out = fast_aten_scaled_dot_product_attention(
+        query, key, value, None, 0.0, is_causal, scale, False
+    )
+    if out is NOT_HANDLED:
+        return NOT_HANDLED
+    q = _t(query)
+    b, h, sq, _ = q._shape
+    dev = q._device
+    lse_len = sq if compute_log_sumexp else 0
+    log_sumexp = fast_filled((b, h, lse_len), 0.0, DType.float32, dev)
+    philox_seed = fast_filled((), 0, DType.int64, dev)
+    philox_offset = fast_filled((), 0, DType.int64, dev)
+    return (out, log_sumexp, philox_seed, philox_offset)
+
+
+# ---------------------------------------------------------------------------
 # Matmul family (GPU: pure-Mojo GEMM; CPU: correctness-grade loops)
 # ---------------------------------------------------------------------------
 
@@ -1732,13 +2051,7 @@ def fast_aten_linear(input, weight, bias=None):
         ctx = _ctx_ptr(a._device)
         if bias_t is not None:
             eager_kernels.matmul_ops.MatmulBias(
-                out._ptr,
-                a._ptr,
-                w._ptr,
-                bias_t._ptr,
-                (m, n, k, 1),
-                a._dtype.value,
-                ctx,
+                out._ptr, a._ptr, w._ptr, bias_t._ptr, (m, n, k, 1), a._dtype.value, ctx
             )
         else:
             eager_kernels.matmul_ops.Matmul(
@@ -2021,15 +2334,7 @@ def fast_aten__softmax(input, dim, half_to_float=False):
     rows = a._numel // cols
     out = _alloc(a._shape, a._dtype, a._device)
     eager_kernels.nn_ops.SoftmaxRows(
-        out._ptr,
-        a._ptr,
-        rows,
-        cols,
-        1.0,
-        0,
-        1,
-        a._dtype.value,
-        _ctx_ptr(a._device),
+        out._ptr, a._ptr, rows, cols, 1.0, 0, 1, a._dtype.value, _ctx_ptr(a._device)
     )
     return out
 
