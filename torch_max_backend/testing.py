@@ -10,18 +10,46 @@ from torch_max_backend import max_backend
 class CallChecker:
     """Asserts that at least one of the registered implementations ran.
 
-    Ops covered by the max_device fast eager path have two implementations
-    (the graph one in `aten_functions` and the kernel one in `aten_fast`);
-    register both to accept whichever the inputs routed to.
+    Ops covered by the max_device fast eager path have two implementations:
+    the graph one in `aten_functions` (used by the torch.compile backend)
+    and the Mojo-kernel one in `aten_fast` (used by max_device eager mode).
+    A test registers the `aten_functions` twin; `register` automatically
+    also accepts the matching `aten_fast.fast_<name>` twin, so the same
+    test passes whether the op routed to the graph path (compile) or the
+    fast path (eager) — no per-test bookkeeping needed.
     """
 
     def __init__(self):
         self._functions_to_check = None
         self._counts_before_starting_to_check = None
 
+    @staticmethod
+    def _fast_twin(func: Callable) -> Callable | None:
+        """The aten_fast.fast_<name> counterpart of an aten_functions twin,
+        if one exists and is instrumented with a call counter."""
+        name = getattr(func, "__name__", "")
+        if not name.startswith("aten"):
+            return None
+        try:
+            from torch_max_backend.eager_kernels import aten_fast
+        except Exception:
+            return None
+        twin = getattr(aten_fast, f"fast_{name}", None)
+        if twin is not None and hasattr(twin, "call_count"):
+            return twin
+        return None
+
     def register(self, *funcs: Callable):
-        self._functions_to_check = funcs
-        self._counts_before_starting_to_check = [f.call_count for f in funcs]
+        expanded: list[Callable] = []
+        for func in funcs:
+            expanded.append(func)
+            twin = self._fast_twin(func)
+            if twin is not None and twin not in expanded:
+                expanded.append(twin)
+        self._functions_to_check = tuple(expanded)
+        self._counts_before_starting_to_check = [
+            f.call_count for f in self._functions_to_check
+        ]
 
     def check_was_called(self):
         if self._functions_to_check is None:
