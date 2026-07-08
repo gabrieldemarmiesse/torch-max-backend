@@ -533,30 +533,85 @@ register_aten_op("aten::any.out")(_out_variant("aten::any.out", "fast_aten_any")
 register_aten_op("aten::isin.Tensor_Tensor_out")(
     _out_variant("aten::isin.Tensor_Tensor_out", "fast_aten_isin")
 )
-_register_missing("aten::min.dim_min")
 
 
 # ----------------------------------------------------------------------------------
-# Fast-implemented ops (alphabetical)
+# min.dim_min: out-variant returning (values, indices) along one dim.
 # ----------------------------------------------------------------------------------
 
+
+@register_aten_op("aten::min.dim_min")
+@no_type_check
+def max_device_min_dim_min(
+    input: TorchMaxTensor,
+    dim: int,
+    keepdim: bool = False,
+    min: TorchMaxTensor | None = None,
+    min_indices: TorchMaxTensor | None = None,
+) -> tuple[TorchMaxTensor, TorchMaxTensor]:
+    """Out-variant of torch.min along a dim: writes values into `min` and
+    int64 indices into `min_indices` (resizing via payload rebind when the
+    pre-allocated shapes don't match, like the other out-variants)."""
+    aten_fast = _fast()
+    result = aten_fast.fast_aten_min_dim(input, dim, keepdim)
+    if result is aten_fast.NOT_HANDLED:
+        raise _unsupported("aten::min.dim_min", (input,))
+    values, indices = result
+    for dst, src in ((min, values), (min_indices, indices)):
+        if dst is None:
+            continue
+        if tuple(dst._shape) == tuple(src._shape):
+            _copy_into_tensor(dst, src)
+        else:
+            _rebind_payload(dst, src)
+    return (min, min_indices)
+
+
+# ----------------------------------------------------------------------------------
+# Fast-implemented ops (alphabetical).
+# ----------------------------------------------------------------------------------
+
+_register_fast("aten::_adaptive_avg_pool2d", "fast_aten__adaptive_avg_pool2d")
 _register_fast("aten::_local_scalar_dense", "fast_aten__local_scalar_dense")
+_register_fast("aten::_log_softmax", "fast_aten__log_softmax")
 _register_fast(
     "aten::_native_batch_norm_legit_no_training",
     "fast_aten__native_batch_norm_legit_no_training",
+)
+_register_fast(
+    "aten::_scaled_dot_product_attention_math",
+    "fast_aten__scaled_dot_product_attention_math",
+)
+_register_fast(
+    "aten::_scaled_dot_product_efficient_attention",
+    "fast_aten__scaled_dot_product_efficient_attention",
+)
+_register_fast(
+    "aten::_scaled_dot_product_flash_attention",
+    "fast_aten__scaled_dot_product_flash_attention",
 )
 _register_fast("aten::_softmax", "fast_aten__softmax")
 _register_fast("aten::_unsafe_view", "fast_aten__unsafe_view")
 _register_fast("aten::abs", "fast_aten_abs")
 _register_fast("aten::acos", "fast_aten_acos")
 _register_fast("aten::add.Tensor", "fast_aten_add")
+_register_fast("aten::addcdiv", "fast_aten_addcdiv")
+_register_fast("aten::addcmul", "fast_aten_addcmul")
 _register_fast("aten::addmm", "fast_aten_addmm")
 _register_fast("aten::alias", "fast_aten_alias")
 _register_fast("aten::all", "fast_aten_all")
+_register_fast("aten::all.dim", "fast_aten_all")
+_register_fast("aten::all.dims", "fast_aten_all")
+_register_fast("aten::amax", "fast_aten_amax")
+_register_fast("aten::amin", "fast_aten_amin")
 _register_fast("aten::any", "fast_aten_any")
+_register_fast("aten::any.dim", "fast_aten_any")
+_register_fast("aten::any.dims", "fast_aten_any")
 _register_fast("aten::argmax", "fast_aten_argmax")
+_register_fast("aten::argmin", "fast_aten_argmin")
 _register_fast("aten::asinh", "fast_aten_asinh")
 _register_fast("aten::atanh", "fast_aten_atanh")
+_register_fast("aten::avg_pool2d", "fast_aten_avg_pool2d")
 _register_fast("aten::bitwise_and.Scalar", "fast_aten_bitwise_and")
 _register_fast("aten::bitwise_and.Tensor", "fast_aten_bitwise_and")
 _register_fast("aten::bitwise_not", "fast_aten_bitwise_not")
@@ -567,6 +622,7 @@ _register_fast("aten::bitwise_xor.Tensor", "fast_aten_bitwise_xor")
 _register_fast("aten::bmm", "fast_aten_bmm")
 _register_fast("aten::cat", "fast_aten_cat")
 _register_fast("aten::ceil", "fast_aten_ceil")
+_register_fast("aten::clamp", "fast_aten_clamp")
 _register_fast("aten::clone", "fast_aten_clone")
 _register_fast("aten::convolution", "fast_aten_convolution")
 _register_fast("aten::cos", "fast_aten_cos")
@@ -583,6 +639,9 @@ _register_fast("aten::exp", "fast_aten_exp")
 _register_fast("aten::expand", "fast_aten_expand")
 _register_fast("aten::fill.Scalar", "fast_aten_fill_scalar")
 _register_fast("aten::floor", "fast_aten_floor")
+_register_fast("aten::floor_divide", "fast_aten_floor_divide")
+_register_fast("aten::floor_divide.Scalar", "fast_aten_floor_divide")
+_register_fast("aten::floordiv", "fast_aten_floor_divide")
 _register_fast("aten::ge", "fast_aten_ge")
 _register_fast("aten::ge.Scalar", "fast_aten_ge")
 _register_fast("aten::ge.Tensor", "fast_aten_ge")
@@ -590,6 +649,7 @@ _register_fast("aten::gelu", "fast_aten_gelu")
 _register_fast("aten::gt", "fast_aten_gt")
 _register_fast("aten::gt.Scalar", "fast_aten_gt")
 _register_fast("aten::gt.Tensor", "fast_aten_gt")
+_register_fast("aten::index.Tensor", "fast_aten_index")
 _register_fast("aten::isin.Tensor_Tensor", "fast_aten_isin")
 _register_fast("aten::isnan", "fast_aten_isnan")
 _register_fast("aten::le", "fast_aten_le")
@@ -598,7 +658,9 @@ _register_fast("aten::le.Tensor", "fast_aten_le")
 _register_fast("aten::linear", "fast_aten_linear")
 _register_fast("aten::log", "fast_aten_log")
 _register_fast("aten::log1p", "fast_aten_log1p")
+_register_fast("aten::logical_and", "fast_aten_logical_and")
 _register_fast("aten::logical_not", "fast_aten_logical_not")
+_register_fast("aten::logical_xor", "fast_aten_logical_xor")
 _register_fast("aten::lt", "fast_aten_lt")
 _register_fast("aten::lt.Scalar", "fast_aten_lt")
 _register_fast("aten::lt.Tensor", "fast_aten_lt")
@@ -611,24 +673,35 @@ _register_fast("aten::mean", "fast_aten_mean")
 # Registering the base name only covers the default overload; mean.dim would
 # otherwise get decomposed by PyTorch into a chain of sum/div/... ops.
 _register_fast("aten::mean.dim", "fast_aten_mean")
+_register_fast("aten::min", "fast_aten_min")
 _register_fast("aten::minimum", "fast_aten_minimum")
 _register_fast("aten::mm", "fast_aten_mm")
 _register_fast("aten::mul.Tensor", "fast_aten_mul")
 _register_fast("aten::native_batch_norm", "fast_aten_native_batch_norm")
+_register_fast("aten::native_group_norm", "fast_aten_native_group_norm")
 _register_fast("aten::native_layer_norm", "fast_aten_native_layer_norm")
 _register_fast("aten::ne", "fast_aten_ne")
 _register_fast("aten::ne.Scalar", "fast_aten_ne")
 _register_fast("aten::ne.Tensor", "fast_aten_ne")
 _register_fast("aten::neg", "fast_aten_neg")
+_register_fast("aten::nonzero", "fast_aten_nonzero")
 _register_fast("aten::permute", "fast_aten_permute")
 _register_fast("aten::pow.Tensor_Scalar", "fast_aten_pow")
+_register_fast("aten::pow.Tensor_Tensor", "fast_aten_pow_tensor_tensor")
 _register_fast("aten::reciprocal", "fast_aten_reciprocal")
 _register_fast("aten::relu", "fast_aten_relu")
+_register_fast("aten::remainder.Scalar", "fast_aten_remainder")
+_register_fast("aten::remainder.Scalar_Tensor", "fast_aten_remainder")
+_register_fast("aten::remainder.Tensor", "fast_aten_remainder")
+_register_fast("aten::repeat", "fast_aten_repeat")
 _register_fast("aten::rsqrt", "fast_aten_rsqrt")
 _register_fast(
     "aten::scaled_dot_product_attention", "fast_aten_scaled_dot_product_attention"
 )
+_register_fast("aten::scatter.src", "fast_aten_scatter_src")
+_register_fast("aten::scatter.value", "fast_aten_scatter_value")
 _register_fast("aten::select.int", "fast_aten_select")
+_register_fast("aten::select_scatter", "fast_aten_select_scatter")
 _register_fast("aten::sigmoid", "fast_aten_sigmoid")
 _register_fast("aten::sign", "fast_aten_sign")
 _register_fast("aten::silu", "fast_aten_silu")
@@ -640,55 +713,28 @@ _register_fast("aten::split.Tensor", "fast_aten_split")
 _register_fast("aten::split_with_sizes", "fast_aten_split_with_sizes")
 _register_fast("aten::sqrt", "fast_aten_sqrt")
 _register_fast("aten::squeeze.dim", "fast_aten_squeeze_dim")
+_register_fast("aten::stack", "fast_aten_stack")
 _register_fast("aten::sub.Tensor", "fast_aten_sub")
+_register_fast("aten::sum.dim_IntList", "fast_aten_sum")
 _register_fast("aten::t", "fast_aten_t")
 _register_fast("aten::tan", "fast_aten_tan")
 _register_fast("aten::tanh", "fast_aten_tanh")
 _register_fast("aten::transpose.int", "fast_aten_transpose")
+_register_fast("aten::tril", "fast_aten_tril")
+_register_fast("aten::triu", "fast_aten_triu")
 _register_fast("aten::unbind.int", "fast_aten_unbind")
 _register_fast("aten::unsqueeze", "fast_aten_unsqueeze")
+_register_fast("aten::upsample_bilinear2d", "fast_aten_upsample_bilinear2d")
+_register_fast("aten::var.correction", "fast_aten_var")
 _register_fast("aten::view", "fast_aten_view")
 _register_fast("aten::where.self", "fast_aten_where")
 
 
 # ----------------------------------------------------------------------------------
 # Ops with no fast implementation yet: explicit raisers (previously served
-# by the graph fallback). Implement in eager_kernels and move up.
+# by the graph fallback). Training-only backward passes; implement in
+# eager_kernels and move up if an inference workload needs them.
 # ----------------------------------------------------------------------------------
 
-_register_missing("aten::_adaptive_avg_pool2d")
 _register_missing("aten::_adaptive_avg_pool2d_backward")
-_register_missing("aten::_log_softmax")
-_register_missing("aten::_scaled_dot_product_attention_math")
-_register_missing("aten::_scaled_dot_product_efficient_attention")
-_register_missing("aten::_scaled_dot_product_flash_attention")
-_register_missing("aten::addcdiv")
-_register_missing("aten::addcmul")
-_register_missing("aten::amax")
-_register_missing("aten::amin")
-_register_missing("aten::all.dim")
-_register_missing("aten::all.dims")
-_register_missing("aten::any.dim")
-_register_missing("aten::argmin")
-_register_missing("aten::avg_pool2d")
-_register_missing("aten::clamp")
-_register_missing("aten::floordiv")
 _register_missing("aten::gelu_backward")
-_register_missing("aten::index.Tensor")
-_register_missing("aten::logical_and")
-_register_missing("aten::logical_xor")
-_register_missing("aten::min")
-_register_missing("aten::native_group_norm")
-_register_missing("aten::nonzero")
-_register_missing("aten::pow.Tensor_Tensor")
-_register_missing("aten::remainder")
-_register_missing("aten::repeat")
-_register_missing("aten::scatter.src")
-_register_missing("aten::scatter.value")
-_register_missing("aten::select_scatter")
-_register_missing("aten::stack")
-_register_missing("aten::sum.dim_IntList")
-_register_missing("aten::tril")
-_register_missing("aten::triu")
-_register_missing("aten::upsample_bilinear2d")
-_register_missing("aten::var.correction")
