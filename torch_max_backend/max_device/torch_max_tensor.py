@@ -1,123 +1,234 @@
 import functools
-from collections.abc import Callable
 from typing import no_type_check
 
 import max.driver
 import torch
 from max.driver import CPU
-from max.experimental.tensor import Tensor as MaxEagerTensor
+from max.dtype import DType
 from max.experimental.torch import max_dtype_to_torch
 
 from torch_max_backend.max_device import torch_max_device_module
 
+# The Mojo extension module (torch_max_backend.eager_kernels.tensor_holder),
+# resolved lazily so that importing torch_max_backend never triggers a Mojo
+# kernel compile.
+_tensor_holder = None
+
+
+def _holder_mod():
+    global _tensor_holder
+    if _tensor_holder is None:
+        from torch_max_backend import eager_kernels
+
+        _tensor_holder = eager_kernels.tensor_holder
+    return _tensor_holder
+
+
+def _ctx_ptr(device: max.driver.Device) -> int:
+    from torch_max_backend.eager_kernels import _ctx_ptr as ctx_ptr
+
+    return ctx_ptr(device)
+
+
+def _row_major_strides(shape) -> tuple[int, ...]:
+    strides = [1] * len(shape)
+    for i in range(len(shape) - 2, -1, -1):
+        strides[i] = strides[i + 1] * shape[i + 1]
+    return tuple(strides)
+
+
+def _compute_contiguous(shape, strides) -> bool:
+    """torch's relaxed contiguity: size-1 dims never break contiguity."""
+    expected = 1
+    for size, stride in zip(reversed(shape), reversed(strides)):
+        if size == 1:
+            continue
+        if stride != expected:
+            return False
+        expected *= size
+    return True
+
+
+# Strided kernels take shapes/strides padded to rank 8 with LEADING entries.
+MAX_RANK = 8
+
+
+def _pad8(values, fill: int) -> tuple[int, ...]:
+    values = tuple(values)
+    if len(values) > MAX_RANK:
+        raise NotImplementedError(
+            f"max_device tensors support at most rank {MAX_RANK}, got {len(values)}"
+        )
+    return (fill,) * (MAX_RANK - len(values)) + values
+
 
 class TorchMaxTensor(torch.Tensor):
-    """Custom tensor subclass that holds MAX engine data, similar to MyDeviceTensor in trying_stuff.py
+    """Eager max_device tensor.
 
-    The MAX data can be stored in two forms: an eager `MaxEagerTensor`
-    (`_max_data`), or — for outputs of the fast kernel path — just the
-    realized `max.driver.Buffer` (`_buffer`). The `_max_data` property
-    builds the MaxEagerTensor wrapper on first access, so the many
-    fast-path tensors that only ever feed other fast ops never pay for
-    one (~1.7 µs per construction).
+    A meta-backed `PrivateUse1` wrapper (`torch._C._acc.create_empty_tensor`
+    + `__class__` swap) whose payload is:
+
+    - `_holder`: a Mojo `TensorHolder` owning the device allocation. Views
+      share the *same* holder object; CPython's refcount on it is the
+      ownership mechanism, and the last drop enqueues the stream-ordered
+      free (see docs/strided_owning_tensors_design.md).
+    - Layout metadata as plain Python attributes (`_ptr`, `_shape`,
+      `_strides` in elements, `_offset` in elements from the allocation
+      start, `_dtype` as a max DType, `_numel`, `_itemsize`, `_device`,
+      `_is_contiguous`).
+
+    PyTorch's own TensorImpl always reports contiguous strides; that is fine
+    because the backend registers a kernel for every op that consumes a
+    max_device tensor, so the real strides here are the only ones ever used.
     """
 
-    @staticmethod
-    def __new__(cls, size, dtype, max_data=None, requires_grad=False):
-        # Use a meta Tensor as the wrapper (following trying_stuff.py pattern)
-        res = torch._C._acc.create_empty_tensor(size, dtype)
+    @classmethod
+    @no_type_check
+    def _make(
+        cls, holder, ptr, shape, strides, offset, dtype, device, contiguous=None
+    ) -> "TorchMaxTensor":
+        shape = tuple(shape)
+        res = torch._C._acc.create_empty_tensor(shape, max_dtype_to_torch(dtype))
         res.__class__ = TorchMaxTensor
+        res._holder = holder
+        res._ptr = ptr
+        res._shape = shape
+        res._strides = tuple(strides)
+        res._offset = offset
+        res._dtype = dtype
+        res._itemsize = dtype.size_in_bytes
+        numel = 1
+        for s in shape:
+            numel *= s
+        res._numel = numel
+        res._device = device
+        res._is_contiguous = (
+            _compute_contiguous(res._shape, res._strides)
+            if contiguous is None
+            else contiguous
+        )
         return res
 
+    @classmethod
     @no_type_check
-    def __init__(self, size, dtype, max_data=None, requires_grad=False):
-        self._max_data_ = max_data
-        self._buffer = None
+    def _alloc(cls, shape, dtype: DType, device: max.driver.Device) -> "TorchMaxTensor":
+        """A new contiguous uninitialized tensor (one device allocation)."""
+        shape = tuple(shape)
+        numel = 1
+        for s in shape:
+            numel *= s
+        holder, ptr = _holder_mod().alloc(
+            _ctx_ptr(device), numel * dtype.size_in_bytes
+        )
+        return cls._make(
+            holder,
+            ptr,
+            shape,
+            _row_major_strides(shape),
+            0,
+            dtype,
+            device,
+            contiguous=True,
+        )
 
-    @property
+    @classmethod
     @no_type_check
-    def _max_data(self) -> MaxEagerTensor:
-        max_data = self._max_data_
-        if max_data is None and self._buffer is not None:
-            max_data = MaxEagerTensor(storage=self._buffer)
-            self._max_data_ = max_data
-        return max_data
+    def _view_of(cls, base: "TorchMaxTensor", shape, strides, offset) -> "TorchMaxTensor":
+        """A zero-copy view: shares base's holder, new layout metadata.
 
-    @_max_data.setter
+        `offset` is absolute, in elements from the allocation start.
+        """
+        ptr = base._ptr + (offset - base._offset) * base._itemsize
+        return cls._make(
+            base._holder, ptr, shape, strides, offset, base._dtype, base._device
+        )
+
+    @classmethod
     @no_type_check
-    def _max_data(self, value):
-        self._max_data_ = value
-        self._buffer = None
+    def _from_cpu(
+        cls, cpu_tensor: torch.Tensor, device: max.driver.Device
+    ) -> "TorchMaxTensor":
+        """H2D: allocate + copy from a CPU torch tensor (synchronizes)."""
+        from max.experimental.torch.torch import torch_dtype_to_max
+
+        t = cpu_tensor.detach()
+        if not t.is_contiguous():
+            t = t.contiguous()
+        dtype = torch_dtype_to_max(t.dtype)
+        nbytes = t.numel() * t.element_size()
+        holder, ptr = _holder_mod().alloc_from_host(
+            _ctx_ptr(device), t.data_ptr(), nbytes
+        )
+        return cls._make(
+            holder,
+            ptr,
+            tuple(t.shape),
+            _row_major_strides(t.shape),
+            0,
+            dtype,
+            device,
+            contiguous=True,
+        )
+
+    @no_type_check
+    def _to_cpu_tensor(self) -> torch.Tensor:
+        """D2H: a CPU torch tensor with this tensor's data (synchronizes)."""
+        src = self if self._is_contiguous else self._materialize_contiguous()
+        out = torch.empty(self._shape, dtype=max_dtype_to_torch(self._dtype))
+        if src._numel > 0:
+            _holder_mod().copy_to_host(
+                _ctx_ptr(src._device),
+                src._ptr,
+                out.data_ptr(),
+                src._numel * src._itemsize,
+            )
+        return out
+
+    @no_type_check
+    def _materialize_contiguous(self) -> "TorchMaxTensor":
+        """A new contiguous tensor with this tensor's (strided) contents."""
+        out = TorchMaxTensor._alloc(self._shape, self._dtype, self._device)
+        if self._numel > 0:
+            _copy_strided_into(out, self)
+        return out
+
+    @no_type_check
+    def _contig(self) -> "TorchMaxTensor":
+        """self if already contiguous, else a materialized copy."""
+        return self if self._is_contiguous else self._materialize_contiguous()
 
     def __repr__(self):
-        if hasattr(self, "_max_data_"):
-            return "MaxTensor(" + repr(self._max_data) + ")"
+        if hasattr(self, "_holder"):
+            return f"TorchMaxTensor({self._to_cpu_tensor()!r}, device='{self.device}')"
         return super().__repr__()
 
     @property
     def device(self):
-        if hasattr(self, "_max_data_"):
-            if self._buffer is not None:
-                max_device = self._buffer.device
-            else:
-                max_device = self._max_data.device
-            if max_device == CPU():
+        if hasattr(self, "_device"):
+            if self._device == CPU():
                 return torch_max_device_module.cpu()
-            else:
-                return torch.device(f"max_device:{max_device.id}")
+            return torch.device(f"max_device:{self._device.id}")
         return super().device
-
-    @classmethod
-    @no_type_check
-    def _from_buffer(cls, buffer: max.driver.Buffer) -> "TorchMaxTensor":
-        """Wrap a realized contiguous driver buffer (fast path outputs).
-
-        Inlines __new__/__init__ (create + class stamp + the two slots):
-        this constructor runs several hundred times per transformer decode
-        step, so the two extra Python frames are worth skipping.
-        """
-        result = torch._C._acc.create_empty_tensor(
-            tuple(buffer.shape), max_dtype_to_torch(buffer.dtype)
-        )
-        result.__class__ = TorchMaxTensor
-        result._max_data_ = None
-        result._buffer = buffer
-        return result
-
-    @classmethod
-    @no_type_check
-    def _from_max_data(cls, max_data: MaxEagerTensor) -> "TorchMaxTensor":
-        if max_data.real:
-            # The driver buffer's shape/dtype are plain C-level values;
-            # max_data.shape would build graph Shape/Dim wrappers per call.
-            buffer = max_data.driver_tensor
-            shape = tuple(buffer.shape)
-            dtype = max_dtype_to_torch(buffer.dtype)
-        else:
-            shape = tuple(max_data.shape)
-            dtype = max_dtype_to_torch(max_data.dtype)
-        return TorchMaxTensor(shape, dtype=dtype, max_data=max_data)
 
     __torch_function__ = torch._C._disabled_torch_function_impl
 
 
-def get_max_equivalent(func) -> Callable:
-    """Get the MAX equivalent of a torch operation"""
-    from torch_max_backend.torch_compile_backend.compiler import (
-        MAPPING_TORCH_ATEN_TO_MAX,
-    )
+@no_type_check
+def _copy_strided_into(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
+    """dst[coords] = src[coords]; same shape and dtype, any strides.
 
-    if func in MAPPING_TORCH_ATEN_TO_MAX:
-        return MAPPING_TORCH_ATEN_TO_MAX[func]
-    elif (
-        hasattr(func, "overloadpacket")
-        and func.overloadpacket in MAPPING_TORCH_ATEN_TO_MAX
-    ):
-        return MAPPING_TORCH_ATEN_TO_MAX[func.overloadpacket]
-    else:
-        raise NotImplementedError(
-            f"Operation {func} not implemented for TorchMaxTensor"
-        )
+    The shared materialize/copy primitive: powers .contiguous(), copy_ into
+    views, and expand materialization (src strides may contain 0s).
+    """
+    _holder_mod().CopyStrided(
+        dst._ptr,
+        src._ptr,
+        _pad8(dst._shape, 1),
+        _pad8(dst._strides, 0),
+        _pad8(src._strides, 0),
+        dst._itemsize,
+        _ctx_ptr(dst._device),
+    )
 
 
 @functools.cache
@@ -133,13 +244,6 @@ def get_ordered_accelerators():
 
     # Order: GPUs first, then CPU last
     return gpu_accelerators + cpu_accelerators
-
-
-def find_equivalent_torch_device(device: max.driver.Device) -> torch.device:
-    if device.label == "cpu":
-        return torch.device("cpu")
-    elif device.label == "gpu":
-        return torch.device(f"max_device:{device.id}")
 
 
 @functools.cache
