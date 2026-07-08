@@ -1367,7 +1367,7 @@ def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, e
         var_t._ptr,
         gamma_t._ptr,
         beta_t._ptr,
-        (float(eps), channels, inner),
+        (float(eps), channels, inner, a._numel),
         a._dtype.value,
         _ctx_ptr(a._device),
     )
@@ -1985,6 +1985,60 @@ def fast_aten_scaled_dot_product_attention(
         out_shape = (b, h, q_len, head_dim)
         return _view_of(out, out_shape, _row_major_strides(out_shape), out._offset)
     return NOT_HANDLED
+
+
+# ---------------------------------------------------------------------------
+# Softmax (the SDPA SoftmaxRows kernel with scale=1, no causal mask).
+# Non-trailing dims go through a zero-copy transpose + materialize.
+# ---------------------------------------------------------------------------
+
+
+@no_type_check
+def fast_aten__softmax(input, dim, half_to_float=False):
+    t = _t(input)
+    if (
+        t is None
+        or t._numel == 0
+        or t._dtype not in _FLOAT_DTYPES
+        or half_to_float
+        or not isinstance(dim, int)
+    ):
+        return NOT_HANDLED
+    rank = len(t._shape)
+    if rank == 0:
+        return fast_filled((), 1.0, t._dtype, t._device)
+    dim %= rank
+    if dim != rank - 1:
+        # softmax(x, d) = softmax(x.transpose(d, -1), -1).transpose(d, -1);
+        # both transposes are zero-copy, the inner one materializes once.
+        swapped = fast_aten_transpose(t, dim, rank - 1)
+        result = fast_aten__softmax(swapped, rank - 1, half_to_float)
+        if result is NOT_HANDLED:
+            return NOT_HANDLED
+        return fast_aten_transpose(result, dim, rank - 1)
+    a = _tc(t)
+    cols = a._shape[-1]
+    rows = a._numel // cols
+    out = _alloc(a._shape, a._dtype, a._device)
+    eager_kernels.nn_ops.SoftmaxRows(
+        out._ptr,
+        a._ptr,
+        rows,
+        cols,
+        1.0,
+        0,
+        1,
+        a._dtype.value,
+        _ctx_ptr(a._device),
+    )
+    return out
+
+
+@no_type_check
+def fast_aten_softmax(input, dim=-1, dtype=None):
+    if dtype is not None:
+        return NOT_HANDLED
+    return fast_aten__softmax(input, dim, False)
 
 
 # ---------------------------------------------------------------------------
