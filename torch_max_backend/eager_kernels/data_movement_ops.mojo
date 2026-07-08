@@ -22,6 +22,7 @@ from std.sys.info import has_accelerator, size_of
 from std.utils.coord import Coord
 
 from std.algorithm.functional import elementwise
+from std.utils import IndexList
 
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
@@ -29,10 +30,30 @@ from op_utils import (
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
+    _raw_f64,
     _raw_int,
     _raw_ret_none,
     _raw_tuple_int,
 )
+
+# Strided kernels that work on rank-<=8 tensors pad shapes/strides to this
+# rank on the Python side (leading dims of size 1 / stride 0).
+comptime MAX_RANK = 8
+
+# Dtypes ScatterDim dispatches on: it needs the real dtype (a scalar value is
+# cast to it) so element-size dispatch is not enough.
+comptime SCATTER_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.float64,
+    DType.int8,
+    DType.int16,
+    DType.int32,
+    DType.int64,
+    DType.uint8,
+    DType.bool,
+]
 
 
 @always_inline
@@ -742,6 +763,444 @@ def _cast_go(
 
 
 # ---------------------------------------------------------------------------
+# TileCopy: out[coords] = in[coords % in_shape] over a rank-<=8 index space.
+# Materializes aten::repeat: the Python side left-pads the input shape with
+# 1s to the output rank, computes out_shape[d] = padded_in_shape[d] *
+# repeats[d], and hands the (contiguous) input's row-major strides. Broadcast
+# padded dims (in_shape 1) reduce to `coord % 1 == 0`. Layout-only -> element
+# size dispatch.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _tile_copy[
+    dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    out_shape: IndexList[MAX_RANK],
+    in_shape: IndexList[MAX_RANK],
+    in_strides: IndexList[MAX_RANK],
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+    var total = 1
+    for i in range(MAX_RANK):
+        total *= out_shape[i]
+    if total == 0:
+        return
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr, out_shape, in_shape, in_strides)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var rest = i
+        var src_off = 0
+
+        comptime for d in range(MAX_RANK - 1, 0, -1):
+            var coord = rest % out_shape[d]
+            rest = rest // out_shape[d]
+            src_off += (coord % in_shape[d]) * in_strides[d]
+        src_off += (rest % in_shape[0]) * in_strides[0]
+        out_ptr[i] = in_ptr[src_off]
+
+    _parallel_for[func](total, ctx)
+
+
+def _tile_copy_go(
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
+    out_shape_t: PyObjectPtr,
+    in_shape_t: PyObjectPtr,
+    in_strides_t: PyObjectPtr,
+    itemsize_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
+    var out_shape = IndexList[MAX_RANK](1)
+    var in_shape = IndexList[MAX_RANK](1)
+    var in_strides = IndexList[MAX_RANK](0)
+    for i in range(MAX_RANK):
+        out_shape[i] = _raw_tuple_int(out_shape_t, i)
+        in_shape[i] = _raw_tuple_int(in_shape_t, i)
+        in_strides[i] = _raw_tuple_int(in_strides_t, i)
+    var itemsize = _raw_int(itemsize_o)
+    var ctx = _raw_ctx(ctx_ptr)
+
+    if itemsize == 4:
+        _tile_copy[DType.uint32](
+            out_addr, in_addr, out_shape, in_shape, in_strides, ctx
+        )
+    elif itemsize == 2:
+        _tile_copy[DType.uint16](
+            out_addr, in_addr, out_shape, in_shape, in_strides, ctx
+        )
+    elif itemsize == 8:
+        _tile_copy[DType.uint64](
+            out_addr, in_addr, out_shape, in_shape, in_strides, ctx
+        )
+    elif itemsize == 1:
+        _tile_copy[DType.uint8](
+            out_addr, in_addr, out_shape, in_shape, in_strides, ctx
+        )
+    else:
+        raise Error("TileCopy: unsupported element size ", itemsize)
+
+
+# ---------------------------------------------------------------------------
+# TriangularCopy: out = in where the (row, col) is on the kept side of the
+# diagonal, else 0. Implements aten::tril (upper == 0, keep col <= row + diag)
+# and aten::triu (upper == 1, keep col >= row + diag) over a batch of
+# (rows, cols) matrices (batch = numel / (rows * cols)). Both operands are
+# contiguous; copy-or-zero, so element-size dispatch (0 bytes == 0 for every
+# dtype).
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _triangular_copy[
+    dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    batch: Int,
+    rows: Int,
+    cols: Int,
+    diagonal: Int,
+    upper: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+    var total = batch * rows * cols
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var c = i % cols
+        var r = (i // cols) % rows
+        var keep: Bool
+        if upper != 0:
+            keep = c >= r + diagonal
+        else:
+            keep = c <= r + diagonal
+        if keep:
+            out_ptr[i] = in_ptr[i]
+        else:
+            out_ptr[i] = Scalar[dtype](0)
+
+    _parallel_for[func](total, ctx)
+
+
+def _triangular_copy_go(
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
+    batch_o: PyObjectPtr,
+    rows_o: PyObjectPtr,
+    cols_o: PyObjectPtr,
+    diagonal_o: PyObjectPtr,
+    upper_o: PyObjectPtr,
+    itemsize_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
+    var batch = _raw_int(batch_o)
+    var rows = _raw_int(rows_o)
+    var cols = _raw_int(cols_o)
+    var diagonal = _raw_int(diagonal_o)
+    var upper = _raw_int(upper_o)
+    var itemsize = _raw_int(itemsize_o)
+    var ctx = _raw_ctx(ctx_ptr)
+
+    if itemsize == 4:
+        _triangular_copy[DType.uint32](
+            out_addr, in_addr, batch, rows, cols, diagonal, upper, ctx
+        )
+    elif itemsize == 2:
+        _triangular_copy[DType.uint16](
+            out_addr, in_addr, batch, rows, cols, diagonal, upper, ctx
+        )
+    elif itemsize == 8:
+        _triangular_copy[DType.uint64](
+            out_addr, in_addr, batch, rows, cols, diagonal, upper, ctx
+        )
+    elif itemsize == 1:
+        _triangular_copy[DType.uint8](
+            out_addr, in_addr, batch, rows, cols, diagonal, upper, ctx
+        )
+    else:
+        raise Error("TriangularCopy: unsupported element size ", itemsize)
+
+
+# ---------------------------------------------------------------------------
+# GatherRows: out[i] = in[wrap(idx[i // row_len]) * row_len + i % row_len],
+# a gather of whole rows along dim 0 of a contiguous input. row_len =
+# prod(in_shape[1:]); negative indices wrap by adding size0 = in_shape[0].
+# Implements the single-int-index-on-dim-0 case of aten::index.Tensor.
+# Element-size dispatch for the payload, int32/int64 for the index.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _gather_rows[
+    dtype: DType, idx_dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    idx_addr: Int,
+    n_indices: Int,
+    row_len: Int,
+    size0: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+    var idx_ptr = _make_ptr[idx_dtype](idx_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr, idx_ptr)
+    def func[width: Int, alignment: Int = 1](coord: Coord):
+        var i = Int(coord[0].value())
+        var row = Int(idx_ptr[i // row_len])
+        if row < 0:
+            row += size0
+        out_ptr[i] = in_ptr[row * row_len + i % row_len]
+
+    _parallel_for[func](n_indices * row_len, ctx)
+
+
+@always_inline
+def _gather_rows_idx[
+    idx_dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    idx_addr: Int,
+    n_indices: Int,
+    row_len: Int,
+    size0: Int,
+    itemsize: Int,
+    ctx: DeviceContext,
+) raises:
+    if itemsize == 4:
+        _gather_rows[DType.uint32, idx_dtype](
+            out_addr, in_addr, idx_addr, n_indices, row_len, size0, ctx
+        )
+    elif itemsize == 2:
+        _gather_rows[DType.uint16, idx_dtype](
+            out_addr, in_addr, idx_addr, n_indices, row_len, size0, ctx
+        )
+    elif itemsize == 8:
+        _gather_rows[DType.uint64, idx_dtype](
+            out_addr, in_addr, idx_addr, n_indices, row_len, size0, ctx
+        )
+    elif itemsize == 1:
+        _gather_rows[DType.uint8, idx_dtype](
+            out_addr, in_addr, idx_addr, n_indices, row_len, size0, ctx
+        )
+    else:
+        raise Error("GatherRows: unsupported element size ", itemsize)
+
+
+def _gather_rows_go(
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
+    idx_ptr: PyObjectPtr,
+    idx_dtype_o: PyObjectPtr,
+    n_indices_o: PyObjectPtr,
+    row_len_o: PyObjectPtr,
+    size0_o: PyObjectPtr,
+    itemsize_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
+    var idx_addr = _raw_int(idx_ptr)
+    var idx_dtype = _raw_dtype_int(idx_dtype_o)
+    var n_indices = _raw_int(n_indices_o)
+    var row_len = _raw_int(row_len_o)
+    var size0 = _raw_int(size0_o)
+    var itemsize = _raw_int(itemsize_o)
+    var ctx = _raw_ctx(ctx_ptr)
+
+    if idx_dtype == DType.int64:
+        _gather_rows_idx[DType.int64](
+            out_addr,
+            in_addr,
+            idx_addr,
+            n_indices,
+            row_len,
+            size0,
+            itemsize,
+            ctx,
+        )
+    elif idx_dtype == DType.int32:
+        _gather_rows_idx[DType.int32](
+            out_addr,
+            in_addr,
+            idx_addr,
+            n_indices,
+            row_len,
+            size0,
+            itemsize,
+            ctx,
+        )
+    else:
+        raise Error("GatherRows: unsupported index dtype ", idx_dtype)
+
+
+# ---------------------------------------------------------------------------
+# ScatterDim: out[coord with coord[dim] := index[coord]] = src[coord] (or a
+# scalar value). Implements aten::scatter.src / aten::scatter.value over a
+# rank-<=4 index space; `out` is a contiguous clone of self, `index` is
+# int64, and everything is described by explicit strides (padded to rank 4
+# with leading 0). Match torch: no bounds checking, last-write-wins on
+# duplicate targets. Dispatches on dtype (the scalar value is cast to it).
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _scatter_dim[
+    dtype: DType
+](
+    out_addr: Int,
+    index_addr: Int,
+    src_addr: Int,
+    d0: Int,
+    d1: Int,
+    d2: Int,
+    d3: Int,
+    os0: Int,
+    os1: Int,
+    os2: Int,
+    os3: Int,
+    ss0: Int,
+    ss1: Int,
+    ss2: Int,
+    ss3: Int,
+    xs0: Int,
+    xs1: Int,
+    xs2: Int,
+    xs3: Int,
+    dim_padded: Int,
+    is_value: Int,
+    value: Float64,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var index_ptr = _make_ptr[DType.int64](index_addr)
+    var src_ptr = _make_ptr[dtype](src_addr)
+    var scalar = value.cast[dtype]()
+    var total = d0 * d1 * d2 * d3
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, index_ptr, src_ptr, scalar)
+    def func[width: Int, alignment: Int = 1](coord: Coord):
+        var i = Int(coord[0].value())
+        var i3 = i % d3
+        var rest = i // d3
+        var i2 = rest % d2
+        rest = rest // d2
+        var i1 = rest % d1
+        var i0 = rest // d1
+        var target = Int(index_ptr[i0 * xs0 + i1 * xs1 + i2 * xs2 + i3 * xs3])
+        var out_off = i0 * os0 + i1 * os1 + i2 * os2 + i3 * os3
+        # Replace the coordinate along `dim_padded` with the scatter target.
+        if dim_padded == 0:
+            out_off += (target - i0) * os0
+        elif dim_padded == 1:
+            out_off += (target - i1) * os1
+        elif dim_padded == 2:
+            out_off += (target - i2) * os2
+        else:
+            out_off += (target - i3) * os3
+        if is_value != 0:
+            out_ptr[out_off] = scalar
+        else:
+            out_ptr[out_off] = src_ptr[
+                i0 * ss0 + i1 * ss1 + i2 * ss2 + i3 * ss3
+            ]
+
+    _parallel_for[func](total, ctx)
+
+
+def _scatter_dim_go(
+    out_ptr: PyObjectPtr,
+    index_ptr: PyObjectPtr,
+    src_ptr: PyObjectPtr,
+    params: PyObjectPtr,  # (d0..d3, os0..os3, ss0..ss3, xs0..xs3, dim_padded)
+    is_value_o: PyObjectPtr,
+    value_o: PyObjectPtr,
+    dtype_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var out_addr = _raw_int(out_ptr)
+    var index_addr = _raw_int(index_ptr)
+    var src_addr = _raw_int(src_ptr)
+    var d0 = _raw_tuple_int(params, 0)
+    var d1 = _raw_tuple_int(params, 1)
+    var d2 = _raw_tuple_int(params, 2)
+    var d3 = _raw_tuple_int(params, 3)
+    var os0 = _raw_tuple_int(params, 4)
+    var os1 = _raw_tuple_int(params, 5)
+    var os2 = _raw_tuple_int(params, 6)
+    var os3 = _raw_tuple_int(params, 7)
+    var ss0 = _raw_tuple_int(params, 8)
+    var ss1 = _raw_tuple_int(params, 9)
+    var ss2 = _raw_tuple_int(params, 10)
+    var ss3 = _raw_tuple_int(params, 11)
+    var xs0 = _raw_tuple_int(params, 12)
+    var xs1 = _raw_tuple_int(params, 13)
+    var xs2 = _raw_tuple_int(params, 14)
+    var xs3 = _raw_tuple_int(params, 15)
+    var dim_padded = _raw_tuple_int(params, 16)
+    var is_value = _raw_int(is_value_o)
+    var value = _raw_f64(value_o)
+    var dtype = _raw_dtype_int(dtype_o)
+    var ctx = _raw_ctx(ctx_ptr)
+
+    var handled = False
+    comptime for dt in SCATTER_DTYPES:
+        if dtype == dt:
+            _scatter_dim[dt](
+                out_addr,
+                index_addr,
+                src_addr,
+                d0,
+                d1,
+                d2,
+                d3,
+                os0,
+                os1,
+                os2,
+                os3,
+                ss0,
+                ss1,
+                ss2,
+                ss3,
+                xs0,
+                xs1,
+                xs2,
+                xs3,
+                dim_padded,
+                is_value,
+                value,
+                ctx,
+            )
+            handled = True
+    if not handled:
+        raise Error("ScatterDim: unsupported dtype ", dtype)
+
+
+# ---------------------------------------------------------------------------
 # METH_FASTCALL wrappers: raw CPython argument unpacking (no owning
 # PythonObject per argument). Argument types are guaranteed by the internal
 # Python callers; raise sites are unsupported-dtype guards gated upstream.
@@ -828,6 +1287,85 @@ def _cast_dispatcher(
     return _raw_ret_none()
 
 
+def _tile_copy_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _tile_copy_go(
+            args[0], args[1], args[2], args[3], args[4], args[5], args[6]
+        )
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _triangular_copy_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _triangular_copy_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+            args[8],
+        )
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _gather_rows_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _gather_rows_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+            args[8],
+        )
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _scatter_dim_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _scatter_dim_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+        )
+    except:
+        pass
+    return _raw_ret_none()
+
+
 # ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
@@ -869,6 +1407,38 @@ def PyInit_data_movement_ops() abi("C") -> PythonObject:
             _where_select_dispatcher,
             "WhereSelect",
             docstring="out = cond ? a : b (broadcast strides, any dtype)",
+        )
+        b.def_py_c_function(
+            _tile_copy_dispatcher,
+            "TileCopy",
+            docstring=(
+                "out[coords] = in[coords % in_shape] over a rank-8-padded"
+                " index space (aten::repeat; element-size dispatch)"
+            ),
+        )
+        b.def_py_c_function(
+            _triangular_copy_dispatcher,
+            "TriangularCopy",
+            docstring=(
+                "out = in on the kept side of the diagonal, else 0"
+                " (aten::tril/triu; element-size dispatch)"
+            ),
+        )
+        b.def_py_c_function(
+            _gather_rows_dispatcher,
+            "GatherRows",
+            docstring=(
+                "out[i] = in[wrap(idx[i // row_len]) * row_len + i % row_len]"
+                " (gather rows along dim 0; element-size + int32/int64 idx)"
+            ),
+        )
+        b.def_py_c_function(
+            _scatter_dim_dispatcher,
+            "ScatterDim",
+            docstring=(
+                "out[coord with dim := index[coord]] = src[coord] or value"
+                " (aten::scatter.src/value, rank <= 4; dtype dispatch)"
+            ),
         )
         return b.finalize()
     except e:

@@ -1676,6 +1676,282 @@ def fast_aten_cat(tensors, dim=0):
 
 
 # ---------------------------------------------------------------------------
+# Movement tail: stack / repeat / tril / triu / index / scatter /
+# select_scatter / nonzero.
+# ---------------------------------------------------------------------------
+
+# Max tensor rank the strided (rank-8-padded) kernels accept.
+_MAX_RANK = 8
+
+# Dtypes ScatterDim dispatches on (mirrors SCATTER_DTYPES in
+# data_movement_ops.mojo): the scalar value overload casts through Float64.
+_SCATTER_DTYPES = _FLOAT_DTYPES + (
+    DType.float64,
+    DType.int8,
+    DType.int16,
+    DType.int32,
+    DType.int64,
+    DType.uint8,
+    DType.bool,
+)
+
+
+@no_type_check
+def fast_aten_stack(tensors, dim=0):
+    # stack = unsqueeze each input at `dim`, then concatenate along `dim`.
+    # Both helpers normalize `dim` against the SAME (rank + 1) base, so a raw
+    # (possibly negative) `dim` stays consistent between them.
+    if not isinstance(tensors, list | tuple) or len(tensors) == 0:
+        return NOT_HANDLED
+    if not isinstance(dim, int):
+        return NOT_HANDLED
+    unsqueezed = []
+    for x in tensors:
+        u = fast_aten_unsqueeze(x, dim)
+        if u is NOT_HANDLED:
+            return NOT_HANDLED
+        unsqueezed.append(u)
+    return fast_aten_cat(unsqueezed, dim)
+
+
+@no_type_check
+def fast_aten_repeat(input, repeats):
+    t = _tc(input)
+    if t is None or t._dtype not in _COPYABLE_DTYPES:
+        return NOT_HANDLED
+    if not isinstance(repeats, list | tuple):
+        return NOT_HANDLED
+    repeats = list(repeats)
+    if not all(isinstance(r, int) and r >= 0 for r in repeats):
+        return NOT_HANDLED
+    rank = len(t._shape)
+    # torch left-pads the input shape with 1s when len(repeats) > rank; fewer
+    # repeats than dims is invalid.
+    if len(repeats) < rank or len(repeats) > _MAX_RANK:
+        return NOT_HANDLED
+    n_out = len(repeats)
+    padded_shape = (1,) * (n_out - rank) + tuple(t._shape)
+    out_shape = tuple(padded_shape[i] * repeats[i] for i in range(n_out))
+    padded_strides = _row_major_strides(padded_shape)
+    out = _alloc(out_shape, t._dtype, t._device)
+    if out._numel > 0:
+        eager_kernels.data_movement_ops.TileCopy(
+            out._ptr,
+            t._ptr,
+            _pad8(out_shape, 1),
+            _pad8(padded_shape, 1),
+            _pad8(padded_strides, 0),
+            out._itemsize,
+            _ctx_ptr(t._device),
+        )
+    return out
+
+
+@no_type_check
+def _fast_triangular(input, diagonal, upper):
+    if not isinstance(diagonal, int):
+        return NOT_HANDLED
+    t = _tc(input)
+    if t is None or t._dtype not in _COPYABLE_DTYPES:
+        return NOT_HANDLED
+    if len(t._shape) < 2:
+        return NOT_HANDLED
+    out = _alloc(t._shape, t._dtype, t._device)
+    if out._numel > 0:
+        rows = t._shape[-2]
+        cols = t._shape[-1]
+        batch = t._numel // (rows * cols)
+        eager_kernels.data_movement_ops.TriangularCopy(
+            out._ptr,
+            t._ptr,
+            batch,
+            rows,
+            cols,
+            diagonal,
+            upper,
+            out._itemsize,
+            _ctx_ptr(t._device),
+        )
+    return out
+
+
+@no_type_check
+def fast_aten_tril(input, diagonal=0):
+    return _fast_triangular(input, diagonal, 0)
+
+
+@no_type_check
+def fast_aten_triu(input, diagonal=0):
+    return _fast_triangular(input, diagonal, 1)
+
+
+@no_type_check
+def fast_aten_index(input, indices):
+    t = _t(input)
+    if t is None or not isinstance(indices, list | tuple):
+        return NOT_HANDLED
+    non_none = [(i, x) for i, x in enumerate(indices) if x is not None]
+    # Only the single-index-on-dim-0 cases are handled fast.
+    if len(non_none) != 1 or non_none[0][0] != 0:
+        return NOT_HANDLED
+    idx = _t(non_none[0][1])
+    if idx is None or idx._device != t._device:
+        return NOT_HANDLED
+
+    if idx._dtype in (DType.int32, DType.int64):
+        # Gather whole rows along dim 0.
+        src = _tc(t)
+        if src is None or src._dtype not in _COPYABLE_DTYPES or len(src._shape) < 1:
+            return NOT_HANDLED
+        idx_c = _tc(idx)
+        row_len = 1
+        for s in src._shape[1:]:
+            row_len *= s
+        out_shape = tuple(idx_c._shape) + tuple(src._shape[1:])
+        out = _alloc(out_shape, src._dtype, src._device)
+        if out._numel > 0:
+            eager_kernels.data_movement_ops.GatherRows(
+                out._ptr,
+                src._ptr,
+                idx_c._ptr,
+                idx_c._dtype.value,
+                idx_c._numel,
+                row_len,
+                src._shape[0],
+                out._itemsize,
+                _ctx_ptr(src._device),
+            )
+        return out
+
+    if idx._dtype == DType.bool:
+        # Boolean mask: data-dependent output shape -> host bounce (syncs).
+        cpu_self = t._to_cpu_tensor()
+        cpu_indices = tuple(
+            slice(None) if x is None else _t(x)._to_cpu_tensor() for x in indices
+        )
+        result = cpu_self[cpu_indices]
+        return TorchMaxTensor._from_cpu(result, t._device)
+
+    return NOT_HANDLED
+
+
+@no_type_check
+def _fast_scatter(input, dim, index, src, value):
+    a = _t(input)
+    idx = _t(index)
+    if a is None or idx is None or not isinstance(dim, int):
+        return NOT_HANDLED
+    if idx._device != a._device or idx._dtype != DType.int64:
+        return NOT_HANDLED
+    if a._dtype not in _SCATTER_DTYPES:
+        return NOT_HANDLED
+    rank = len(a._shape)
+    if rank == 0 or rank > 4 or not -rank <= dim < rank:
+        return NOT_HANDLED
+    dim %= rank
+    if len(idx._shape) != rank:
+        return NOT_HANDLED
+
+    out = a._materialize_contiguous()  # clone(self)
+    idx_c = _tc(idx)
+
+    is_value = 0
+    value_f = 0.0
+    src_ptr = out._ptr  # unused in value mode; a valid pointer for the kernel
+    src_strides4 = [0, 0, 0, 0]
+    if src is not None:
+        s = _tc(src)
+        if (
+            s is None
+            or s._dtype != a._dtype
+            or s._device != a._device
+            or len(s._shape) != rank
+        ):
+            return NOT_HANDLED
+        src_ptr = s._ptr
+        src_strides4 = [0] * (4 - rank) + list(_row_major_strides(s._shape))
+    else:
+        if isinstance(value, bool):
+            value = int(value)
+        if not isinstance(value, int | float):
+            return NOT_HANDLED
+        is_value = 1
+        if a._dtype == DType.bool:
+            value_f = 1.0 if value != 0 else 0.0
+        else:
+            value_f = float(value)
+
+    dims4 = [1] * (4 - rank) + list(idx_c._shape)
+    out_strides4 = [0] * (4 - rank) + list(out._strides)
+    idx_strides4 = [0] * (4 - rank) + list(idx_c._strides)
+    dim_padded = dim + (4 - rank)
+    params = (
+        tuple(dims4)
+        + tuple(out_strides4)
+        + tuple(src_strides4)
+        + tuple(idx_strides4)
+        + (dim_padded,)
+    )
+    if idx_c._numel > 0:
+        eager_kernels.data_movement_ops.ScatterDim(
+            out._ptr,
+            idx_c._ptr,
+            src_ptr,
+            params,
+            is_value,
+            value_f,
+            a._dtype.value,
+            _ctx_ptr(a._device),
+        )
+    return out
+
+
+@no_type_check
+def fast_aten_scatter_src(input, dim, index, src):
+    return _fast_scatter(input, dim, index, src, None)
+
+
+@no_type_check
+def fast_aten_scatter_value(input, dim, index, value):
+    return _fast_scatter(input, dim, index, None, value)
+
+
+@no_type_check
+def fast_aten_select_scatter(input, src, dim, index):
+    a = _t(input)
+    s = _t(src)
+    if a is None or s is None or not isinstance(dim, int) or not isinstance(index, int):
+        return NOT_HANDLED
+    if s._device != a._device:
+        return NOT_HANDLED
+    out = fast_aten_clone(a)
+    if out is NOT_HANDLED:
+        return NOT_HANDLED
+    view = fast_aten_select(out, dim, index)
+    if view is NOT_HANDLED:
+        return NOT_HANDLED
+    if s._dtype != out._dtype:
+        s = _cast_tensor(s, out._dtype)
+    if tuple(s._shape) != tuple(view._shape):
+        s = fast_aten_expand(s, view._shape)
+        if s is NOT_HANDLED:
+            return NOT_HANDLED
+    _copy_into(view, s)
+    return out
+
+
+@no_type_check
+def fast_aten_nonzero(input):
+    t = _t(input)
+    if t is None:
+        return NOT_HANDLED
+    # Data-dependent output shape -> host bounce (syncs). `.nonzero()` returns
+    # an int64 (N, ndim) tensor in C-order over the input's coordinates.
+    result = t._to_cpu_tensor().nonzero()
+    return TorchMaxTensor._from_cpu(result, t._device)
+
+
+# ---------------------------------------------------------------------------
 # Normalization
 # ---------------------------------------------------------------------------
 
