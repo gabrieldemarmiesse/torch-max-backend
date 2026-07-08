@@ -1,11 +1,17 @@
 # ===----------------------------------------------------------------------=== #
 # Fast eager-mode data-movement kernels for max_device: strided permute
 # copies (transpose/permute materialization), narrow copies (split/slice
-# along one dim), and dtype casts.
+# along one dim), dtype casts, and cond ? a : b selection.
 #
-# Same architecture as elementwise_ops.mojo: Python-visible functions get
-# `max.driver.Buffer` objects plus the device's DeviceContext pointer, and
-# enqueue work on MAX's own device queue (fire and forget, no sync).
+# Raw-pointer convention (see docs/strided_owning_tensors_design.md): every
+# Python-visible function takes raw element-aligned data addresses (ints,
+# storage offset already applied) plus the device's DeviceContext pointer —
+# there is no `max.driver.Buffer` on this side any more. Pure-copy kernels
+# (PermuteCopy/NarrowCopy/NarrowCopyDst) are handed an explicit `itemsize`
+# int (1/2/4/8) computed on the Python side instead of reading a dtype off a
+# buffer; Cast/WhereSelect take the operand dtype(s) as plain ints
+# (`max.dtype.DType.value`) and rebuild the Mojo `DType` via
+# `_raw_dtype_int`.
 # ===----------------------------------------------------------------------=== #
 
 from std.os import abort
@@ -21,36 +27,12 @@ from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 from op_utils import (
     _make_ptr,
-    _raw_addr,
-    _raw_numel,
     _raw_ctx,
-    _raw_dtype,
-    _raw_f64,
+    _raw_dtype_int,
     _raw_int,
     _raw_ret_none,
-    _raw_tuple_f64,
     _raw_tuple_int,
-    _raw_tuple_len,
 )
-
-
-@always_inline
-def _element_size(dtype: DType) raises -> Int:
-    """Element size in bytes; copies dispatch on size, not dtype."""
-    if dtype == DType.float32 or dtype == DType.int32 or dtype == DType.uint32:
-        return 4
-    if (
-        dtype == DType.float16
-        or dtype == DType.bfloat16
-        or dtype == DType.int16
-        or dtype == DType.uint16
-    ):
-        return 2
-    if dtype == DType.float64 or dtype == DType.int64 or dtype == DType.uint64:
-        return 8
-    if dtype == DType.int8 or dtype == DType.uint8 or dtype == DType.bool:
-        return 1
-    raise Error("unsupported dtype for fast copy: " + String(dtype))
 
 
 @always_inline
@@ -111,15 +93,15 @@ def _permute_copy[
 
 
 def _permute_copy_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
     dims: PyObjectPtr,
     strides: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    itemsize_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
     var d0 = _raw_tuple_int(dims, 0)
     var d1 = _raw_tuple_int(dims, 1)
     var d2 = _raw_tuple_int(dims, 2)
@@ -128,22 +110,22 @@ def _permute_copy_go(
     var s1 = _raw_tuple_int(strides, 1)
     var s2 = _raw_tuple_int(strides, 2)
     var s3 = _raw_tuple_int(strides, 3)
-    var ctx = _raw_ctx(device_context_ptr)
+    var itemsize = _raw_int(itemsize_o)
+    var ctx = _raw_ctx(ctx_ptr)
 
-    var size = _element_size(dtype)
-    if size == 4:
+    if itemsize == 4:
         _permute_copy[DType.uint32](
             out_addr, in_addr, d0, d1, d2, d3, s0, s1, s2, s3, ctx
         )
-    elif size == 2:
+    elif itemsize == 2:
         _permute_copy[DType.uint16](
             out_addr, in_addr, d0, d1, d2, d3, s0, s1, s2, s3, ctx
         )
-    elif size == 8:
+    elif itemsize == 8:
         _permute_copy[DType.uint64](
             out_addr, in_addr, d0, d1, d2, d3, s0, s1, s2, s3, ctx
         )
-    elif size == 1:
+    elif itemsize == 1:
         _permute_copy[DType.uint8](
             out_addr, in_addr, d0, d1, d2, d3, s0, s1, s2, s3, ctx
         )
@@ -214,25 +196,25 @@ def _narrow_copy[
 
 
 def _narrow_copy_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
     outer: PyObjectPtr,
     src_stride: PyObjectPtr,
     copy_len: PyObjectPtr,
     src_offset: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    itemsize_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
     var outer_val = _raw_int(outer)
     var src_stride_val = _raw_int(src_stride)
     var copy_len_val = _raw_int(copy_len)
     var src_offset_val = _raw_int(src_offset)
-    var ctx = _raw_ctx(device_context_ptr)
+    var itemsize = _raw_int(itemsize_o)
+    var ctx = _raw_ctx(ctx_ptr)
 
-    var size = _element_size(dtype)
-    if size == 4:
+    if itemsize == 4:
         _narrow_copy[DType.uint32](
             out_addr,
             in_addr,
@@ -242,7 +224,7 @@ def _narrow_copy_go(
             src_offset_val,
             ctx,
         )
-    elif size == 2:
+    elif itemsize == 2:
         _narrow_copy[DType.uint16](
             out_addr,
             in_addr,
@@ -252,7 +234,7 @@ def _narrow_copy_go(
             src_offset_val,
             ctx,
         )
-    elif size == 8:
+    elif itemsize == 8:
         _narrow_copy[DType.uint64](
             out_addr,
             in_addr,
@@ -262,7 +244,7 @@ def _narrow_copy_go(
             src_offset_val,
             ctx,
         )
-    elif size == 1:
+    elif itemsize == 1:
         _narrow_copy[DType.uint8](
             out_addr,
             in_addr,
@@ -335,25 +317,25 @@ def _narrow_copy_dst[
 
 
 def _narrow_copy_dst_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    in_ptr: PyObjectPtr,
     outer: PyObjectPtr,
     dst_stride: PyObjectPtr,
     copy_len: PyObjectPtr,
     dst_offset: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    itemsize_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(in_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
     var outer_val = _raw_int(outer)
     var dst_stride_val = _raw_int(dst_stride)
     var copy_len_val = _raw_int(copy_len)
     var dst_offset_val = _raw_int(dst_offset)
-    var ctx = _raw_ctx(device_context_ptr)
+    var itemsize = _raw_int(itemsize_o)
+    var ctx = _raw_ctx(ctx_ptr)
 
-    var size = _element_size(dtype)
-    if size == 4:
+    if itemsize == 4:
         _narrow_copy_dst[DType.uint32](
             out_addr,
             in_addr,
@@ -363,7 +345,7 @@ def _narrow_copy_dst_go(
             dst_offset_val,
             ctx,
         )
-    elif size == 2:
+    elif itemsize == 2:
         _narrow_copy_dst[DType.uint16](
             out_addr,
             in_addr,
@@ -373,7 +355,7 @@ def _narrow_copy_dst_go(
             dst_offset_val,
             ctx,
         )
-    elif size == 8:
+    elif itemsize == 8:
         _narrow_copy_dst[DType.uint64](
             out_addr,
             in_addr,
@@ -383,7 +365,7 @@ def _narrow_copy_dst_go(
             dst_offset_val,
             ctx,
         )
-    elif size == 1:
+    elif itemsize == 1:
         _narrow_copy_dst[DType.uint8](
             out_addr,
             in_addr,
@@ -522,19 +504,42 @@ def _where_select[
         _parallel_for[func](total, ctx)
 
 
+@always_inline
+def _dtype_size(dtype: DType) raises -> Int:
+    """Element size in bytes for WhereSelect's `dtype` arg.
+
+    `_where_select` is a pure bit-move (SIMD select, no arithmetic), so it
+    only needs to be specialized per byte-size, not per exact dtype.
+    """
+    if dtype == DType.float32 or dtype == DType.int32 or dtype == DType.uint32:
+        return 4
+    if (
+        dtype == DType.float16
+        or dtype == DType.bfloat16
+        or dtype == DType.int16
+        or dtype == DType.uint16
+    ):
+        return 2
+    if dtype == DType.float64 or dtype == DType.int64 or dtype == DType.uint64:
+        return 8
+    if dtype == DType.int8 or dtype == DType.uint8 or dtype == DType.bool:
+        return 1
+    raise Error("unsupported dtype for fast where: " + String(dtype))
+
+
 def _where_select_go(
-    out_buffer: PyObjectPtr,
-    cond_buffer: PyObjectPtr,
-    a_buffer: PyObjectPtr,
-    b_buffer: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    cond_ptr: PyObjectPtr,
+    a_ptr: PyObjectPtr,
+    b_ptr: PyObjectPtr,
     params: PyObjectPtr,  # (d0..d3, cs0..cs3, as0..as3, bs0..bs3)
-    device_context_ptr: PyObjectPtr,
+    dtype_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var dtype = _raw_dtype(out_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var cond_addr = _raw_addr(cond_buffer)
-    var a_addr = _raw_addr(a_buffer)
-    var b_addr = _raw_addr(b_buffer)
+    var out_addr = _raw_int(out_ptr)
+    var cond_addr = _raw_int(cond_ptr)
+    var a_addr = _raw_int(a_ptr)
+    var b_addr = _raw_int(b_ptr)
     var d0 = _raw_tuple_int(params, 0)
     var d1 = _raw_tuple_int(params, 1)
     var d2 = _raw_tuple_int(params, 2)
@@ -552,9 +557,10 @@ def _where_select_go(
     var b_s2 = _raw_tuple_int(params, 14)
     var b_s3 = _raw_tuple_int(params, 15)
     var total = d0 * d1 * d2 * d3
-    var ctx = _raw_ctx(device_context_ptr)
+    var dtype = _raw_dtype_int(dtype_o)
+    var ctx = _raw_ctx(ctx_ptr)
 
-    var size = _element_size(dtype)
+    var size = _dtype_size(dtype)
     if size == 4:
         _where_select[DType.uint32](
             out_addr,
@@ -712,16 +718,19 @@ def _cast_to[
 
 
 def _cast_go(
-    out_buffer: PyObjectPtr,
-    in_buffer: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
+    out_ptr: PyObjectPtr,
+    out_dtype_o: PyObjectPtr,
+    in_ptr: PyObjectPtr,
+    in_dtype_o: PyObjectPtr,
+    numel_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
 ) raises:
-    var src = _raw_dtype(in_buffer)
-    var dst = _raw_dtype(out_buffer)
-    var out_addr = _raw_addr(out_buffer)
-    var in_addr = _raw_addr(in_buffer)
-    var size = _raw_numel(out_buffer)
-    var ctx = _raw_ctx(device_context_ptr)
+    var out_addr = _raw_int(out_ptr)
+    var in_addr = _raw_int(in_ptr)
+    var dst = _raw_dtype_int(out_dtype_o)
+    var src = _raw_dtype_int(in_dtype_o)
+    var size = _raw_int(numel_o)
+    var ctx = _raw_ctx(ctx_ptr)
 
     var handled = False
     comptime for src_dt in CAST_DTYPES:
@@ -745,7 +754,7 @@ def _permute_copy_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _permute_copy_go(args[0], args[1], args[2], args[3], args[4])
+        _permute_copy_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -758,7 +767,14 @@ def _narrow_copy_dispatcher(
 ) abi("C") -> PyObjectPtr:
     try:
         _narrow_copy_go(
-            args[0], args[1], args[2], args[3], args[4], args[5], args[6]
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
         )
     except:
         pass
@@ -772,7 +788,14 @@ def _narrow_copy_dst_dispatcher(
 ) abi("C") -> PyObjectPtr:
     try:
         _narrow_copy_dst_go(
-            args[0], args[1], args[2], args[3], args[4], args[5], args[6]
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
         )
     except:
         pass
@@ -785,7 +808,9 @@ def _where_select_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _where_select_go(args[0], args[1], args[2], args[3], args[4], args[5])
+        _where_select_go(
+            args[0], args[1], args[2], args[3], args[4], args[5], args[6]
+        )
     except:
         pass
     return _raw_ret_none()
@@ -797,7 +822,7 @@ def _cast_dispatcher(
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
     try:
-        _cast_go(args[0], args[1], args[2])
+        _cast_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
