@@ -1396,13 +1396,13 @@ def aten_ceil(input: MaxTensor) -> MaxTensor:
     """
     Ceiling of the input tensor, element-wise.
 
-    For floating-point inputs: Uses a custom Mojo kernel for efficient ceil operation.
+    For floating-point inputs: Uses MAX's native ceil op.
     For integer inputs: Returns it (no mathematical change needed, following PyTorch behavior).
     """
     if input.type.dtype.is_integral():
         return input
     else:
-        return custom_mojo_ops.ceil(input)
+        return F.ceil(input)
 
 
 # clamp(Tensor self, Scalar? min=None, Scalar? max=None) -> Tensor

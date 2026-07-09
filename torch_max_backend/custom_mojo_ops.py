@@ -96,22 +96,6 @@ def bitwise_xor_scalar(input: MaxTensor, other: Scalar) -> MaxTensor:
     return bitwise_xor(input, _scalar_to_tensor(input, other))
 
 
-def ceil(input: MaxTensor) -> MaxTensor:
-    """
-    Custom Mojo kernel for ceil operation.
-    """
-
-    return F.custom(
-        name="ceil",
-        device=input.device,
-        values=[input],
-        out_types=[
-            TensorType(dtype=input.dtype, shape=input.shape, device=input.device)
-        ],
-        custom_extensions=torch_max_backend.torch_compile_backend.compiler.paths_to_mojo_kernels,
-    )[0]
-
-
 def gelu_backward(
     grad_output: MaxTensor, input: MaxTensor, *, approximate: str = "none"
 ) -> MaxTensor:
