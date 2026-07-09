@@ -8,6 +8,7 @@ docs/strided_owning_tensors_design.md.
 """
 
 import functools
+import math
 from collections.abc import Callable
 from typing import no_type_check
 
@@ -519,14 +520,54 @@ def _host_arange_tensor(start, end, step, dtype: torch.dtype | None) -> torch.Te
     return torch.arange(start, end, step, dtype=dtype)
 
 
+@no_type_check
+def _device_arange(start, end, step, dtype: torch.dtype | None, device):
+    """torch.arange computed by a device kernel, or None to use the host
+    path. HF generation loops call torch.arange(..., device=...) every
+    step; the host path costs a blocking H2D copy (full queue drain) per
+    call, so the common numeric cases run on device instead."""
+    for v in (start, end, step):
+        # bool is an int subclass; torch treats it as 0/1 here.
+        if not isinstance(v, int | float):
+            return None
+        if isinstance(v, float) and not math.isfinite(v):
+            return None
+        if abs(v) > _MAX_EXACT_F64_INT:
+            # Values ride through the kernel's Float64 math.
+            return None
+    if step == 0:
+        return None  # host path raises torch's own error
+    if dtype is None:
+        all_int = all(isinstance(v, int) for v in (start, end, step))
+        dtype = torch.int64 if all_int else torch.get_default_dtype()
+    try:
+        max_dtype = torch_dtype_to_max(dtype)
+    except (KeyError, ValueError):
+        return None
+    if isinstance(start, int) and isinstance(end, int) and isinstance(step, int):
+        numel = max(0, -(-(end - start) // step))
+    else:
+        numel = max(0, math.ceil((float(end) - float(start)) / float(step)))
+    return _fast().fast_arange(
+        numel, start, step, max_dtype, find_equivalent_max_device(device)
+    )
+
+
+# fast_arange computes values as start + i*step in Float64.
+_MAX_EXACT_F64_INT = 2**53
+
+
 @register_aten_op("aten::arange")
 @no_type_check
 def max_device_arange(
     start, end=None, step=1, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMaxTensor:
-    # Build on the host with exact torch semantics, then one H2D copy.
     if end is None:
         start, end = 0, start
+    result = _device_arange(start, end, step, dtype, device)
+    if result is not None:
+        return result
+    # Build on the host with exact torch semantics, then one H2D copy.
     cpu = _host_arange_tensor(start, end, step, dtype)
     return TorchMaxTensor._from_cpu(cpu, find_equivalent_max_device(device))
 
@@ -536,8 +577,11 @@ def max_device_arange(
 def max_device_arange_start_out(start, end, step=1, *, out) -> TorchMaxTensor:
     # torch.arange(start, end, step, device=...) dispatches to the out
     # variant with a pre-allocated `out` of the right size and dtype.
-    cpu = _host_arange_tensor(start, end, step, max_dtype_to_torch_dtype(out._dtype))
-    staged = TorchMaxTensor._from_cpu(cpu, out._device)
+    torch_dtype = max_dtype_to_torch_dtype(out._dtype)
+    staged = _device_arange(start, end, step, torch_dtype, out.device)
+    if staged is None:
+        cpu = _host_arange_tensor(start, end, step, torch_dtype)
+        staged = TorchMaxTensor._from_cpu(cpu, out._device)
     if tuple(staged._shape) == tuple(out._shape):
         _copy_into_tensor(out, staged)
     else:

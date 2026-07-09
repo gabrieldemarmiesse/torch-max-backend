@@ -199,7 +199,13 @@ def copy_d2d(
     src_ptr: PythonObject,
     nbytes: PythonObject,
 ) raises:
-    """Device-to-device copy on one context. Stream-ordered, no sync."""
+    """Device-to-device copy on one context.
+
+    Stream-ordered with no sync on GPU. The CPU device runs copies on a
+    worker pool that is NOT ordered with kernel execution, so there the
+    copy must complete before returning or a later kernel writing the same
+    buffer can be overwritten by it (seen as select_scatter flakes under
+    parallel test load)."""
     var n = Int(py=nbytes)
     if n == 0:
         return
@@ -207,6 +213,8 @@ def copy_d2d(
     var dst = _wrap_raw(ctx, Int(py=dst_ptr), n)
     var src = _wrap_raw(ctx, Int(py=src_ptr), n)
     dst.enqueue_copy_from(src)
+    if ctx.api() == "cpu":
+        ctx.synchronize()
 
 
 def synchronize(ctx_ptr: PythonObject) raises:

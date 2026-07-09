@@ -707,6 +707,74 @@ def _fill_go(
 
 
 # ---------------------------------------------------------------------------
+# Arange: out[i] = start + i * step, computed in float64 (exact for the
+# integer ranges torch produces up to 2^53; the Python caller guards the
+# rest) then cast to the buffer dtype. Runs on device so torch.arange on
+# max_device never round-trips through a host tensor + blocking H2D copy.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _arange[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutUntrackedOrigin],
+    start: Float64,
+    step: Float64,
+    size: Int,
+    ctx: DeviceContext,
+) raises:
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, start, step)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        out_ptr[i] = (start + Float64(i) * step).cast[dtype]()
+
+    if ctx.api() == "cpu":
+        elementwise[func, simd_width=1](Coord(size), ctx)
+    else:
+        comptime if has_accelerator():
+            elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
+
+def _arange_go(
+    out_ptr: PyObjectPtr,
+    start: PyObjectPtr,
+    step: PyObjectPtr,
+    numel: PyObjectPtr,
+    dtype_val: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var out_addr = _raw_int(out_ptr)
+    var start_val = _raw_f64(start)
+    var step_val = _raw_f64(step)
+    var size = _raw_int(numel)
+    var dtype = _raw_dtype_int(dtype_val)
+    var ctx = _raw_ctx(ctx_ptr)
+
+    var handled = False
+    comptime for dt in [
+        DType.float32,
+        DType.float16,
+        DType.bfloat16,
+        DType.float64,
+        DType.int64,
+        DType.int32,
+        DType.int16,
+        DType.int8,
+        DType.uint8,
+    ]:
+        if dtype == dt:
+            _arange[dt](_make_ptr[dt](out_addr), start_val, step_val, size, ctx)
+            handled = True
+    if not handled:
+        abort(String("unsupported dtype for fast arange: ", dtype))
+
+
+# ---------------------------------------------------------------------------
 # METH_FASTCALL wrappers: raw CPython argument unpacking (no owning
 # PythonObject per argument). Argument types are guaranteed by the internal
 # Python callers in aten_fast.py; errors cannot cross the C ABI, and the
@@ -795,6 +863,18 @@ def _fill_dispatcher(
 ) abi("C") -> PyObjectPtr:
     try:
         _fill_go(args[0], args[1], args[2], args[3], args[4])
+    except:
+        pass
+    return _raw_ret_none()
+
+
+def _arange_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _arange_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
         pass
     return _raw_ret_none()
@@ -1008,6 +1088,11 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
             _fill_dispatcher,
             "Fill",
             docstring="out[i] = value (contiguous, any dtype)",
+        )
+        b.def_py_c_function(
+            _arange_dispatcher,
+            "Arange",
+            docstring="out[i] = start + i * step (contiguous, int/float)",
         )
         return b.finalize()
     except e:

@@ -168,6 +168,9 @@ class TorchMaxTensor(torch.Tensor):
             t = t.contiguous()
         dtype = torch_dtype_to_max(t.dtype)
         nbytes = t.numel() * t.element_size()
+        if nbytes == 0:
+            # Nothing to transfer; skip alloc_from_host's full queue drain.
+            return cls._alloc(tuple(t.shape), dtype, device)
         holder, ptr = _holder_mod().alloc_from_host(
             _ctx_ptr(device), t.data_ptr(), nbytes
         )

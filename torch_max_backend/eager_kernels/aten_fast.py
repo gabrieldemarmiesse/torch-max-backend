@@ -1629,6 +1629,12 @@ def fast_aten_clone(input, *, memory_format=None):
     t = _t(input)
     if t is None:
         return NOT_HANDLED
+    if t._is_contiguous:
+        # Straight D2D memcpy; the strided gather kernel below costs ~2x
+        # the bandwidth (per-element index math on 50k-column logits).
+        out = _alloc(t._shape, t._dtype, t._device)
+        _copy_into(out, t)
+        return out
     return t._materialize_contiguous()
 
 
@@ -1651,12 +1657,12 @@ def fast_aten_cat(tensors, dim=0):
     real = [x for x in tensors if not _is_legacy_empty(x)]
     if not real or not isinstance(dim, int):
         return NOT_HANDLED
-    ins = [_tc(x) for x in real]
+    ins = [_t(x) for x in real]
     first = ins[0]
     if first is None or first._dtype not in _COPYABLE_DTYPES:
         return NOT_HANDLED
     rank = len(first._shape)
-    if rank == 0 or not -rank <= dim < rank:
+    if rank == 0 or not -rank <= dim < rank or rank > _MAX_RANK:
         return NOT_HANDLED
     dim %= rank
     for b in ins:
@@ -1679,16 +1685,25 @@ def fast_aten_cat(tensors, dim=0):
     for b in ins:
         copy_len = b._shape[dim] * inner
         if copy_len > 0 and outer > 0:
-            eager_kernels.data_movement_ops.NarrowCopyDst(
-                out._ptr,
-                b._ptr,
-                outer,
-                dst_stride,
-                copy_len,
-                offset,
-                out._itemsize,
-                ctx,
-            )
+            if b._is_contiguous:
+                eager_kernels.data_movement_ops.NarrowCopyDst(
+                    out._ptr,
+                    b._ptr,
+                    outer,
+                    dst_stride,
+                    copy_len,
+                    offset,
+                    out._itemsize,
+                    ctx,
+                )
+            else:
+                # Strided input (e.g. the new-token K/V head-transpose in a
+                # KV-cache append): gather it straight into its output slot
+                # instead of materializing a contiguous copy first. The slot
+                # is out[..., pos:pos+len, ...]: same strides as out, offset
+                # pos * out_strides[dim] == the accumulated flat offset.
+                slot = _view_of(out, b._shape, out._strides, offset)
+                _copy_strided_into(slot, b)
         offset += copy_len
     return out
 
@@ -3160,7 +3175,7 @@ def fast_aten_scaled_dot_product_attention(
     scale=None,
     enable_gqa=False,
 ):
-    q = _tc(query)
+    q = _t(query)
     k = _tc(key)
     v = _tc(value)
     if (
@@ -3190,20 +3205,33 @@ def fast_aten_scaled_dot_product_attention(
             and head_dim % 4 == 0
             and head_dim <= 256
             and kv_len <= 4096
+            and q._strides[3] == 1
         ):
             # Decode step: one fused kernel instead of bmm+softmax+bmm
             # (single launch, no scratch buffers, coalesced K/V reads).
+            # q reads through its (batch, head) strides, so the per-head
+            # transpose view of the fused qkv projection is NOT
+            # materialized first.
             out = _alloc((b, h, 1, head_dim), q._dtype, q._device)
             eager_kernels.nn_ops.AttnDecode(
                 out._ptr,
                 q._ptr,
                 k._ptr,
                 v._ptr,
-                (b * h, kv_len, head_dim, float(scale_val)),
+                (
+                    b * h,
+                    kv_len,
+                    head_dim,
+                    float(scale_val),
+                    h,
+                    q._strides[0],
+                    q._strides[1],
+                ),
                 dtype_val,
                 ctx,
             )
             return out
+        q = q if q._is_contiguous else q._materialize_contiguous()
         scores = _alloc((b * h, q_len, kv_len), q._dtype, q._device)
         # scores = q @ k^T (transpose_b=1)
         eager_kernels.matmul_ops.Bmm(
@@ -3349,6 +3377,34 @@ def fast_filled(shape, value, dtype: DType, device):
     if out._numel > 0:
         eager_kernels.elementwise_ops.Fill(
             out._ptr, float(value), out._numel, dtype.value, _ctx_ptr(device)
+        )
+    return out
+
+
+# What the Arange kernel dispatches on (_FILL_DTYPES minus bool, which
+# torch.arange rejects anyway).
+_ARANGE_DTYPES = _FILL_DTYPES[:-1]
+
+
+@no_type_check
+def fast_arange(numel, start, step, dtype: DType, device):
+    """A 1-D TorchMaxTensor holding start + i*step (device kernel), or None.
+
+    The caller resolves torch's arange semantics (numel, dtype); values
+    ride through the kernel's Float64 math, so anything beyond exact-f64
+    integer range must not reach here.
+    """
+    if dtype not in _ARANGE_DTYPES:
+        return None
+    out = _alloc((numel,), dtype, device)
+    if numel > 0:
+        eager_kernels.elementwise_ops.Arange(
+            out._ptr,
+            float(start),
+            float(step),
+            numel,
+            dtype.value,
+            _ctx_ptr(device),
         )
     return out
 

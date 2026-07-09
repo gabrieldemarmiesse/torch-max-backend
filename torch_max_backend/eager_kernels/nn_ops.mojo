@@ -576,16 +576,24 @@ def _attn_decode_kernel[
     kv_len: Int,
     head_dim: Int,
     scale: Float32,
+    heads: Int,
+    q_b_stride: Int,
+    q_h_stride: Int,
 ):
-    """q/out are (BH, 1, head_dim); k/v are (BH, kv_len, head_dim), all
-    contiguous. Scores for the block's row are staged in shared memory
+    """out is (BH, 1, head_dim) contiguous; k/v are (BH, kv_len, head_dim)
+    contiguous. q is (B, H, 1, head_dim) with unit stride in head_dim but
+    arbitrary batch/head strides (q_b_stride/q_h_stride, in elements), so
+    the per-head transpose view of a fused qkv projection reads in place —
+    q is staged through shared memory once per block, so nothing else needs
+    it contiguous. Scores for the block's row are staged in shared memory
     (hence the ATTN_MAX_KV cap), softmax uses the same f32 max/sum tree
     reductions as _softmax_rows_block_kernel, and the V pass has lane d
     accumulate output element d so V reads coalesce across lanes."""
     comptime vec_align = 4 * size_of[dtype]()
     var bh = block_idx.x
     var tid = thread_idx.x
-    var q_base = bh * head_dim
+    var out_base = bh * head_dim
+    var q_base = (bh // heads) * q_b_stride + (bh % heads) * q_h_stride
     var kv_base = bh * kv_len * head_dim
 
     var q_smem = stack_allocation[
@@ -658,7 +666,7 @@ def _attn_decode_kernel[
                 s_smem[j]
                 * v_ptr[kv_base + j * head_dim + d].cast[DType.float32]()
             )
-        out_ptr[q_base + d] = (acc * inv_denom).cast[dtype]()
+        out_ptr[out_base + d] = (acc * inv_denom).cast[dtype]()
 
 
 @always_inline
@@ -673,6 +681,9 @@ def _attn_decode_cpu[
     kv_len: Int,
     head_dim: Int,
     scale: Float32,
+    heads: Int,
+    q_b_stride: Int,
+    q_h_stride: Int,
     ctx: DeviceContext,
 ) raises:
     """Same math as `_attn_decode_kernel`, one sequential task per (batch *
@@ -692,7 +703,8 @@ def _attn_decode_cpu[
     @__copy_capture(out_ptr, q_ptr, k_ptr, v_ptr)
     def func[width: Int, alignment: Int = 1](idx: Coord):
         var i = Int(idx[0].value())
-        var q_base = i * head_dim
+        var out_base = i * head_dim
+        var q_base = (i // heads) * q_b_stride + (i % heads) * q_h_stride
         var kv_base = i * kv_len * head_dim
 
         var m = Float32.MIN
@@ -728,7 +740,7 @@ def _attn_decode_cpu[
                 acc_out[d] += p * v_ptr[vrow + d].cast[DType.float32]()
 
         for d in range(head_dim):
-            out_ptr[q_base + d] = (acc_out[d] / denom).cast[dtype]()
+            out_ptr[out_base + d] = (acc_out[d] / denom).cast[dtype]()
         acc_out.free()
 
     _parallel_for[func](bh, ctx)
@@ -746,11 +758,25 @@ def _attn_decode[
     kv_len: Int,
     head_dim: Int,
     scale: Float32,
+    heads: Int,
+    q_b_stride: Int,
+    q_h_stride: Int,
     ctx: DeviceContext,
 ) raises:
     if ctx.api() == "cpu":
         _attn_decode_cpu[dtype](
-            out_addr, q_addr, k_addr, v_addr, bh, kv_len, head_dim, scale, ctx
+            out_addr,
+            q_addr,
+            k_addr,
+            v_addr,
+            bh,
+            kv_len,
+            head_dim,
+            scale,
+            heads,
+            q_b_stride,
+            q_h_stride,
+            ctx,
         )
         return
     comptime if has_accelerator():
@@ -768,6 +794,9 @@ def _attn_decode[
             kv_len,
             head_dim,
             scale,
+            heads,
+            q_b_stride,
+            q_h_stride,
         )
     else:
         raise Error("no GPU accelerator available at compile time")
@@ -778,7 +807,7 @@ def _attn_decode_go(
     q_ptr_obj: PyObjectPtr,
     k_ptr_obj: PyObjectPtr,
     v_ptr_obj: PyObjectPtr,
-    # (bh, kv_len, head_dim, scale)
+    # (bh, kv_len, head_dim, scale, heads, q_b_stride, q_h_stride)
     params: PyObjectPtr,
     dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
@@ -792,6 +821,9 @@ def _attn_decode_go(
     var kv_len = _raw_tuple_int(params, 1)
     var head_dim = _raw_tuple_int(params, 2)
     var scale = Float32(_raw_tuple_f64(params, 3))
+    var heads = _raw_tuple_int(params, 4)
+    var q_b_stride = _raw_tuple_int(params, 5)
+    var q_h_stride = _raw_tuple_int(params, 6)
     var ctx = _raw_ctx(device_context_ptr)
 
     # The GPU kernel stages scores/Q in fixed-size shared memory; the CPU
@@ -813,6 +845,9 @@ def _attn_decode_go(
                 kv_len,
                 head_dim,
                 scale,
+                heads,
+                q_b_stride,
+                q_h_stride,
                 ctx,
             )
             handled = True
