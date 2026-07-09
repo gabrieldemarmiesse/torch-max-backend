@@ -40,8 +40,11 @@ from std.algorithm.functional import elementwise, parallelize
 from layout import TileTensor, row_major
 
 from linalg.bmm import batched_matmul
+from linalg.gemv import gemv_gpu
 from linalg.matmul import matmul as cpu_lib_matmul
 from linalg.matmul.vendor.blas import matmul as vendor_matmul
+
+from std.gpu.primitives.grid_controls import PDLLevel
 
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
@@ -1358,6 +1361,74 @@ def _gemm_transb_dispatch[
 
 
 # ---------------------------------------------------------------------------
+# Single-token decode GEMV: modular's linalg.gemv.gemv_gpu for the m == 1,
+# batch == 1 slice (both transpose_b orientations). Benchmarked equal-or-
+# faster than our smallm kernel on every decode shape (f32/f16/bf16, aligned
+# and unaligned k, tb=0 and tb=1), so it replaces smallm for m == 1. gemv's
+# fast GEMV_SPLIT_K path fires for m==1 && transpose_b && dtype in
+# {bf16, f16, fp8} && k % simd_width == 0; other cases take its GEMV_KERNEL /
+# GEVM_KERNEL, which are still a single well-coalesced launch (vs our
+# split-K's buffer alloc + reduce), hence the consistent win.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _gemv_enqueue[
+    dtype: DType, transpose_b: Bool
+](
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    ctx: DeviceContext,
+) raises:
+    comptime if has_accelerator():
+        var c_ptr = _make_ptr[dtype](c_addr).as_unsafe_any_origin()
+        var a_ptr = (
+            _make_ptr[dtype](a_addr).as_unsafe_any_origin().as_immutable()
+        )
+        var b_ptr = (
+            _make_ptr[dtype](b_addr).as_unsafe_any_origin().as_immutable()
+        )
+        var c = TileTensor(c_ptr, row_major(m, n))
+        var a = TileTensor(a_ptr, row_major(m, k))
+        comptime if transpose_b:
+            var b = TileTensor(b_ptr, row_major(n, k))
+            gemv_gpu[transpose_b=True, pdl_level=PDLLevel.OFF](c, a, b, ctx)
+        else:
+            var b = TileTensor(b_ptr, row_major(k, n))
+            gemv_gpu[transpose_b=False, pdl_level=PDLLevel.OFF](c, a, b, ctx)
+    else:
+        raise Error("no GPU accelerator available at compile time")
+
+
+@always_inline
+def _gemv_dtype_dispatch(
+    dtype: DType,
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    transpose_b: Int,
+    ctx: DeviceContext,
+) raises:
+    var handled = False
+    comptime for dt in FLOAT_DTYPES:
+        if dtype == dt:
+            if transpose_b != 0:
+                _gemv_enqueue[dt, True](c_addr, a_addr, b_addr, m, n, k, ctx)
+            else:
+                _gemv_enqueue[dt, False](c_addr, a_addr, b_addr, m, n, k, ctx)
+            handled = True
+    if not handled:
+        raise Error("unsupported dtype for gemv: " + String(dtype))
+
+
+# ---------------------------------------------------------------------------
 # Tuning entry point (float32 only): run one GEMM with an explicit tile
 # config + split-K chunk floor, selected at runtime. Used by offline sweeps
 # to pick the dispatch configs; not called by the backend.
@@ -2166,6 +2237,19 @@ def _matmul_go(
         )
         return
 
+    # Single-token (m == 1) decode GEMV: modular's linalg.gemv.gemv_gpu is a
+    # single-launch, well-coalesced kernel that beats our smallm split-K path
+    # on every decode shape (2-3x for f32, 6-18x for bf16/f16 where our
+    # split-K is gated off). Zero-offset calls only: linear/mm always, and
+    # also a grouped conv's first group (s=0, g=0), which is safe because
+    # that sub-block is contiguous at the base pointers. Nonzero offsets
+    # keep the offset-aware GEMM path.
+    if m == 1 and c_off == 0 and a_off == 0 and b_off == 0:
+        _gemv_dtype_dispatch(
+            dtype, c_addr, a_addr, b_addr, m, n, k, transpose_b, ctx
+        )
+        return
+
     _gemm_dtype_dispatch(
         dtype,
         c_addr,
@@ -2468,6 +2552,19 @@ def _matmul_bias_go(
             bias_addr,
             ctx,
         )
+        return
+
+    # Single-token (m == 1) decode: gemv_gpu + row-broadcast bias. gemv beats
+    # our smallm split-K path on every decode shape; the bias add is the same
+    # cheap epilogue either way. No unsupported-dtype raise needed here:
+    # _gemv_dtype_dispatch already raised for anything outside FLOAT_DTYPES.
+    if m == 1:
+        _gemv_dtype_dispatch(
+            dtype, c_addr, a_addr, b_addr, m, n, k, transpose_b, ctx
+        )
+        comptime for dt in FLOAT_DTYPES:
+            if dtype == dt:
+                _bias_add_row[dt](c_addr, bias_addr, m * n, n, ctx)
         return
 
     # Fused-epilogue path: the float32 pipe3 tile kernels add the bias in

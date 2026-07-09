@@ -370,6 +370,21 @@ def test_fast_mm_degenerate_dims(max_device, dtype):
     torch.testing.assert_close(dev3, ref3, atol=5e-2, rtol=5e-2)
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_fast_linear_single_token(max_device, dtype):
+    # m == 1 with bias: the decode-step GEMV route (on GPU this is
+    # modular's gemv_gpu — GEMV_SPLIT_K for f16/bf16 aligned-k — plus the
+    # row-broadcast bias epilogue).
+    x = torch.randn(1, 768).to(dtype)
+    w = torch.randn(96, 768).to(dtype)
+    b = torch.randn(96).to(dtype)
+    dev = torch.nn.functional.linear(
+        x.to(max_device), w.to(max_device), b.to(max_device)
+    ).cpu()
+    ref = (x.float() @ w.float().t() + b.float()).to(dtype)
+    torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 def test_fast_linear_out_features_one(max_device, dtype):
     # out_features == 1 -> transposed-B GEMM with n == 1, plus bias.
