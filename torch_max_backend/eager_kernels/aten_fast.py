@@ -3403,12 +3403,7 @@ def fast_arange(numel, start, step, dtype: DType, device):
     out = _alloc((numel,), dtype, device)
     if numel > 0:
         eager_kernels.elementwise_ops.Arange(
-            out._ptr,
-            float(start),
-            float(step),
-            numel,
-            dtype.value,
-            _ctx_ptr(device),
+            out._ptr, float(start), float(step), numel, dtype.value, _ctx_ptr(device)
         )
     return out
 

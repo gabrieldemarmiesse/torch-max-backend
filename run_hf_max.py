@@ -46,7 +46,9 @@ def _compare(model, inputs, extract):
     )
 
     torch.testing.assert_close(out, ref, atol=ATOL, rtol=RTOL)
-    return f"shape {tuple(out.shape)}, max_abs={max_abs:.2e}, argmax_match={argmax_match}"
+    return (
+        f"shape {tuple(out.shape)}, max_abs={max_abs:.2e}, argmax_match={argmax_match}"
+    )
 
 
 def run_bert():

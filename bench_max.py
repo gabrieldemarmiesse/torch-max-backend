@@ -55,7 +55,9 @@ def _load_bert():
 
     tok = AutoTokenizer.from_pretrained("bert-base-uncased")
     m = AutoModel.from_pretrained("bert-base-uncased")
-    return m, dict(tok("Hello world, this is a benchmark sentence.", return_tensors="pt"))
+    return m, dict(
+        tok("Hello world, this is a benchmark sentence.", return_tensors="pt")
+    )
 
 
 def _load_gpt2():
