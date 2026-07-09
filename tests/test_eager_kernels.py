@@ -389,11 +389,14 @@ def test_fast_conv2d_batched_falls_back_correctly(max_gpu):
 
 
 @pytest.mark.parametrize("is_causal", [True, False])
-@pytest.mark.parametrize("kv_len", [6, 10])
-def test_fast_sdpa(max_gpu, is_causal, kv_len):
-    q = torch.randn(1, 12, 6, 64)
-    k = torch.randn(1, 12, kv_len, 64)
-    v = torch.randn(1, 12, kv_len, 64)
+# kv_len <= 32 exercises the library softmax's warp kernel, kv_len=64 the
+# online/block kernel.
+@pytest.mark.parametrize("kv_len", [6, 10, 64])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_fast_sdpa(max_gpu, is_causal, kv_len, dtype):
+    q = torch.randn(1, 12, 6, 64, dtype=dtype)
+    k = torch.randn(1, 12, kv_len, 64, dtype=dtype)
+    v = torch.randn(1, 12, kv_len, 64, dtype=dtype)
     dev = torch.nn.functional.scaled_dot_product_attention(
         q.to(max_gpu), k.to(max_gpu), v.to(max_gpu), is_causal=is_causal
     ).cpu()

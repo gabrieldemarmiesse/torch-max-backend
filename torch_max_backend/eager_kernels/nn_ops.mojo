@@ -11,9 +11,10 @@
 # Most kernels here are written as a parallel-for over independent output
 # elements or rows (`elementwise` with an inner sequential loop), so the same
 # code runs on CPU and GPU with fully dynamic shapes. The row-reduction ops
-# (layer norm, softmax, argmax/max) additionally have explicit GPU kernels
-# that launch one thread block per row: their row counts are far too small
-# (batch * seq_len) for a thread-per-row launch to fill the GPU.
+# (layer norm, argmax/max) additionally have explicit GPU kernels that
+# launch one thread block per row: their row counts are far too small
+# (batch * seq_len) for a thread-per-row launch to fill the GPU. Row softmax
+# instead delegates its GPU path to modular's nn.softmax grid-stride kernels.
 # ===----------------------------------------------------------------------=== #
 
 from std.builtin.simd_size import SIMDSize
@@ -39,6 +40,9 @@ from std.algorithm.functional import elementwise
 from std.algorithm.reduction import mean
 from std.algorithm.reduction import max as reduce_max
 from std.algorithm.reduction import min as reduce_min
+
+from layout import TileTensor, row_major
+from nn.softmax import softmax
 
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
@@ -394,83 +398,18 @@ def _layer_norm_go(
 # (query index r % q_len) only attends to columns j <= r % q_len — the
 # top-left-aligned tril(ones(L, S)) mask that torch's sdpa is_causal=True
 # specifies; masked columns get probability 0.
+#
+# The GPU path delegates to modular's `nn.softmax.softmax`, which runs an
+# online single-pass kernel (2 input reads + 1 write) — less HBM traffic than
+# a hand-written 4-pass block kernel — and a warp-shuffle kernel for short
+# rows (cols <= WARP_SIZE: 32 NVIDIA, 64 AMD). `scale` and the causal mask
+# are folded into the input lambda: the value is read and scaled in float32
+# (for scale == 1 the round-trip back to `dtype` is exact), and masked
+# columns are fed as -inf so their softmax weight is exactly 0, matching the
+# CPU branch below. Because
+# `allowed = min(cols, r % q_len + 1) >= 1`, no causal row is ever fully
+# masked. The CPU MAX device keeps the explicit per-row loop below.
 # ---------------------------------------------------------------------------
-
-
-@__llvm_metadata(
-    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(ROWRED_THREADS))
-)
-@__name(t"softmax_rows_block_{dtype}")
-def _softmax_rows_block_kernel[
-    dtype: DType
-](
-    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
-    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
-    cols: Int,
-    scale: Float32,
-    causal: Int,
-    q_len: Int,
-):
-    """One block per row (grid.x = rows); strided lanes plus shared-memory
-    tree reductions for the row max and the exp sum. Same numerics as the
-    CPU path: everything in float32, exp evaluated against the true row
-    max, one final cast per element."""
-    var r = block_idx.x
-    var tid = thread_idx.x
-    var base = r * cols
-    var allowed = cols
-    if causal != 0:
-        allowed = min(cols, Int(r) % q_len + 1)
-
-    var red = stack_allocation[
-        ROWRED_THREADS, DType.float32, address_space=AddressSpace.SHARED
-    ]()
-    var bcast = stack_allocation[
-        2, DType.float32, address_space=AddressSpace.SHARED
-    ]()
-
-    var m = Float32.MIN
-    for j in range(tid, allowed, ROWRED_THREADS):
-        var x = in_ptr[base + j].cast[DType.float32]() * scale
-        if x > m:
-            m = x
-    red[tid] = m
-    barrier()
-    var stride = ROWRED_THREADS // 2
-    for _ in range(ROWRED_STAGES):
-        if tid < stride:
-            if red[tid + stride] > red[tid]:
-                red[tid] = red[tid + stride]
-        barrier()
-        stride //= 2
-    if tid == 0:
-        bcast[0] = red[0]
-    barrier()
-    m = bcast[0]
-
-    var s = Float32(0)
-    for j in range(tid, allowed, ROWRED_THREADS):
-        var x = in_ptr[base + j].cast[DType.float32]() * scale
-        s += exp(x - m)
-    red[tid] = s
-    barrier()
-    stride = ROWRED_THREADS // 2
-    for _ in range(ROWRED_STAGES):
-        if tid < stride:
-            red[tid] += red[tid + stride]
-        barrier()
-        stride //= 2
-    if tid == 0:
-        bcast[1] = red[0]
-    barrier()
-    var denom = bcast[1]
-
-    for j in range(tid, cols, ROWRED_THREADS):
-        if j < allowed:
-            var x = in_ptr[base + j].cast[DType.float32]() * scale
-            out_ptr[base + j] = (exp(x - m) / denom).cast[dtype]()
-        else:
-            out_ptr[base + j] = Scalar[dtype](0)
 
 
 @always_inline
@@ -519,19 +458,39 @@ def _softmax_rows[
         _parallel_for[func](rows, ctx)
     else:
         comptime if has_accelerator():
-            _enqueue_cached[_softmax_rows_block_kernel[dtype]](
+
+            @parameter
+            @always_inline
+            @__copy_capture(in_ptr)
+            def input_fn[
+                _simd_width: Int
+            ](coords: Coord) -> SIMD[dtype, _simd_width]:
+                var r = Int(coords[0].value())
+                var c = Int(coords[1].value())
+                var v = (
+                    in_ptr.load[width=_simd_width](r * cols + c).cast[
+                        DType.float32
+                    ]()
+                    * scale
+                )
+                if causal != 0:
+                    var allowed = min(cols, r % q_len + 1)
+
+                    @parameter
+                    for lane in range(_simd_width):
+                        if c + lane >= allowed:
+                            v[lane] = min_or_neg_inf[DType.float32]()
+                # Known trade-off: for float16 input with scale > 1 this
+                # f32 -> dtype round-trip can overflow to +inf where the old
+                # all-f32 kernel didn't (unreachable with the default
+                # 1/sqrt(head_dim) scales).
+                return v.cast[dtype]()
+
+            softmax[dtype, 1, 2, input_fn, target="gpu"](
+                Coord(rows, cols),
+                TileTensor(out_ptr, row_major(rows, cols)),
+                1,
                 ctx,
-                String(t"softmax_rows_block_{dtype}"),
-                rows,
-                1,
-                1,
-                ROWRED_THREADS,
-                out_ptr.as_unsafe_any_origin(),
-                in_ptr.as_unsafe_any_origin().as_immutable(),
-                cols,
-                scale,
-                causal,
-                q_len,
             )
         else:
             raise Error("no GPU accelerator available at compile time")
@@ -616,9 +575,9 @@ def _attn_decode_kernel[
     the per-head transpose view of a fused qkv projection reads in place —
     q is staged through shared memory once per block, so nothing else needs
     it contiguous. Scores for the block's row are staged in shared memory
-    (hence the ATTN_MAX_KV cap), softmax uses the same f32 max/sum tree
-    reductions as _softmax_rows_block_kernel, and the V pass has lane d
-    accumulate output element d so V reads coalesce across lanes."""
+    (hence the ATTN_MAX_KV cap), softmax uses f32 max/sum shared-memory tree
+    reductions, and the V pass has lane d accumulate output element d so V
+    reads coalesce across lanes."""
     comptime vec_align = 4 * size_of[dtype]()
     var bh = block_idx.x
     var tid = thread_idx.x
