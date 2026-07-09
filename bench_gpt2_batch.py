@@ -4,7 +4,7 @@ Greedy-decodes 200 tokens from a fixed prompt repeated across the batch,
 and reports aggregate and per-sequence throughput.
 
 Usage: uv run python bench_gpt2_batch.py <device> [batch_sizes...]
-       e.g. uv run python bench_gpt2_batch.py max_device 1 8 32
+       e.g. uv run python bench_gpt2_batch.py mojo 1 8 32
             uv run python bench_gpt2_batch.py cuda 256
 """
 
@@ -18,7 +18,7 @@ from torch_max_backend import register_max_devices
 
 register_max_devices()
 
-DEVICE = sys.argv[1] if len(sys.argv) > 1 else "max_device"
+DEVICE = sys.argv[1] if len(sys.argv) > 1 else "mojo"
 BATCHES = [int(b) for b in sys.argv[2:]] or [256]
 N_NEW_TOKENS = 200
 PROMPT = "Here is how quantum computing works: "

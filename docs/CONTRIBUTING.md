@@ -63,7 +63,7 @@ uv run pytest tests/test_compiler.py
 The project supports PyTorch operations in **two execution modes**:
 
 1. **Graph Mode**: Via `torch.compile(backend=max_backend)` - compiles FX graphs to MAX
-2. **Eager Mode**: Via `torch.device("max_device")` - executes operations immediately on MAX
+2. **Eager Mode**: Via `torch.device("mojo")` - executes operations immediately on MAX
 
 When implementing operations, you must:
 - Implement in `torch_max_backend/aten_functions.py` (works for both modes)
@@ -201,8 +201,8 @@ TORCH_MAX_BACKEND_PROFILE=1 uv run python your_script.py
 
 ### Test Coverage Areas
 
-- **ATen Operations**: Graph mode (`torch.compile`) and eager mode (`max_device`)
-- **Device Support**: CPU and max_device (with GPU if available)
+- **ATen Operations**: Graph mode (`torch.compile`) and eager mode (`mojo`)
+- **Device Support**: CPU and mojo (with GPU if available)
 - **Compilation**: `torch.compile(backend=max_backend)` integration
 - **Error Handling**: Unsupported operations
 

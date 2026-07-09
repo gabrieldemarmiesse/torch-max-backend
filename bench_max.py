@@ -1,7 +1,7 @@
-"""Benchmark forward-pass latency across cuda / max_device:0 (GPU) / max_device:1 (CPU).
+"""Benchmark forward-pass latency across cuda / mojo:0 (GPU) / mojo:1 (CPU).
 
 Each forward is timed end-to-end including bringing the output back to host
-(this also forces lazy max_device realization, and synchronizes CUDA).
+(this also forces lazy mojo realization, and synchronizes CUDA).
 
 Usage: uv run python bench_max.py [resnet bert ...]
 """
@@ -16,7 +16,7 @@ from torch_max_backend import register_max_devices
 
 register_max_devices()
 
-DEVICES = ["cuda", "max_device:0", "max_device:1"]
+DEVICES = ["cuda", "mojo:0", "mojo:1"]
 WARMUP = 3
 ITERS = 20
 
@@ -29,7 +29,7 @@ def _bench_one(model, inputs, device):
         with torch.no_grad():
             out = model(**dev_inputs)
         out = out.logits if hasattr(out, "logits") else out.last_hidden_state
-        out.to("cpu")  # force realization (max_device) / sync + D2H (cuda)
+        out.to("cpu")  # force realization (mojo) / sync + D2H (cuda)
 
     for _ in range(WARMUP):
         step()
@@ -71,8 +71,8 @@ def _load_gpt2():
 LOADERS = {"resnet": _load_resnet, "bert": _load_bert, "gpt2": _load_gpt2}
 LABEL = {
     "cuda": "cuda (torch GPU)",
-    "max_device:0": "max_device:0 (MAX GPU)",
-    "max_device:1": "max_device:1 (MAX CPU)",
+    "mojo:0": "mojo:0 (MAX GPU)",
+    "mojo:1": "mojo:1 (MAX CPU)",
 }
 
 

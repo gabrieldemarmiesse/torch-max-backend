@@ -87,7 +87,7 @@ def _describe_args(args, kwargs) -> str:
 
 def _unsupported(op_name: str, args=(), kwargs=None) -> NotImplementedError:
     return NotImplementedError(
-        f"{op_name} is not supported by max_device eager mode for these inputs "
+        f"{op_name} is not supported by mojo eager mode for these inputs "
         f"(tensor args: {_describe_args(args, kwargs or {})}). The graph "
         "fallback was removed; add a fast kernel in "
         "torch_max_backend/eager_kernels/ or open an issue."

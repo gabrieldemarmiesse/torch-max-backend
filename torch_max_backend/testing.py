@@ -10,31 +10,31 @@ from torch_max_backend import max_backend
 
 @contextlib.contextmanager
 def _xfail_if_unsupported(device):
-    """xfail (rather than fail) when the max_device eager backend raises
+    """xfail (rather than fail) when the mojo eager backend raises
     NotImplementedError for an input its fast kernels don't cover.
 
     Killing the graph fallback (docs/strided_owning_tensors_design.md) turned
     "unsupported input" from a slow fallback into a clear raise; this makes the
     existing suite record those as expected-unsupported instead of hard
     failures, without editing individual tests or masking real errors (only
-    our own "not supported by max_device" NotImplementedError is caught).
+    our own "not supported by mojo" NotImplementedError is caught).
     """
     try:
         yield
     except NotImplementedError as exc:
-        if str(device).startswith("max_device") and "max_device" in str(exc):
+        if str(device).startswith("mojo") and "mojo" in str(exc):
             import pytest
 
-            pytest.xfail(f"unsupported on max_device eager: {exc}")
+            pytest.xfail(f"unsupported on mojo eager: {exc}")
         raise
 
 
 class CallChecker:
     """Asserts that at least one of the registered implementations ran.
 
-    Ops covered by the max_device fast eager path have two implementations:
+    Ops covered by the mojo fast eager path have two implementations:
     the graph one in `aten_functions` (used by the torch.compile backend)
-    and the Mojo-kernel one in `aten_fast` (used by max_device eager mode).
+    and the Mojo-kernel one in `aten_fast` (used by mojo eager mode).
     A test registers the `aten_functions` twin; `register` automatically
     also accepts the matching `aten_fast.fast_<name>` twin, so the same
     test passes whether the op routed to the graph path (compile) or the
@@ -72,7 +72,7 @@ class CallChecker:
 
     @staticmethod
     def _eager_twins(func: Callable) -> list[Callable]:
-        """The instrumented max_device registration(s) whose op matches an
+        """The instrumented mojo registration(s) whose op matches an
         aten_functions twin. Covers ops implemented as custom / out-variant
         registrations (empty_like, mean.out, normal_, ...) that don't route
         through an aten_fast.fast_* function, so nothing else observes them.

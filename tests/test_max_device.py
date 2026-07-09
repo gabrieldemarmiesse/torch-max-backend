@@ -82,13 +82,13 @@ def test_factory_empty(max_device):
 
 
 def test_device_string_variations():
-    """Test different max_device string formats"""
-    # Basic max_device
-    t1 = torch.tensor([1.0]).to("max_device")
+    """Test different mojo device string formats"""
+    # Basic mojo device
+    t1 = torch.tensor([1.0]).to("mojo")
     assert isinstance(t1, TorchMaxTensor)
 
     # With index (should also work)
-    t2 = torch.tensor([1.0]).to("max_device:0")
+    t2 = torch.tensor([1.0]).to("mojo:0")
     assert isinstance(t2, TorchMaxTensor)
 
 
@@ -136,8 +136,8 @@ def test_multiple_conversions():
     tensor = torch.tensor([1.0, 2.0])
 
     # Multiple conversions should work
-    max1 = tensor.to("max_device")
-    max2 = max1.to("max_device")  # Should return same tensor
+    max1 = tensor.to("mojo")
+    max2 = max1.to("mojo")  # Should return same tensor
     cpu1 = max2.to("cpu")
     cpu2 = cpu1.to("cpu")  # Should work normally
 
@@ -209,13 +209,13 @@ def test_gpu_first_cpu_last_convention():
         # Last device should be CPU
         assert ordered_accelerators[-1].label == "cpu"
 
-        # Test that max_device (index 0) goes to GPU
-        t_gpu = torch.tensor([1.0]).to("max_device")
+        # Test that mojo (index 0) goes to GPU
+        t_gpu = torch.tensor([1.0]).to("mojo")
         assert isinstance(t_gpu, TorchMaxTensor)
 
         # Test that highest index goes to CPU
         cpu_index = len(ordered_accelerators) - 1
-        t_cpu = torch.tensor([1.0]).to(f"max_device:{cpu_index}")
+        t_cpu = torch.tensor([1.0]).to(f"mojo:{cpu_index}")
         assert isinstance(t_cpu, TorchMaxTensor)
 
 

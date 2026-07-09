@@ -1,6 +1,6 @@
-"""Smoke-test common HuggingFace models on max_device to find op coverage gaps.
+"""Smoke-test common HuggingFace models on mojo to find op coverage gaps.
 
-Runs a forward pass on CPU and on max_device, compares outputs (loose tolerance
+Runs a forward pass on CPU and on mojo, compares outputs (loose tolerance
 since we only care about op coverage, not bit-exactness), and reports a summary.
 
 Usage:
@@ -17,12 +17,12 @@ from torch_max_backend import register_max_devices
 
 register_max_devices()
 
-DEVICE = "max_device"
+DEVICE = "mojo"
 ATOL, RTOL = 2e-2, 2e-2
 
 
 def _compare(model, inputs, extract):
-    """Run on CPU then max_device and compare the extracted output tensor."""
+    """Run on CPU then mojo and compare the extracted output tensor."""
     model = model.eval()
     with torch.no_grad():
         ref = extract(model(**inputs))

@@ -1,4 +1,4 @@
-"""Tests for the Mojo-extension fast path used by max_device eager mode."""
+"""Tests for the Mojo-extension fast path used by mojo eager mode."""
 
 import pytest
 import torch
@@ -119,10 +119,10 @@ def test_chained_fast_ops(max_device):
 
 @pytest.fixture
 def max_gpu(max_gpu_available: bool):
-    """GPU max_device only — for ops whose fast path is GPU-gated."""
+    """GPU mojo device only — for ops whose fast path is GPU-gated."""
     if not max_gpu_available:
         pytest.skip("You do not have a GPU supported by Max")
-    return "max_device:0"
+    return "mojo:0"
 
 
 def test_fast_view_family(max_device):

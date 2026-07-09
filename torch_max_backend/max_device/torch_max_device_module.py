@@ -7,7 +7,7 @@ _current_device = 0
 
 
 def cpu():
-    return torch.device(f"max_device:{len(list(get_accelerators())) - 1}")
+    return torch.device(f"mojo:{len(list(get_accelerators())) - 1}")
 
 
 def _is_in_bad_fork():

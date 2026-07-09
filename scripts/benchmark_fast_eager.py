@@ -3,7 +3,7 @@
 Usage:
     uv run python scripts/benchmark_fast_eager.py
 
-Compares, per op call on max_device:
+Compares, per op call on mojo:
   - the fast path (TORCH_MAX_BACKEND_FAST_EAGER=1, default)
   - the graph-based path (TORCH_MAX_BACKEND_FAST_EAGER=0)
 by re-running itself in a subprocess for each mode, plus torch-native CPU
@@ -38,8 +38,8 @@ def run_max_device_benchmarks():
 
     register_max_devices()
     mode = "fast (mojo extensions)" if fast_eager_enabled() else "graph-based"
-    print(f"  max_device eager mode: {mode}")
-    dev = torch.device("max_device")
+    print(f"  mojo eager mode: {mode}")
+    dev = torch.device("mojo")
     for shape in SHAPES:
         x = torch.randn(*shape).to(dev)
         y = torch.randn(*shape).to(dev)

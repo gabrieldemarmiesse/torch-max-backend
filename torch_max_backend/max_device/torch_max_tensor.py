@@ -96,13 +96,13 @@ def _pad8(values, fill: int) -> tuple[int, ...]:
     values = tuple(values)
     if len(values) > MAX_RANK:
         raise NotImplementedError(
-            f"max_device tensors support at most rank {MAX_RANK}, got {len(values)}"
+            f"mojo tensors support at most rank {MAX_RANK}, got {len(values)}"
         )
     return (fill,) * (MAX_RANK - len(values)) + values
 
 
 class TorchMaxTensor(torch.Tensor):
-    """Eager max_device tensor.
+    """Eager mojo tensor.
 
     A meta-backed `PrivateUse1` wrapper (`torch._C._acc.create_empty_tensor`
     + `__class__` swap) whose payload is:
@@ -118,7 +118,7 @@ class TorchMaxTensor(torch.Tensor):
 
     PyTorch's own TensorImpl always reports contiguous strides; that is fine
     because the backend registers a kernel for every op that consumes a
-    max_device tensor, so the real strides here are the only ones ever used.
+    mojo tensor, so the real strides here are the only ones ever used.
     """
 
     @classmethod
@@ -269,7 +269,7 @@ class TorchMaxTensor(torch.Tensor):
         if hasattr(self, "_device"):
             if self._device == CPU():
                 return torch_max_device_module.cpu()
-            return torch.device(f"max_device:{self._device.id}")
+            return torch.device(f"mojo:{self._device.id}")
         return super().device
 
     __torch_function__ = torch._C._disabled_torch_function_impl
@@ -334,14 +334,14 @@ def find_equivalent_max_device(device: torch.device) -> max.driver.Device:
     """Find the equivalent MAX device for a given torch device
 
     Device mapping:
-    - max_device:0 (or max_device) -> First GPU (or CPU if no GPUs)
-    - max_device:1, max_device:2, ... -> Additional GPUs
-    - max_device:<last_index> -> CPU device
+    - mojo:0 (or mojo) -> First GPU (or CPU if no GPUs)
+    - mojo:1, mojo:2, ... -> Additional GPUs
+    - mojo:<last_index> -> CPU device
     """
     ordered_accelerators = get_ordered_accelerators()
 
-    if device.type == "max_device":
-        # max_device with specific index
+    if device.type == "mojo":
+        # mojo with specific index
         if device.index is None:
             # Default to first accelerator (first GPU or CPU if no GPUs)
             return ordered_accelerators[0]
@@ -349,7 +349,7 @@ def find_equivalent_max_device(device: torch.device) -> max.driver.Device:
             if device.index < len(ordered_accelerators):
                 return ordered_accelerators[device.index]
             else:
-                raise ValueError(f"Invalid max_device index {device.index}")
+                raise ValueError(f"Invalid mojo index {device.index}")
     elif device.type == "cpu":
         # Find CPU accelerator (should be last in ordered list)
         for acc in reversed(ordered_accelerators):  # Check from the end

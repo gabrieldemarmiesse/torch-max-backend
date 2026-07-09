@@ -1,4 +1,4 @@
-"""GPT-2 text generation latency: cuda vs max_device (fast eager path).
+"""GPT-2 text generation latency: cuda vs mojo (fast eager path).
 
 Real autoregressive run: greedy-decode N new tokens from a prompt with the
 KV cache enabled, timed end-to-end (until the generated ids are back on
@@ -31,7 +31,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained("gpt2").eval()
     ids = tok(PROMPT, return_tensors="pt").input_ids
 
-    for dev in ["cuda", "max_device"]:
+    for dev in ["cuda", "mojo"]:
         m = model.to(dev)
         x = ids.to(dev)
 

@@ -152,7 +152,7 @@ uv run pytest tests/test_aten_functions.py::test_your_new_op -v
 
 Test both execution modes if applicable:
 - Graph mode via `torch.compile(backend=max_backend)`
-- Eager mode via tensors on `torch.device("max_device")`
+- Eager mode via tensors on `torch.device("mojo")`
 
 ### Step 9: Run Linter
 Make sure to run the linter:
@@ -167,7 +167,7 @@ When adding an operation, you need to update **two files**:
 1. **`aten_functions.py`**: Core implementation (works for both modes)
 2. **`max_device_aten_ops.py`**: Registration for eager mode execution
 
-This ensures the operation works in both `torch.compile()` and on the `max_device`.
+This ensures the operation works in both `torch.compile()` and on the `mojo` device.
 
 
 ## To find the correct type hints for a function
