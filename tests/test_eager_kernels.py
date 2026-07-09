@@ -351,6 +351,38 @@ def test_fast_bmm(max_gpu):
     torch.testing.assert_close(dev, torch.bmm(a, b), atol=1e-2, rtol=1e-2)
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_fast_mm_degenerate_dims(max_device, dtype):
+    # n == 1 used to segfault the CPU library-matmul route (gemv special
+    # case without a DeviceContext); m == 1 / k == 1 pinned as regression
+    # guards for the library's other special-case routes.
+    for m, k, n in [(37, 129, 1), (1, 129, 64), (64, 1, 33), (1, 129, 1)]:
+        a = torch.randn(m, k).to(dtype)
+        b = torch.randn(k, n).to(dtype)
+        dev = torch.mm(a.to(max_device), b.to(max_device)).cpu()
+        ref = (a.float() @ b.float()).to(dtype)
+        torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+    # batched n == 1 shares the same path
+    a3 = torch.randn(4, 8, 129).to(dtype)
+    b3 = torch.randn(4, 129, 1).to(dtype)
+    dev3 = torch.bmm(a3.to(max_device), b3.to(max_device)).cpu()
+    ref3 = torch.bmm(a3.float(), b3.float()).to(dtype)
+    torch.testing.assert_close(dev3, ref3, atol=5e-2, rtol=5e-2)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_fast_linear_out_features_one(max_device, dtype):
+    # out_features == 1 -> transposed-B GEMM with n == 1, plus bias.
+    x = torch.randn(37, 129).to(dtype)
+    w = torch.randn(1, 129).to(dtype)
+    b = torch.randn(1).to(dtype)
+    dev = torch.nn.functional.linear(
+        x.to(max_device), w.to(max_device), b.to(max_device)
+    ).cpu()
+    ref = (x.float() @ w.float().t() + b.float()).to(dtype)
+    torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+
+
 @pytest.mark.parametrize(
     "in_c,out_c,k,stride,padding,dilation,groups",
     [

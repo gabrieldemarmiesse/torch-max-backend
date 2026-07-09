@@ -9,13 +9,13 @@
 # `MatmulVendor` / `BmmVendor` keep the previous vendor BLAS (cuBLAS) path
 # available for A/B benchmarking; nothing in the backend calls them.
 #
-# `Matmul` / `MatmulBias` / `Bmm` also run on the CPU MAX device, via a plain
-# parallel-loop GEMM (see `_cpu_gemm` below) — no tiling/tensor-core tricks,
-# just correctness, since there is no graph fallback to lean on anymore.
+# `Matmul` / `MatmulBias` / `Bmm` also run on the CPU MAX device, via
+# modular's production CPU matmul (`linalg.matmul.matmul` target="cpu"; see
+# `_cpu_gemm` below), since there is no graph fallback to lean on anymore.
 # ===----------------------------------------------------------------------=== #
 
 from std.math import ceildiv
-from std.memory import stack_allocation
+from std.memory import alloc, stack_allocation
 from std.os import abort
 from std.gpu import (
     MAX_THREADS_PER_BLOCK_METADATA,
@@ -40,6 +40,7 @@ from std.algorithm.functional import elementwise, parallelize
 from layout import TileTensor, row_major
 
 from linalg.bmm import batched_matmul
+from linalg.matmul import matmul as cpu_lib_matmul
 from linalg.matmul.vendor.blas import matmul as vendor_matmul
 
 from std.python._cpython import PyObjectPtr, Py_ssize_t
@@ -1849,43 +1850,52 @@ def _gemm_dtype_dispatch(
 
 
 # ---------------------------------------------------------------------------
-# CPU fallback: plain triple-loop GEMM, parallelized over output rows
-# (batch * m) with `std.algorithm.parallelize`. No tiling/tensor-core
-# tricks — the fast paths above are GPU-only and this only has to be
-# correct. Accumulates in float32 regardless of the operand dtype (matches
-# the GPU kernels' accumulator), and honors the same transpose_b /
-# element-offset / a-broadcast (a_bstride == 0) semantics as the GPU
-# dispatch so callers don't need to special-case the device.
+# CPU GEMM: routes through modular's production CPU matmul
+# (`linalg.matmul.matmul` with target="cpu" — tuned packed/tiled inner
+# kernels selected by dtype+ISA, fp32 accumulation, dynamic shapes). Honors
+# the same transpose_b / element-offset / a-broadcast (a_bstride == 0) /
+# row-broadcast bias semantics as the GPU dispatch so callers don't need to
+# special-case the device.
+#
+# Bias (broadcast over rows, any batch):
+#   * f32 output: matmul into C, then `_bias_add_row` (exact fp32 add).
+#   * f16/bf16 output: matmul into an fp32 scratch, then a fused
+#     (scratch + bias) -> cast pass. This preserves our historical semantics
+#     of forming A@B + bias in fp32 and casting to the output dtype exactly
+#     once — the library's epilogue lambda would instead add bias *after* the
+#     accumulator is cast down to the output dtype (KERN-2790 scratch path).
+#
+# Degenerate shapes go through `_cpu_gemm_naive` (the old parallel-loop
+# kernel) instead of the library: the library's CPU route special-cases
+# n == 1 into gemv[parallelize=True] WITHOUT forwarding the DeviceContext
+# (segfaults in our embedded runtime) and, under transpose_b, builds the
+# gemv rhs with length b.dim[0]() == 1 instead of k
+# (linalg/matmul/cpu/impl.mojo:421-427 @ the pinned nightly). k == 0 would
+# compute num_tasks == 0 and leave C unwritten (it is currently rejected
+# upstream by the Python dispatcher, so that guard is just insurance).
 # ---------------------------------------------------------------------------
 
 
 @always_inline
-def _cpu_gemm[
+def _cpu_gemm_naive[
     dtype: DType
 ](
-    c_addr: Int,
-    a_addr: Int,
-    b_addr: Int,
+    c_ptr: UnsafePointer[Scalar[dtype], MutUntrackedOrigin],
+    a_ptr: UnsafePointer[Scalar[dtype], MutUntrackedOrigin],
+    b_ptr: UnsafePointer[Scalar[dtype], MutUntrackedOrigin],
     batch: Int,
     m: Int,
     n: Int,
     k: Int,
     a_bstride: Int,
     transpose_b: Bool,
-    c_off: Int,
-    a_off: Int,
-    b_off: Int,
     bias_addr: Int,  # 0 means no bias
     ctx: DeviceContext,
 ) raises:
-    var c_ptr = _make_ptr[dtype](c_addr) + c_off
-    var a_ptr = _make_ptr[dtype](a_addr) + a_off
-    var b_ptr = _make_ptr[dtype](b_addr) + b_off
+    """Correctness-grade GEMM (fp32 accumulate, bias in fp32, single cast)
+    for the degenerate shapes the library CPU matmul mishandles."""
     var has_bias = bias_addr != 0
     var bias_ptr = _make_ptr[dtype](bias_addr) if has_bias else c_ptr
-
-    # B is (k, n) row-major when transpose_b is False, (n, k) row-major
-    # ("transposed") when True — the same layouts the GPU kernels assume.
     var b_batch_stride = (n * k) if transpose_b else (k * n)
 
     @always_inline
@@ -1917,6 +1927,153 @@ def _cpu_gemm[
             c_row[j] = acc.cast[dtype]()
 
     parallelize[row_func](batch * m, ctx)
+
+
+@always_inline
+def _cpu_matmul_one[
+    ab_dtype: DType, c_dtype: DType, transpose_b: Bool
+](
+    c_ptr: UnsafePointer[Scalar[c_dtype], MutUntrackedOrigin],
+    a_ptr: UnsafePointer[Scalar[ab_dtype], MutUntrackedOrigin],
+    b_ptr: UnsafePointer[Scalar[ab_dtype], MutUntrackedOrigin],
+    m: Int,
+    n: Int,
+    k: Int,
+    ctx: DeviceContext,
+) raises:
+    # C(m, n) = A(m, k) @ B; B is (k, n) row-major when not transposed,
+    # (n, k) row-major when transposed. Dynamic dims via runtime `row_major`
+    # (same construction the vendor path uses); the library entry derives
+    # kernel_type_m from a.static_shape[0] (UNKNOWN -> 0) and, when c_dtype is
+    # f16/bf16, wraps the accumulation in an fp32 scratch itself.
+    var c = TileTensor(c_ptr, row_major(m, n))
+    var a = TileTensor(a_ptr, row_major(m, k))
+    comptime if transpose_b:
+        var b = TileTensor(b_ptr, row_major(n, k))
+        cpu_lib_matmul[transpose_b=True, target="cpu"](c, a, b, ctx=ctx)
+    else:
+        var b = TileTensor(b_ptr, row_major(k, n))
+        cpu_lib_matmul[transpose_b=False, target="cpu"](c, a, b, ctx=ctx)
+
+
+@always_inline
+def _cpu_gemm[
+    dtype: DType
+](
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    batch: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    a_bstride: Int,
+    transpose_b: Bool,
+    c_off: Int,
+    a_off: Int,
+    b_off: Int,
+    bias_addr: Int,  # 0 means no bias
+    ctx: DeviceContext,
+) raises:
+    var c_base = _make_ptr[dtype](c_addr) + c_off
+    var a_base = _make_ptr[dtype](a_addr) + a_off
+    var b_base = _make_ptr[dtype](b_addr) + b_off
+    var has_bias = bias_addr != 0
+
+    # Shapes the library CPU matmul mishandles (see the section comment):
+    # n == 1 (gemv special case: ctx not forwarded -> segfault; wrong rhs
+    # length under transpose_b) and k == 0 (C left unwritten). Route those
+    # through the naive kernel, which honors the same bias / batch /
+    # broadcast semantics.
+    if n == 1 or k == 0:
+        _cpu_gemm_naive[dtype](
+            c_base,
+            a_base,
+            b_base,
+            batch,
+            m,
+            n,
+            k,
+            a_bstride,
+            transpose_b,
+            bias_addr,
+            ctx,
+        )
+        return
+
+    # B is (k, n) row-major when transpose_b is False, (n, k) row-major
+    # ("transposed") when True — the same layouts the GPU kernels assume.
+    var b_batch_stride = (n * k) if transpose_b else (k * n)
+
+    comptime if dtype == DType.float32:
+        # fp32: matmul each batch straight into C, then optional fp32 bias
+        # (broadcast over all batch * m rows).
+        for bz in range(batch):
+            var c_ptr = c_base + bz * (m * n)
+            var a_ptr = a_base + bz * a_bstride
+            var b_ptr = b_base + bz * b_batch_stride
+            if transpose_b:
+                _cpu_matmul_one[dtype, dtype, True](
+                    c_ptr, a_ptr, b_ptr, m, n, k, ctx
+                )
+            else:
+                _cpu_matmul_one[dtype, dtype, False](
+                    c_ptr, a_ptr, b_ptr, m, n, k, ctx
+                )
+        if has_bias:
+            _bias_add_row[dtype](
+                c_addr + c_off * size_of[dtype](),
+                bias_addr,
+                batch * m * n,
+                n,
+                ctx,
+            )
+    else:
+        # f16 / bf16.
+        if has_bias:
+            # Accumulate A@B in an fp32 scratch, then add bias in fp32 and
+            # cast to the output dtype exactly once.
+            var total = batch * m * n
+            var scratch = alloc[Scalar[DType.float32]](total)
+            var bias_ptr = _make_ptr[dtype](bias_addr)
+
+            @always_inline
+            @parameter
+            @__copy_capture(scratch, c_base, bias_ptr)
+            def add_cast_func[width: Int, alignment: Int = 1](idx: StdCoord):
+                var i = Int(idx[0].value())
+                var acc = scratch[i] + bias_ptr[i % n].cast[DType.float32]()
+                c_base[i] = acc.cast[dtype]()
+
+            try:
+                for bz in range(batch):
+                    var s_ptr = scratch + bz * (m * n)
+                    var a_ptr = a_base + bz * a_bstride
+                    var b_ptr = b_base + bz * b_batch_stride
+                    if transpose_b:
+                        _cpu_matmul_one[dtype, DType.float32, True](
+                            s_ptr, a_ptr, b_ptr, m, n, k, ctx
+                        )
+                    else:
+                        _cpu_matmul_one[dtype, DType.float32, False](
+                            s_ptr, a_ptr, b_ptr, m, n, k, ctx
+                        )
+                elementwise[add_cast_func, simd_width=1](StdCoord(total), ctx)
+            finally:
+                scratch.free()
+        else:
+            for bz in range(batch):
+                var c_ptr = c_base + bz * (m * n)
+                var a_ptr = a_base + bz * a_bstride
+                var b_ptr = b_base + bz * b_batch_stride
+                if transpose_b:
+                    _cpu_matmul_one[dtype, dtype, True](
+                        c_ptr, a_ptr, b_ptr, m, n, k, ctx
+                    )
+                else:
+                    _cpu_matmul_one[dtype, dtype, False](
+                        c_ptr, a_ptr, b_ptr, m, n, k, ctx
+                    )
 
 
 @always_inline
@@ -2414,7 +2571,7 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
             "Matmul",
             docstring=(
                 "C = A @ B (row-major, optional transposed B); pure Mojo"
-                " tiled kernels on GPU, plain parallel loops on CPU"
+                " tiled kernels on GPU, modular's linalg matmul on CPU"
             ),
         )
         b.def_py_c_function(
@@ -2430,7 +2587,7 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
             "Bmm",
             docstring=(
                 "batched C = A @ B (rank 3, optional transposed B); pure Mojo"
-                " tiled kernels on GPU, plain parallel loops on CPU"
+                " tiled kernels on GPU, modular's linalg matmul on CPU"
             ),
         )
         b.def_function[_matmul_vendor_dispatcher](
