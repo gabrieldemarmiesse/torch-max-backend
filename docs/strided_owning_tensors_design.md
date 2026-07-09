@@ -53,10 +53,19 @@ into an `xfail` so the suite records them as expected-unsupported.
 **Verified:** gpt2 runs correctly on `max_device:0` (GPU) — including under
 a **torch-CPU-only** install (`torch==2.11.0+cpu`), proving the hard
 constraint that CUDA-in-torch is not required; MAX drives the GPU via the
-CUDA driver. Batch-256 decode throughput is ~1.06× torch-CUDA (the holder
-rewrite cost ~25% vs the pre-refactor CUDA-beating 1.32×, mostly per-op
-Python dispatch + H2D syncs + attention materialization — recoverable
-later). `tests/test_eager_kernels.py` and `tests/test_max_device.py` pass;
+CUDA driver. Batch-256 decode throughput is ~1.31× torch-CUDA
+(26.3k vs 20.1k tok/s on an H100 PCIe), at/above the pre-refactor
+reference (26.2k re-measured on the same machine). The holder rewrite
+initially cost ~25%; it was recovered by (a) running `torch.arange` as a
+device kernel instead of host-build + blocking H2D (HF's logits
+processors call it with vocab size twice per decoded token, and each
+transfer drained the GPU queue, killing CPU/GPU overlap), (b) teaching
+`AttnDecode` q batch/head strides and `cat` a strided-input gather so the
+fused-qkv head-transpose views are consumed in place (36 fewer
+materialize kernels/token), (c) memcpy for contiguous `clone`, and
+(d) trimming per-op Python dispatch (beartype wrapper frames off the
+hot helpers, cached dtype mapping, contiguity hints on row-major views).
+`tests/test_eager_kernels.py` and `tests/test_max_device.py` pass;
 `test_aten_functions.py` is green (508 pass / 61 xfail, 0 hard fails).
 
 Remaining `_register_missing` raisers: `aten::_adaptive_avg_pool2d_backward`,
