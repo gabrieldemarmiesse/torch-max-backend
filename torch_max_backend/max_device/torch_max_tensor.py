@@ -1,4 +1,5 @@
 import functools
+import math
 from typing import no_type_check
 
 import max.driver
@@ -36,12 +37,23 @@ def _data_movement_mod():
     return _data_movement
 
 
-def _ctx_ptr(device: max.driver.Device) -> int:
-    from torch_max_backend.eager_kernels import _ctx_ptr as ctx_ptr
+@no_type_check
+def _ctx_ptr(device):
+    # Rebinds this module-level name to the real (cached) implementation on
+    # first use, so the lazy import costs one call, not one per call.
+    global _ctx_ptr
+    from torch_max_backend.eager_kernels import _ctx_ptr as real_ctx_ptr
 
-    return ctx_ptr(device)
+    _ctx_ptr = real_ctx_ptr
+    return real_ctx_ptr(device)
 
 
+# The helpers below run several times per op dispatch (hundreds of times per
+# transformer decode step); @no_type_check keeps beartype's import hook from
+# adding a wrapper frame to each call.
+
+
+@no_type_check
 def _row_major_strides(shape) -> tuple[int, ...]:
     strides = [1] * len(shape)
     for i in range(len(shape) - 2, -1, -1):
@@ -49,6 +61,7 @@ def _row_major_strides(shape) -> tuple[int, ...]:
     return tuple(strides)
 
 
+@no_type_check
 def _compute_contiguous(shape, strides) -> bool:
     """torch's relaxed contiguity: size-1 dims never break contiguity."""
     expected = 1
@@ -61,10 +74,24 @@ def _compute_contiguous(shape, strides) -> bool:
     return True
 
 
+# max DType -> torch dtype, cached as a plain dict: max_dtype_to_torch is
+# called once per tensor wrapper created (~600/decode step).
+_TORCH_DTYPE_OF: dict = {}
+
+
+@no_type_check
+def _torch_dtype_of(dtype):
+    td = _TORCH_DTYPE_OF.get(dtype)
+    if td is None:
+        td = _TORCH_DTYPE_OF[dtype] = max_dtype_to_torch(dtype)
+    return td
+
+
 # Strided kernels take shapes/strides padded to rank 8 with LEADING entries.
 MAX_RANK = 8
 
 
+@no_type_check
 def _pad8(values, fill: int) -> tuple[int, ...]:
     values = tuple(values)
     if len(values) > MAX_RANK:
@@ -100,24 +127,20 @@ class TorchMaxTensor(torch.Tensor):
         cls, holder, ptr, shape, strides, offset, dtype, device, contiguous=None
     ) -> "TorchMaxTensor":
         shape = tuple(shape)
-        res = torch._C._acc.create_empty_tensor(shape, max_dtype_to_torch(dtype))
+        strides = tuple(strides)
+        res = torch._C._acc.create_empty_tensor(shape, _torch_dtype_of(dtype))
         res.__class__ = TorchMaxTensor
         res._holder = holder
         res._ptr = ptr
         res._shape = shape
-        res._strides = tuple(strides)
+        res._strides = strides
         res._offset = offset
         res._dtype = dtype
         res._itemsize = dtype.size_in_bytes
-        numel = 1
-        for s in shape:
-            numel *= s
-        res._numel = numel
+        res._numel = math.prod(shape)
         res._device = device
         res._is_contiguous = (
-            _compute_contiguous(res._shape, res._strides)
-            if contiguous is None
-            else contiguous
+            _compute_contiguous(shape, strides) if contiguous is None else contiguous
         )
         return res
 
@@ -126,9 +149,7 @@ class TorchMaxTensor(torch.Tensor):
     def _alloc(cls, shape, dtype: DType, device: max.driver.Device) -> "TorchMaxTensor":
         """A new contiguous uninitialized tensor (one device allocation)."""
         shape = tuple(shape)
-        numel = 1
-        for s in shape:
-            numel *= s
+        numel = math.prod(shape)
         holder, ptr = _holder_mod().alloc(_ctx_ptr(device), numel * dtype.size_in_bytes)
         return cls._make(
             holder,
@@ -144,15 +165,23 @@ class TorchMaxTensor(torch.Tensor):
     @classmethod
     @no_type_check
     def _view_of(
-        cls, base: "TorchMaxTensor", shape, strides, offset
+        cls, base: "TorchMaxTensor", shape, strides, offset, contiguous=None
     ) -> "TorchMaxTensor":
         """A zero-copy view: shares base's holder, new layout metadata.
 
         `offset` is absolute, in elements from the allocation start.
+        `contiguous` skips the contiguity rescan when the caller knows it.
         """
         ptr = base._ptr + (offset - base._offset) * base._itemsize
         return cls._make(
-            base._holder, ptr, shape, strides, offset, base._dtype, base._device
+            base._holder,
+            ptr,
+            shape,
+            strides,
+            offset,
+            base._dtype,
+            base._device,
+            contiguous=contiguous,
         )
 
     @classmethod

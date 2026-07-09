@@ -1381,13 +1381,13 @@ def _fast_view(tensor, shape):
     if sizes is None:
         return NOT_HANDLED
     if t._is_contiguous:
-        return _view_of(t, sizes, _row_major_strides(sizes), t._offset)
+        return _view_of(t, sizes, _row_major_strides(sizes), t._offset, contiguous=True)
     new_strides = _compute_view_strides(t._shape, t._strides, sizes)
     if new_strides is None:
         # PyTorch's reshape reads the TensorImpl's (fake-contiguous) strides
         # and routes copy-requiring reshapes here too — materialize.
         c = t._materialize_contiguous()
-        return _view_of(c, sizes, _row_major_strides(sizes), 0)
+        return _view_of(c, sizes, _row_major_strides(sizes), 0, contiguous=True)
     return _view_of(t, sizes, new_strides, t._offset)
 
 
@@ -2800,7 +2800,9 @@ def _sdpa_math_forward(query, key, value, is_causal, scale):
         out._ptr, probs._ptr, v._ptr, (b * h, q_len, head_dim, kv_len, 0), dt, ctx
     )
     out_shape = (b, h, q_len, head_dim)
-    out4 = _view_of(out, out_shape, _row_major_strides(out_shape), out._offset)
+    out4 = _view_of(
+        out, out_shape, _row_major_strides(out_shape), out._offset, contiguous=True
+    )
     probs_shape = (b, h, q_len, kv_len)
     probs4 = _view_of(
         probs, probs_shape, _row_major_strides(probs_shape), probs._offset
@@ -3264,7 +3266,9 @@ def fast_aten_scaled_dot_product_attention(
             ctx,
         )
         out_shape = (b, h, q_len, head_dim)
-        return _view_of(out, out_shape, _row_major_strides(out_shape), out._offset)
+        return _view_of(
+            out, out_shape, _row_major_strides(out_shape), out._offset, contiguous=True
+        )
     return NOT_HANDLED
 
 
