@@ -219,6 +219,46 @@ def test_fast_mean_trailing_dims(max_device, keepdim):
     torch.testing.assert_close(result, x.mean([-1, -2], keepdim=keepdim))
 
 
+def test_fast_reduction_library_tier(max_device):
+    """Huge-col reductions route to the stdlib reduction library (GPU: rows <=
+    128 and cols >= 2**20; MAX-CPU: always) — exercise that tier, which no other
+    test reaches. Integer-valued floats keep every f32 partial sum exact, so the
+    comparisons are bit-exact instead of tolerance-based."""
+    # rows == 1: full-reduction layout (the two-phase GPU tier's main case).
+    x = torch.randint(-4, 5, (1, 2**20 + 7)).float()
+    xd = x.to(max_device)
+    torch.testing.assert_close(xd.sum(-1).cpu(), x.sum(-1))
+    torch.testing.assert_close(xd.amax(-1).cpu(), x.amax(-1))
+    torch.testing.assert_close(torch.any(xd, -1).cpu(), torch.any(x, -1))
+
+    # rows == 128 (gate boundary): per-row outputs must land in the right rows.
+    y = torch.randint(-4, 5, (128, 2**20)).float()
+    y[5] = 0.0  # give any() a False row
+    yd = y.to(max_device)
+    torch.testing.assert_close(yd.sum(-1).cpu(), y.sum(-1))
+    torch.testing.assert_close(yd.amax(-1).cpu(), y.amax(-1))
+    torch.testing.assert_close(torch.any(yd, -1).cpu(), torch.any(y, -1))
+
+
+def test_fast_anyall_nan_is_truthy(max_device):
+    """torch treats NaN as truthy in any/all. Cover both dispatch tiers: the
+    small shape uses the block kernel on GPU (and the library on MAX-CPU), the
+    huge shape uses the library tier everywhere."""
+    small_any = torch.zeros(2, 100)
+    small_any[0, 0] = float("nan")
+    small_all = torch.full((2, 100), float("nan"))
+    huge_any = torch.zeros(1, 2**20 + 7)
+    huge_any[0, 12345] = float("nan")
+    huge_all = torch.ones(1, 2**20 + 7)
+    huge_all[0, 999] = float("nan")
+    for x in (small_any, huge_any):
+        got = torch.any(x.to(max_device), -1).cpu()
+        torch.testing.assert_close(got, torch.any(x, -1))
+    for x in (small_all, huge_all):
+        got = torch.all(x.to(max_device), -1).cpu()
+        torch.testing.assert_close(got, torch.all(x, -1))
+
+
 def test_fast_max_pool2d(max_device):
     x = torch.randn(1, 64, 32, 32)
     result = torch.nn.functional.max_pool2d(x.to(max_device), 3, 2, 1).cpu()

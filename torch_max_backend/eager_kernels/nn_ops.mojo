@@ -16,6 +16,7 @@
 # (batch * seq_len) for a thread-per-row launch to fill the GPU.
 # ===----------------------------------------------------------------------=== #
 
+from std.builtin.simd_size import SIMDSize
 from std.os import abort
 from std.gpu import (
     MAX_THREADS_PER_BLOCK_METADATA,
@@ -30,10 +31,14 @@ from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from std.sys.info import has_accelerator, size_of
 from std.utils.coord import Coord
+from std.utils.index import IndexList
 from std.utils.numerics import min_or_neg_inf
 from std.utils.static_tuple import StaticTuple
 
 from std.algorithm.functional import elementwise
+from std.algorithm.reduction import mean
+from std.algorithm.reduction import max as reduce_max
+from std.algorithm.reduction import min as reduce_min
 
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
@@ -64,6 +69,31 @@ def _parallel_for[
             elementwise[func, simd_width=1, target="gpu"](Coord(count), ctx)
         else:
             raise Error("no GPU accelerator available at compile time")
+
+
+@always_inline
+def _accum_dtype[dtype: DType]() -> DType:
+    """float rows accumulate in float32 (matching torch); int rows in their own
+    dtype. Used to pick the reduction accumulator handed to the stdlib library.
+    """
+    comptime if dtype.is_floating_point():
+        return DType.float32
+    else:
+        return dtype
+
+
+# The stdlib reduction library only beats a 256-thread block-per-row kernel when
+# there are too few rows to saturate the device yet each row is huge (its
+# two-phase multi-block tier); elsewhere its per-call buffer allocation and
+# 128-thread blocks lose. Route only that regime to the library. Mirrors
+# `reduction_ops._use_library_reduce`.
+comptime LIB_MIN_COLS = 1 << 20  # 1,048,576
+comptime LIB_MAX_ROWS = 128
+
+
+@always_inline
+def _use_library_reduce(rows: Int, cols: Int) -> Bool:
+    return rows <= LIB_MAX_ROWS and cols >= LIB_MIN_COLS
 
 
 # ---------------------------------------------------------------------------
@@ -865,21 +895,50 @@ def _attn_decode_go(
 def _mean_rows[
     dtype: DType
 ](out_addr: Int, in_addr: Int, rows: Int, cols: Int, ctx: DeviceContext) raises:
+    """Row-wise mean over the trailing axis, backed by the stdlib reduction
+    library (`std.algorithm.reduction.mean`). Floats accumulate in float32
+    (the closures cast raw<->f32); the library applies the 1/cols scaling.
+    The library picks the GPU launch tier, so full reductions (rows == 1) fan
+    out across the device instead of the single sequential thread the old
+    per-row kernel used."""
+    comptime acc_dtype = DType.float32
     var out_ptr = _make_ptr[dtype](out_addr)
     var in_ptr = _make_ptr[dtype](in_addr)
 
     @always_inline
     @parameter
-    @__copy_capture(out_ptr, in_ptr)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var r = Int(idx[0].value())
-        var base = r * cols
-        var total = Float32(0)
-        for j in range(cols):
-            total += in_ptr[base + j].cast[DType.float32]()
-        out_ptr[r] = (total / Float32(cols)).cast[dtype]()
+    @__copy_capture(in_ptr)
+    def input_fn[
+        width: Int, rank: Int
+    ](coords: IndexList[rank]) -> SIMD[acc_dtype, width]:
+        var flat = coords[0] * cols + coords[1]
+        return in_ptr.load[width=width](flat).cast[acc_dtype]()
 
-    _parallel_for[func](rows, ctx)
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr)
+    def output_fn[
+        width: SIMDSize, rank: Int
+    ](coords: IndexList[rank], val: SIMD[acc_dtype, width]):
+        out_ptr[coords[0]] = val[0].cast[dtype]()
+
+    var in_shape = IndexList[2](rows, cols)
+    var out_shape = IndexList[2](rows, 1)
+
+    @always_inline
+    @parameter
+    def run[target: StaticString]() raises:
+        mean[acc_dtype, input_fn, output_fn, target=target, reduce_dim=1](
+            Coord(in_shape), Coord(out_shape), ctx
+        )
+
+    if ctx.api() == "cpu":
+        run["cpu"]()
+    else:
+        comptime if has_accelerator():
+            run["gpu"]()
+        else:
+            raise Error("no GPU accelerator available at compile time")
 
 
 def _mean_rows_go(
@@ -1123,73 +1182,119 @@ def _gather0_go(
 
 
 # ---------------------------------------------------------------------------
-# all() over a bool tensor -> scalar bool: one 256-thread block, strided
-# scan + shared-memory AND-tree (was a single sequential GPU thread, which
-# sat on the decode critical path via the HF sdpa mask check).
+# Full any()/all() over a bool tensor -> scalar bool. Viewed as one row of
+# `size` bools reduced over the trailing axis (any = max / all = min over bool).
+# aten caps this path at < 4.2M elements, so it is almost always the small
+# regime; a single 256-thread block (strided scan + shared-memory AND/OR tree,
+# no per-call allocation) handles it, which matters because the HF sdpa mask
+# check runs this every decode step. Only the rare huge case (>= 2^20) is handed
+# to the stdlib library's two-phase multi-block tier.
 # ---------------------------------------------------------------------------
 
 
 @__llvm_metadata(
     MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(ROWRED_THREADS))
 )
-@__name("pure_all_bool_block")
-def _all_bool_kernel(
+@__name(t"bool_full_block_{is_all}")
+def _bool_full_block_kernel[
+    is_all: Bool
+](
     out_ptr: UnsafePointer[Scalar[DType.bool], MutAnyOrigin],
     in_ptr: UnsafePointer[Scalar[DType.bool], ImmutAnyOrigin],
     size: Int,
 ):
     var tid = Int(thread_idx.x)
-    var ok = True
+    var acc = is_all
     for j in range(tid, size, ROWRED_THREADS):
-        if not in_ptr[j]:
-            ok = False
+        comptime if is_all:
+            if not in_ptr[j]:
+                acc = False
+        else:
+            if in_ptr[j]:
+                acc = True
     var red = stack_allocation[
         ROWRED_THREADS, DType.bool, address_space=AddressSpace.SHARED
     ]()
-    red[tid] = ok
+    red[tid] = acc
     barrier()
     comptime for stage in range(ROWRED_STAGES):
         comptime half = ROWRED_THREADS >> (stage + 1)
         if tid < half:
-            red[tid] = red[tid] and red[tid + half]
+            comptime if is_all:
+                red[tid] = red[tid] and red[tid + half]
+            else:
+                red[tid] = red[tid] or red[tid + half]
         barrier()
     if tid == 0:
         out_ptr[0] = red[0]
 
 
+@always_inline
+def _bool_full_reduce[
+    is_all: Bool
+](out_addr: Int, in_addr: Int, size: Int, ctx: DeviceContext) raises:
+    var out_ptr = _make_ptr[DType.bool](out_addr)
+    var in_ptr = _make_ptr[DType.bool](in_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(in_ptr)
+    def input_fn[
+        width: Int, rank: Int
+    ](coords: IndexList[rank]) -> SIMD[DType.bool, width]:
+        return in_ptr.load[width=width](coords[0] * size + coords[1])
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr)
+    def output_fn[
+        width: SIMDSize, rank: Int
+    ](coords: IndexList[rank], val: SIMD[DType.bool, width]):
+        out_ptr[coords[0]] = val[0]
+
+    var shape = IndexList[2](1, size)
+
+    @always_inline
+    @parameter
+    def run[target: StaticString]() raises:
+        comptime if is_all:
+            reduce_min[
+                DType.bool, input_fn, output_fn, target=target, reduce_dim=1
+            ](Coord(shape), ctx)
+        else:
+            reduce_max[
+                DType.bool, input_fn, output_fn, target=target, reduce_dim=1
+            ](Coord(shape), ctx)
+
+    if ctx.api() == "cpu":
+        run["cpu"]()
+    else:
+        comptime if has_accelerator():
+            if _use_library_reduce(1, size):
+                run["gpu"]()
+            else:
+                _enqueue_cached[_bool_full_block_kernel[is_all]](
+                    ctx,
+                    String(t"bool_full_block_{is_all}"),
+                    1,
+                    1,
+                    1,
+                    ROWRED_THREADS,
+                    out_ptr.as_unsafe_any_origin(),
+                    in_ptr.as_unsafe_any_origin().as_immutable(),
+                    size,
+                )
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
+
 def _all_bool(
     out_addr: Int, in_addr: Int, size: Int, ctx: DeviceContext
 ) raises:
-    var out_ptr = _make_ptr[DType.bool](out_addr).as_unsafe_any_origin()
-    var in_ptr = (
-        _make_ptr[DType.bool](in_addr).as_unsafe_any_origin().as_immutable()
-    )
-    if ctx.api() == "cpu":
-
-        @always_inline
-        @parameter
-        @__copy_capture(out_ptr, in_ptr)
-        def func[width: Int, alignment: Int = 1](idx: Coord):
-            var result = True
-            for j in range(size):
-                if not in_ptr[j]:
-                    result = False
-                    break
-            out_ptr[0] = result
-
-        _parallel_for[func](1, ctx)
-        return
-    _enqueue_cached[_all_bool_kernel](
-        ctx,
-        String("all_bool_block"),
-        1,
-        1,
-        1,
-        ROWRED_THREADS,
-        out_ptr,
-        in_ptr,
-        size,
-    )
+    """Full all() over a bool tensor -> scalar bool (AND). Single-block for the
+    common small case, stdlib library for the rare huge case (`_bool_full_reduce`).
+    """
+    _bool_full_reduce[is_all=True](out_addr, in_addr, size, ctx)
 
 
 def _all_bool_go(
@@ -1211,68 +1316,14 @@ def _all_bool_go(
 # ---------------------------------------------------------------------------
 
 
-@__llvm_metadata(
-    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(ROWRED_THREADS))
-)
-@__name("pure_any_bool_block")
-def _any_bool_kernel(
-    out_ptr: UnsafePointer[Scalar[DType.bool], MutAnyOrigin],
-    in_ptr: UnsafePointer[Scalar[DType.bool], ImmutAnyOrigin],
-    size: Int,
-):
-    var tid = Int(thread_idx.x)
-    var found = False
-    for j in range(tid, size, ROWRED_THREADS):
-        if in_ptr[j]:
-            found = True
-    var red = stack_allocation[
-        ROWRED_THREADS, DType.bool, address_space=AddressSpace.SHARED
-    ]()
-    red[tid] = found
-    barrier()
-    comptime for stage in range(ROWRED_STAGES):
-        comptime half = ROWRED_THREADS >> (stage + 1)
-        if tid < half:
-            red[tid] = red[tid] or red[tid + half]
-        barrier()
-    if tid == 0:
-        out_ptr[0] = red[0]
-
-
 @always_inline
 def _any_bool(
     out_addr: Int, in_addr: Int, size: Int, ctx: DeviceContext
 ) raises:
-    var out_ptr = _make_ptr[DType.bool](out_addr).as_unsafe_any_origin()
-    var in_ptr = (
-        _make_ptr[DType.bool](in_addr).as_unsafe_any_origin().as_immutable()
-    )
-    if ctx.api() == "cpu":
-
-        @always_inline
-        @parameter
-        @__copy_capture(out_ptr, in_ptr)
-        def func[width: Int, alignment: Int = 1](idx: Coord):
-            var result = False
-            for j in range(size):
-                if in_ptr[j]:
-                    result = True
-                    break
-            out_ptr[0] = result
-
-        _parallel_for[func](1, ctx)
-        return
-    _enqueue_cached[_any_bool_kernel](
-        ctx,
-        String("any_bool_block"),
-        1,
-        1,
-        1,
-        ROWRED_THREADS,
-        out_ptr,
-        in_ptr,
-        size,
-    )
+    """Full any() over a bool tensor -> scalar bool (OR). Single-block for the
+    common small case, stdlib library for the rare huge case (`_bool_full_reduce`).
+    """
+    _bool_full_reduce[is_all=False](out_addr, in_addr, size, ctx)
 
 
 def _any_bool_go(
@@ -1442,30 +1493,107 @@ def _argmax_rows_go(
 # ---------------------------------------------------------------------------
 # Row-wise max reduction (values only): input viewed as (rows, cols), out
 # has `rows` elements of the same dtype. rows=1 covers aten.max() (no dim).
+# Routes the under-saturated, huge-col regime to the stdlib library (two-phase
+# fan-out) and everything else to a 256-thread block-per-row kernel; the decode
+# loop calls this every step with a tiny (1, batch) input, where the library's
+# per-call scratch allocation would be pure overhead.
 # ---------------------------------------------------------------------------
+
+
+@__llvm_metadata(
+    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(ROWRED_THREADS))
+)
+@__name(t"max_rows_block_{dtype}")
+def _max_rows_block_kernel[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    cols: Int,
+):
+    comptime acc_dtype = _accum_dtype[dtype]()
+    var r = block_idx.x
+    var tid = thread_idx.x
+    var base = r * cols
+
+    var acc = min_or_neg_inf[acc_dtype]()
+    for j in range(tid, cols, ROWRED_THREADS):
+        var v = in_ptr[base + j].cast[acc_dtype]()
+        if v > acc:
+            acc = v
+
+    var red = stack_allocation[
+        ROWRED_THREADS, acc_dtype, address_space=AddressSpace.SHARED
+    ]()
+    red[tid] = acc
+    barrier()
+    var stride = ROWRED_THREADS // 2
+    for _ in range(ROWRED_STAGES):
+        if tid < stride:
+            if red[tid + stride] > red[tid]:
+                red[tid] = red[tid + stride]
+        barrier()
+        stride //= 2
+    if tid == 0:
+        out_ptr[r] = red[0].cast[dtype]()
 
 
 @always_inline
 def _max_rows[
     dtype: DType
 ](out_addr: Int, in_addr: Int, rows: Int, cols: Int, ctx: DeviceContext) raises:
+    """Row-wise max (values only). rows == 1 covers aten.max() (full reduce).
+    Floats reduce in float32 (max is exact under the cast)."""
+    comptime acc_dtype = _accum_dtype[dtype]()
     var out_ptr = _make_ptr[dtype](out_addr)
     var in_ptr = _make_ptr[dtype](in_addr)
 
     @always_inline
     @parameter
-    @__copy_capture(out_ptr, in_ptr)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var r = Int(idx[0].value())
-        var base = r * cols
-        var best = in_ptr[base]
-        for j in range(1, cols):
-            var v = in_ptr[base + j]
-            if v > best:
-                best = v
-        out_ptr[r] = best
+    @__copy_capture(in_ptr)
+    def input_fn[
+        width: Int, rank: Int
+    ](coords: IndexList[rank]) -> SIMD[acc_dtype, width]:
+        var flat = coords[0] * cols + coords[1]
+        return in_ptr.load[width=width](flat).cast[acc_dtype]()
 
-    _parallel_for[func](rows, ctx)
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr)
+    def output_fn[
+        width: SIMDSize, rank: Int
+    ](coords: IndexList[rank], val: SIMD[acc_dtype, width]):
+        out_ptr[coords[0]] = val[0].cast[dtype]()
+
+    var shape = IndexList[2](rows, cols)
+
+    @always_inline
+    @parameter
+    def run[target: StaticString]() raises:
+        reduce_max[acc_dtype, input_fn, output_fn, target=target, reduce_dim=1](
+            Coord(shape), ctx
+        )
+
+    if ctx.api() == "cpu":
+        run["cpu"]()
+    else:
+        comptime if has_accelerator():
+            if _use_library_reduce(rows, cols):
+                run["gpu"]()
+            else:
+                _enqueue_cached[_max_rows_block_kernel[dtype]](
+                    ctx,
+                    String(t"max_rows_{dtype}"),
+                    rows,
+                    1,
+                    1,
+                    ROWRED_THREADS,
+                    out_ptr.as_unsafe_any_origin(),
+                    in_ptr.as_unsafe_any_origin().as_immutable(),
+                    cols,
+                )
+        else:
+            raise Error("no GPU accelerator available at compile time")
 
 
 def _max_rows_go(
