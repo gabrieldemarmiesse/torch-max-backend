@@ -7,7 +7,7 @@ The `.mojo` modules in this package are imported through `mojo.importer`
 in this directory changes).
 
 An op call here is one CPython extension call that receives raw data
-pointers (from `TorchMaxTensor._ptr`) plus sizes/dtypes as plain ints, and
+pointers (from `TorchMojoTensor._ptr`) plus sizes/dtypes as plain ints, and
 enqueues a kernel on MAX's own DeviceContext, so it stays correctly ordered
 with every other MAX driver operation on that device.
 

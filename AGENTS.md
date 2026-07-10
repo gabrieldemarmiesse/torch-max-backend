@@ -138,9 +138,9 @@ register_aten_op("aten::_log_softmax")(
 ```
 
 Place the registration in alphabetical order within the file. The `wrap_for_max_device` wrapper automatically:
-- Converts `TorchMaxTensor` inputs to `MaxEagerTensor`
+- Converts `TorchMojoTensor` inputs to `MaxEagerTensor`
 - Executes the operation
-- Converts results back to `TorchMaxTensor`
+- Converts results back to `TorchMojoTensor`
 
 **Note**: For operations requiring custom device handling (like `aten::_copy_from`), you can implement a custom function directly instead of using `wrap_for_max_device`.
 

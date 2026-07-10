@@ -7,7 +7,7 @@
 # *pure ownership token* — it owns one `DeviceBuffer[DType.uint8]` (byte-typed
 # = dtype-erased) allocated on MAX's stream via `enqueue_create_buffer`. All
 # layout metadata (shape / strides / storage_offset / dtype) lives on the
-# Python `TorchMaxTensor` wrapper; views share the *same* holder object and
+# Python `TorchMojoTensor` wrapper; views share the *same* holder object and
 # CPython's refcount keeps the allocation alive until the last view dies, at
 # which point the holder's destructor releases the AsyncRT buffer — a
 # stream-ordered (fire-and-forget) free that is safe because alloc, kernels

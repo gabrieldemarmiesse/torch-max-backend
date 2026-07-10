@@ -101,7 +101,7 @@ def _pad8(values, fill: int) -> tuple[int, ...]:
     return (fill,) * (MAX_RANK - len(values)) + values
 
 
-class TorchMaxTensor(torch.Tensor):
+class TorchMojoTensor(torch.Tensor):
     """Eager mojo tensor.
 
     A meta-backed `PrivateUse1` wrapper (`torch._C._acc.create_empty_tensor`
@@ -125,11 +125,11 @@ class TorchMaxTensor(torch.Tensor):
     @no_type_check
     def _make(
         cls, holder, ptr, shape, strides, offset, dtype, device, contiguous=None
-    ) -> "TorchMaxTensor":
+    ) -> "TorchMojoTensor":
         shape = tuple(shape)
         strides = tuple(strides)
         res = torch._C._acc.create_empty_tensor(shape, _torch_dtype_of(dtype))
-        res.__class__ = TorchMaxTensor
+        res.__class__ = TorchMojoTensor
         res._holder = holder
         res._ptr = ptr
         res._shape = shape
@@ -146,7 +146,9 @@ class TorchMaxTensor(torch.Tensor):
 
     @classmethod
     @no_type_check
-    def _alloc(cls, shape, dtype: DType, device: max.driver.Device) -> "TorchMaxTensor":
+    def _alloc(
+        cls, shape, dtype: DType, device: max.driver.Device
+    ) -> "TorchMojoTensor":
         """A new contiguous uninitialized tensor (one device allocation)."""
         shape = tuple(shape)
         numel = math.prod(shape)
@@ -165,8 +167,8 @@ class TorchMaxTensor(torch.Tensor):
     @classmethod
     @no_type_check
     def _view_of(
-        cls, base: "TorchMaxTensor", shape, strides, offset, contiguous=None
-    ) -> "TorchMaxTensor":
+        cls, base: "TorchMojoTensor", shape, strides, offset, contiguous=None
+    ) -> "TorchMojoTensor":
         """A zero-copy view: shares base's holder, new layout metadata.
 
         `offset` is absolute, in elements from the allocation start.
@@ -188,7 +190,7 @@ class TorchMaxTensor(torch.Tensor):
     @no_type_check
     def _from_cpu(
         cls, cpu_tensor: torch.Tensor, device: max.driver.Device
-    ) -> "TorchMaxTensor":
+    ) -> "TorchMojoTensor":
         """H2D: allocate + copy from a CPU torch tensor (synchronizes)."""
         from max.experimental.torch.torch import torch_dtype_to_max
 
@@ -229,9 +231,9 @@ class TorchMaxTensor(torch.Tensor):
         return out
 
     @no_type_check
-    def _materialize_contiguous(self) -> "TorchMaxTensor":
+    def _materialize_contiguous(self) -> "TorchMojoTensor":
         """A new contiguous tensor with this tensor's (strided) contents."""
-        out = TorchMaxTensor._alloc(self._shape, self._dtype, self._device)
+        out = TorchMojoTensor._alloc(self._shape, self._dtype, self._device)
         if self._numel > 0:
             rank = len(self._shape)
             if rank <= 4:
@@ -255,13 +257,13 @@ class TorchMaxTensor(torch.Tensor):
         return out
 
     @no_type_check
-    def _contig(self) -> "TorchMaxTensor":
+    def _contig(self) -> "TorchMojoTensor":
         """self if already contiguous, else a materialized copy."""
         return self if self._is_contiguous else self._materialize_contiguous()
 
     def __repr__(self):
         if hasattr(self, "_holder"):
-            return f"TorchMaxTensor({self._to_cpu_tensor()!r}, device='{self.device}')"
+            return f"TorchMojoTensor({self._to_cpu_tensor()!r}, device='{self.device}')"
         return super().__repr__()
 
     @property
@@ -276,7 +278,7 @@ class TorchMaxTensor(torch.Tensor):
 
 
 @no_type_check
-def _rebind_payload(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
+def _rebind_payload(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """Point dst's payload at src's data — the out-variant "resize" pattern.
 
     torch's out= ops resize `out` when the shape doesn't match; our meta
@@ -296,7 +298,7 @@ def _rebind_payload(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
 
 
 @no_type_check
-def _copy_strided_into(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
+def _copy_strided_into(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """dst[coords] = src[coords]; same shape and dtype, any strides.
 
     The shared materialize/copy primitive: powers .contiguous(), copy_ into

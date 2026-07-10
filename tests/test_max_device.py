@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from torch_max_backend import TorchMaxTensor, max_backend, register_max_devices
+from torch_max_backend import TorchMojoTensor, max_backend, register_max_devices
 from torch_max_backend.max_device.torch_max_tensor import (
     find_equivalent_max_device,
     get_ordered_accelerators,
@@ -27,7 +27,7 @@ def test_tensor_to_max_device(max_device):
     max_tensor = cpu_tensor.to(max_device)
 
     # Check type and properties
-    assert isinstance(max_tensor, TorchMaxTensor)
+    assert isinstance(max_tensor, TorchMojoTensor)
     assert max_tensor.shape == (3,)
     assert max_tensor.dtype == torch.float32
 
@@ -50,7 +50,7 @@ def test_factory_arange(max_device):
     """Test torch.arange with max_device"""
     tensor = torch.arange(5, device=max_device)
 
-    assert isinstance(tensor, TorchMaxTensor)
+    assert isinstance(tensor, TorchMojoTensor)
     assert tensor.shape == (5,)
 
     # Convert to CPU to check values
@@ -64,7 +64,7 @@ def test_factory_rand(max_device):
     """Test torch.rand with max_device"""
     tensor = torch.rand(3, 4, device=max_device)
 
-    assert isinstance(tensor, TorchMaxTensor)
+    assert isinstance(tensor, TorchMojoTensor)
     assert tensor.shape == (3, 4)
 
     # Check that values are in [0, 1] range when converted to CPU
@@ -77,7 +77,7 @@ def test_factory_empty(max_device):
     """Test torch.empty with max_device"""
     tensor = torch.empty(2, 3, device=max_device)
 
-    assert isinstance(tensor, TorchMaxTensor)
+    assert isinstance(tensor, TorchMojoTensor)
     assert tensor.shape == (2, 3)
 
 
@@ -85,11 +85,11 @@ def test_device_string_variations():
     """Test different mojo device string formats"""
     # Basic mojo device
     t1 = torch.tensor([1.0]).to("mojo")
-    assert isinstance(t1, TorchMaxTensor)
+    assert isinstance(t1, TorchMojoTensor)
 
     # With index (should also work)
     t2 = torch.tensor([1.0]).to("mojo:0")
-    assert isinstance(t2, TorchMaxTensor)
+    assert isinstance(t2, TorchMojoTensor)
 
 
 @pytest.mark.xfail(reason="TODO: add pretty repr and str")
@@ -211,12 +211,12 @@ def test_gpu_first_cpu_last_convention():
 
         # Test that mojo (index 0) goes to GPU
         t_gpu = torch.tensor([1.0]).to("mojo")
-        assert isinstance(t_gpu, TorchMaxTensor)
+        assert isinstance(t_gpu, TorchMojoTensor)
 
         # Test that highest index goes to CPU
         cpu_index = len(ordered_accelerators) - 1
         t_cpu = torch.tensor([1.0]).to(f"mojo:{cpu_index}")
-        assert isinstance(t_cpu, TorchMaxTensor)
+        assert isinstance(t_cpu, TorchMojoTensor)
 
 
 # Original tests from the existing file

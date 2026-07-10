@@ -17,7 +17,7 @@ from max.experimental.torch.torch import torch_dtype_to_max
 
 import torch_max_backend.is_running_tests
 from torch_max_backend.max_device.torch_max_tensor import (
-    TorchMaxTensor,
+    TorchMojoTensor,
     _copy_strided_into,
     _rebind_payload,
     find_equivalent_max_device,
@@ -78,7 +78,7 @@ def _fast():
 def _describe_args(args, kwargs) -> str:
     descs = []
     for a in list(args) + list(kwargs.values()):
-        if isinstance(a, TorchMaxTensor):
+        if isinstance(a, TorchMojoTensor):
             descs.append(f"{tuple(a._shape)}:{a._dtype}")
         elif isinstance(a, torch.Tensor):
             descs.append(f"{tuple(a.shape)}:{a.dtype}:{a.device}")
@@ -134,7 +134,7 @@ def _register_missing(op_name: str):
 
 
 @no_type_check
-def _copy_into_tensor(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
+def _copy_into_tensor(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """dst[...] = src[...] with dtype cast + broadcast, any strides."""
     aten_fast = _fast()
     if src._dtype != dst._dtype:
@@ -152,7 +152,7 @@ def _out_variant(op_name: str, fast_name: str):
     """Wrap a functional fast implementation as an out= variant: compute,
     then copy into `out` (strided-safe)."""
 
-    def dispatcher(*args, out: TorchMaxTensor, **kwargs):
+    def dispatcher(*args, out: TorchMojoTensor, **kwargs):
         aten_fast = _fast()
         result = getattr(aten_fast, fast_name)(*args, **kwargs)
         if result is aten_fast.NOT_HANDLED:
@@ -175,13 +175,13 @@ def _out_variant(op_name: str, fast_name: str):
 @register_aten_op("aten::_copy_from")
 @no_type_check
 def max_device__copy_from(self, dest):
-    src_is_max = isinstance(self, TorchMaxTensor)
-    dest_is_max = isinstance(dest, TorchMaxTensor)
+    src_is_max = isinstance(self, TorchMojoTensor)
+    dest_is_max = isinstance(dest, TorchMojoTensor)
 
     if src_is_max and dest_is_max:
         if self._device != dest._device:
             # Cross max-device: bounce through the host.
-            bounced = TorchMaxTensor._from_cpu(self._to_cpu_tensor(), dest._device)
+            bounced = TorchMojoTensor._from_cpu(self._to_cpu_tensor(), dest._device)
             _copy_into_tensor(dest, bounced)
             return dest
         _copy_into_tensor(dest, self)
@@ -212,7 +212,7 @@ def max_device__copy_from(self, dest):
                     dest._numel * dest._itemsize,
                 )
         else:
-            staged = TorchMaxTensor._from_cpu(cpu, dest._device)
+            staged = TorchMojoTensor._from_cpu(cpu, dest._device)
             _copy_strided_into(dest, staged)
         return dest
 
@@ -241,12 +241,12 @@ def max_device__to_copy(
     memory_format: torch.memory_format | None = None,
 ):
     aten_fast = _fast()
-    if not isinstance(tensor, TorchMaxTensor):
+    if not isinstance(tensor, TorchMojoTensor):
         # CPU tensor moving onto max_device (optionally casting on host).
         t = tensor.detach()
         if dtype is not None and t.dtype != dtype:
             t = t.to(dtype)
-        return TorchMaxTensor._from_cpu(t, find_equivalent_max_device(device))
+        return TorchMojoTensor._from_cpu(t, find_equivalent_max_device(device))
 
     result = tensor
     if dtype is not None:
@@ -267,13 +267,13 @@ def max_device__to_copy(
                     if device is not None
                     else result._device
                 )
-                return TorchMaxTensor._from_cpu(cpu, target)
+                return TorchMojoTensor._from_cpu(cpu, target)
     if device is not None and device.type == "cpu":
         return result._to_cpu_tensor()
     if device is not None:
         target = find_equivalent_max_device(device)
         if target != result._device:
-            return TorchMaxTensor._from_cpu(result._to_cpu_tensor(), target)
+            return TorchMojoTensor._from_cpu(result._to_cpu_tensor(), target)
     if result is tensor:
         # _to_copy always returns a fresh tensor.
         result = tensor._materialize_contiguous()
@@ -289,9 +289,9 @@ def max_device__to_copy(
 @no_type_check
 def max_device_empty_memory_format(
     size, *, dtype=None, layout=None, device=None, pin_memory=None, memory_format=None
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     dtype = torch.get_default_dtype() if dtype is None else dtype
-    return TorchMaxTensor._alloc(
+    return TorchMojoTensor._alloc(
         tuple(size), torch_dtype_to_max(dtype), find_equivalent_max_device(device)
     )
 
@@ -301,11 +301,11 @@ def max_device_empty_memory_format(
 @no_type_check
 def empty_strided(
     size, stride, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     # The requested strides are ignored: allocation is always contiguous
     # (matching the previous behavior; our metadata is self-consistent).
     dtype = torch.get_default_dtype() if dtype is None else dtype
-    return TorchMaxTensor._alloc(
+    return TorchMojoTensor._alloc(
         tuple(size), torch_dtype_to_max(dtype), find_equivalent_max_device(device)
     )
 
@@ -314,10 +314,10 @@ def empty_strided(
 @no_type_check
 def max_device_empty_permuted(
     size, physical_layout, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     # Uninitialized memory: a contiguous allocation of `size` is valid.
     dtype = torch.get_default_dtype() if dtype is None else dtype
-    return TorchMaxTensor._alloc(
+    return TorchMojoTensor._alloc(
         tuple(size), torch_dtype_to_max(dtype), find_equivalent_max_device(device)
     )
 
@@ -325,21 +325,21 @@ def max_device_empty_permuted(
 @register_aten_op("aten::empty_like")
 @no_type_check
 def max_device_empty_like(
-    self: TorchMaxTensor,
+    self: TorchMojoTensor,
     *,
     dtype=None,
     layout=None,
     device=None,
     pin_memory=None,
     memory_format=None,
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
     max_device = self._device if device is None else find_equivalent_max_device(device)
-    return TorchMaxTensor._alloc(self._shape, max_dtype, max_device)
+    return TorchMojoTensor._alloc(self._shape, max_dtype, max_device)
 
 
 @no_type_check
-def _new_factory_device(self: TorchMaxTensor, device):
+def _new_factory_device(self: TorchMojoTensor, device):
     """Target MAX device for a `new_*` factory. torch passes `self`'s device
     (whose torch-side index is the phantom 0) when the caller doesn't
     override it, so default to `self`'s real MAX device; only an explicit
@@ -355,10 +355,16 @@ def _new_factory_device(self: TorchMaxTensor, device):
 @register_aten_op("aten::new_empty")
 @no_type_check
 def max_device_new_empty(
-    self: TorchMaxTensor, size, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+    self: TorchMojoTensor,
+    size,
+    *,
+    dtype=None,
+    layout=None,
+    device=None,
+    pin_memory=None,
+) -> TorchMojoTensor:
     max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
-    return TorchMaxTensor._alloc(
+    return TorchMojoTensor._alloc(
         tuple(size), max_dtype, _new_factory_device(self, device)
     )
 
@@ -366,8 +372,14 @@ def max_device_new_empty(
 @register_aten_op("aten::new_zeros")
 @no_type_check
 def max_device_new_zeros(
-    self: TorchMaxTensor, size, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+    self: TorchMojoTensor,
+    size,
+    *,
+    dtype=None,
+    layout=None,
+    device=None,
+    pin_memory=None,
+) -> TorchMojoTensor:
     max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
     result = _fast().fast_filled(size, 0, max_dtype, _new_factory_device(self, device))
     if result is None:
@@ -378,8 +390,14 @@ def max_device_new_zeros(
 @register_aten_op("aten::new_ones")
 @no_type_check
 def max_device_new_ones(
-    self: TorchMaxTensor, size, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+    self: TorchMojoTensor,
+    size,
+    *,
+    dtype=None,
+    layout=None,
+    device=None,
+    pin_memory=None,
+) -> TorchMojoTensor:
     max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
     result = _fast().fast_filled(size, 1, max_dtype, _new_factory_device(self, device))
     if result is None:
@@ -390,7 +408,7 @@ def max_device_new_ones(
 @register_aten_op("aten::new_full")
 @no_type_check
 def max_device_new_full(
-    self: TorchMaxTensor,
+    self: TorchMojoTensor,
     size,
     fill_value,
     *,
@@ -398,7 +416,7 @@ def max_device_new_full(
     layout=None,
     device=None,
     pin_memory=None,
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
     result = _fast().fast_filled(
         size, fill_value, max_dtype, _new_factory_device(self, device)
@@ -427,7 +445,7 @@ def _fast_filled_tensor(size, value, dtype, device):
 @no_type_check
 def max_device_full(
     size, fill_value, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     if dtype is not None:
         resolved = dtype
     elif isinstance(fill_value, bool):
@@ -442,7 +460,7 @@ def max_device_full(
 @register_aten_op("aten::full_like")
 @no_type_check
 def max_device_full_like(
-    self: TorchMaxTensor,
+    self: TorchMojoTensor,
     fill_value,
     *,
     dtype=None,
@@ -450,7 +468,7 @@ def max_device_full_like(
     device=None,
     pin_memory=None,
     memory_format=None,
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     max_dtype = self._dtype if dtype is None else torch_dtype_to_max(dtype)
     max_device = self._device if device is None else find_equivalent_max_device(device)
     result = _fast().fast_filled(self._shape, fill_value, max_dtype, max_device)
@@ -463,7 +481,7 @@ def max_device_full_like(
 @no_type_check
 def max_device_ones(
     size, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     resolved = torch.get_default_dtype() if dtype is None else dtype
     return _fast_filled_tensor(size, 1, resolved, device)
 
@@ -471,14 +489,14 @@ def max_device_ones(
 @register_aten_op("aten::ones_like")
 @no_type_check
 def max_device_ones_like(
-    self: TorchMaxTensor,
+    self: TorchMojoTensor,
     *,
     dtype=None,
     layout=None,
     device=None,
     pin_memory=None,
     memory_format=None,
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     return max_device_full_like(self, 1, dtype=dtype, device=device)
 
 
@@ -486,7 +504,7 @@ def max_device_ones_like(
 @no_type_check
 def max_device_zeros(
     size, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     resolved = torch.get_default_dtype() if dtype is None else dtype
     return _fast_filled_tensor(size, 0, resolved, device)
 
@@ -494,14 +512,14 @@ def max_device_zeros(
 @register_aten_op("aten::zeros_like")
 @no_type_check
 def max_device_zeros_like(
-    self: TorchMaxTensor,
+    self: TorchMojoTensor,
     *,
     dtype=None,
     layout=None,
     device=None,
     pin_memory=None,
     memory_format=None,
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     return max_device_full_like(self, 0, dtype=dtype, device=device)
 
 
@@ -509,7 +527,7 @@ def max_device_zeros_like(
 @no_type_check
 def max_device_scalar_tensor(
     s, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     resolved = torch.float32 if dtype is None else dtype
     return _fast_filled_tensor((), s, resolved, device)
 
@@ -561,7 +579,7 @@ _MAX_EXACT_F64_INT = 2**53
 @no_type_check
 def max_device_arange(
     start, end=None, step=1, *, dtype=None, layout=None, device=None, pin_memory=None
-) -> TorchMaxTensor:
+) -> TorchMojoTensor:
     if end is None:
         start, end = 0, start
     result = _device_arange(start, end, step, dtype, device)
@@ -569,19 +587,19 @@ def max_device_arange(
         return result
     # Build on the host with exact torch semantics, then one H2D copy.
     cpu = _host_arange_tensor(start, end, step, dtype)
-    return TorchMaxTensor._from_cpu(cpu, find_equivalent_max_device(device))
+    return TorchMojoTensor._from_cpu(cpu, find_equivalent_max_device(device))
 
 
 @register_aten_op("aten::arange.start_out")
 @no_type_check
-def max_device_arange_start_out(start, end, step=1, *, out) -> TorchMaxTensor:
+def max_device_arange_start_out(start, end, step=1, *, out) -> TorchMojoTensor:
     # torch.arange(start, end, step, device=...) dispatches to the out
     # variant with a pre-allocated `out` of the right size and dtype.
     torch_dtype = max_dtype_to_torch_dtype(out._dtype)
     staged = _device_arange(start, end, step, torch_dtype, out.device)
     if staged is None:
         cpu = _host_arange_tensor(start, end, step, torch_dtype)
-        staged = TorchMaxTensor._from_cpu(cpu, out._device)
+        staged = TorchMojoTensor._from_cpu(cpu, out._device)
     if tuple(staged._shape) == tuple(out._shape):
         _copy_into_tensor(out, staged)
     else:
@@ -592,14 +610,14 @@ def max_device_arange_start_out(start, end, step=1, *, out) -> TorchMaxTensor:
 @register_aten_op("aten::normal_")
 @no_type_check
 def max_device_normal_(
-    self: TorchMaxTensor, mean: float = 0.0, std: float = 1.0, generator=None
-) -> TorchMaxTensor:
+    self: TorchMojoTensor, mean: float = 0.0, std: float = 1.0, generator=None
+) -> TorchMojoTensor:
     if generator is not None:
         raise _unsupported("aten::normal_ (generator)", (self,))
     cpu = torch.empty(self._shape, dtype=max_dtype_to_torch_dtype(self._dtype)).normal_(
         mean, std
     )
-    staged = TorchMaxTensor._from_cpu(cpu, self._device)
+    staged = TorchMojoTensor._from_cpu(cpu, self._device)
     _copy_into_tensor(self, staged)
     return self
 
@@ -611,7 +629,9 @@ def max_device_normal_(
 
 @register_aten_op("aten::add_.Tensor")
 @no_type_check
-def max_device_add_(self: TorchMaxTensor, other, alpha: float = 1.0) -> TorchMaxTensor:
+def max_device_add_(
+    self: TorchMojoTensor, other, alpha: float = 1.0
+) -> TorchMojoTensor:
     result = _fast().fast_aten_add_(self, other, alpha)
     if result is None:
         raise _unsupported("aten::add_.Tensor", (self, other))
@@ -620,7 +640,7 @@ def max_device_add_(self: TorchMaxTensor, other, alpha: float = 1.0) -> TorchMax
 
 @register_aten_op("aten::fill_.Scalar")
 @no_type_check
-def max_device_fill__scalar(self: TorchMaxTensor, value) -> TorchMaxTensor:
+def max_device_fill__scalar(self: TorchMojoTensor, value) -> TorchMojoTensor:
     result = _fast().fast_aten_fill__scalar(self, value)
     if result is None:
         raise _unsupported("aten::fill_.Scalar", (self, value))
@@ -631,8 +651,8 @@ def max_device_fill__scalar(self: TorchMaxTensor, value) -> TorchMaxTensor:
 @register_aten_op("aten::masked_fill_.Tensor")
 @no_type_check
 def max_device_masked_fill_(
-    self: TorchMaxTensor, mask: TorchMaxTensor, value
-) -> TorchMaxTensor:
+    self: TorchMojoTensor, mask: TorchMojoTensor, value
+) -> TorchMojoTensor:
     result = _fast().fast_aten_masked_fill_(self, mask, value)
     if result is None:
         raise _unsupported("aten::masked_fill_", (self, mask, value))
@@ -641,7 +661,7 @@ def max_device_masked_fill_(
 
 @register_aten_op("aten::relu_")
 @no_type_check
-def max_device_relu_(self: TorchMaxTensor) -> TorchMaxTensor:
+def max_device_relu_(self: TorchMojoTensor) -> TorchMojoTensor:
     aten_fast = _fast()
     result = aten_fast.fast_aten_relu(self)
     if result is aten_fast.NOT_HANDLED:
@@ -652,7 +672,7 @@ def max_device_relu_(self: TorchMaxTensor) -> TorchMaxTensor:
 
 @register_aten_op("aten::zero_")
 @no_type_check
-def max_device_zero_(self: TorchMaxTensor) -> TorchMaxTensor:
+def max_device_zero_(self: TorchMojoTensor) -> TorchMojoTensor:
     return max_device_fill__scalar(self, 0)
 
 
@@ -676,8 +696,8 @@ register_aten_op("aten::isin.Tensor_Tensor_out")(
 @register_aten_op("aten::min.dim")
 @no_type_check
 def max_device_min_dim(
-    input: TorchMaxTensor, dim: int, keepdim: bool = False
-) -> tuple[TorchMaxTensor, TorchMaxTensor]:
+    input: TorchMojoTensor, dim: int, keepdim: bool = False
+) -> tuple[TorchMojoTensor, TorchMojoTensor]:
     """Functional torch.min(x, dim): (values, indices). Registered so torch
     doesn't synthesize it from the out= variant (which would allocate the
     outputs on the phantom index-0 device)."""
@@ -691,12 +711,12 @@ def max_device_min_dim(
 @register_aten_op("aten::min.dim_min")
 @no_type_check
 def max_device_min_dim_min(
-    input: TorchMaxTensor,
+    input: TorchMojoTensor,
     dim: int,
     keepdim: bool = False,
-    min: TorchMaxTensor | None = None,
-    min_indices: TorchMaxTensor | None = None,
-) -> tuple[TorchMaxTensor, TorchMaxTensor]:
+    min: TorchMojoTensor | None = None,
+    min_indices: TorchMojoTensor | None = None,
+) -> tuple[TorchMojoTensor, TorchMojoTensor]:
     """Out-variant of torch.min along a dim: writes values into `min` and
     int64 indices into `min_indices` (resizing via payload rebind when the
     pre-allocated shapes don't match, like the other out-variants)."""

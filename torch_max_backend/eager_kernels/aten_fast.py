@@ -1,7 +1,7 @@
 """ATen-signature-compatible fast implementations for max_device eager mode.
 
 Each function here is registered in `max_device_aten_ops.py` (through
-`_eager_impl`). Tensors are `TorchMaxTensor`s: a Mojo `TensorHolder`
+`_eager_impl`). Tensors are `TorchMojoTensor`s: a Mojo `TensorHolder`
 ownership token plus Python-side layout metadata (`_ptr`, `_shape`,
 `_strides` in elements, `_offset`, `_dtype`, `_device`, `_is_contiguous`).
 An op runs as one or a few Mojo kernel calls — no graph building, no MLIR
@@ -28,7 +28,7 @@ from max.dtype import DType
 from torch_max_backend import eager_kernels, is_running_tests
 from torch_max_backend.eager_kernels import _ctx_ptr
 from torch_max_backend.max_device.torch_max_tensor import (
-    TorchMaxTensor,
+    TorchMojoTensor,
     _copy_strided_into,
     _pad8,
     _row_major_strides,
@@ -115,30 +115,30 @@ _BCAST_DTYPES = _FLOAT_DTYPES + (
 
 
 @no_type_check
-def _t(x) -> TorchMaxTensor | None:
-    """x as a TorchMaxTensor (any layout), or None."""
-    return x if isinstance(x, TorchMaxTensor) else None
+def _t(x) -> TorchMojoTensor | None:
+    """x as a TorchMojoTensor (any layout), or None."""
+    return x if isinstance(x, TorchMojoTensor) else None
 
 
 @no_type_check
-def _tc(x) -> TorchMaxTensor | None:
-    """x as a *contiguous* TorchMaxTensor (materializing views), or None."""
-    if isinstance(x, TorchMaxTensor):
+def _tc(x) -> TorchMojoTensor | None:
+    """x as a *contiguous* TorchMojoTensor (materializing views), or None."""
+    if isinstance(x, TorchMojoTensor):
         return x if x._is_contiguous else x._materialize_contiguous()
     return None
 
 
-_alloc = TorchMaxTensor._alloc
-_view_of = TorchMaxTensor._view_of
+_alloc = TorchMojoTensor._alloc
+_view_of = TorchMojoTensor._view_of
 
 
 @no_type_check
-def _on_gpu(t: TorchMaxTensor) -> bool:
+def _on_gpu(t: TorchMojoTensor) -> bool:
     return t._device.label == "gpu"
 
 
 @no_type_check
-def _copy_into(dst: TorchMaxTensor, src: TorchMaxTensor) -> None:
+def _copy_into(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """dst[...] = src[...] for equal shapes/dtypes, any strides on both."""
     if dst._numel == 0:
         return
@@ -291,7 +291,7 @@ def _bcast_meta(*tensors):
 
 
 @no_type_check
-def _scalar_tensor_0d(value, dtype, device) -> TorchMaxTensor:
+def _scalar_tensor_0d(value, dtype, device) -> TorchMojoTensor:
     """A 0-d tensor holding `value`, for stride-0 broadcast operands."""
     out = _alloc((), dtype, device)
     eager_kernels.elementwise_ops.Fill(
@@ -301,7 +301,7 @@ def _scalar_tensor_0d(value, dtype, device) -> TorchMaxTensor:
 
 
 @no_type_check
-def _cast_tensor(x: TorchMaxTensor, dtype: DType) -> TorchMaxTensor:
+def _cast_tensor(x: TorchMojoTensor, dtype: DType) -> TorchMojoTensor:
     """Contiguous dtype cast through the Cast kernel."""
     a = _tc(x)
     out = _alloc(a._shape, dtype, a._device)
@@ -318,7 +318,7 @@ def _cast_tensor(x: TorchMaxTensor, dtype: DType) -> TorchMaxTensor:
 
 
 @no_type_check
-def _promoted_pair(a: TorchMaxTensor, b: TorchMaxTensor):
+def _promoted_pair(a: TorchMojoTensor, b: TorchMojoTensor):
     """Same-dtype tensor pair following torch's promotion, or None.
 
     Only the promotions the generation loops hit: bool combined with any
@@ -338,7 +338,7 @@ def _promoted_pair(a: TorchMaxTensor, b: TorchMaxTensor):
 
 
 @no_type_check
-def _resolve_scalar(value, dtype: DType, device) -> TorchMaxTensor | None:
+def _resolve_scalar(value, dtype: DType, device) -> TorchMojoTensor | None:
     """A 0-d stride-0 tensor holding a Python scalar in `dtype`, or None
     when the value doesn't embed losslessly."""
     if not isinstance(value, int | float):
@@ -360,7 +360,7 @@ def _resolve_scalar(value, dtype: DType, device) -> TorchMaxTensor | None:
 
 @no_type_check
 def _binary_operands(input, other):
-    """Resolve (lhs, rhs) TorchMaxTensors with equal dtypes for a broadcast
+    """Resolve (lhs, rhs) TorchMojoTensors with equal dtypes for a broadcast
     binary/comparison kernel. Either operand may be a Python scalar (which
     becomes a 0-d stride-0 tensor of the tensor operand's dtype), or None
     if unresolvable.
@@ -1863,7 +1863,7 @@ def fast_aten_index(input, indices):
             slice(None) if x is None else _t(x)._to_cpu_tensor() for x in indices
         )
         result = cpu_self[cpu_indices]
-        return TorchMaxTensor._from_cpu(result, t._device)
+        return TorchMojoTensor._from_cpu(result, t._device)
 
     return NOT_HANDLED
 
@@ -1981,7 +1981,7 @@ def fast_aten_nonzero(input):
     # Data-dependent output shape -> host bounce (syncs). `.nonzero()` returns
     # an int64 (N, ndim) tensor in C-order over the input's coordinates.
     result = t._to_cpu_tensor().nonzero()
-    return TorchMaxTensor._from_cpu(result, t._device)
+    return TorchMojoTensor._from_cpu(result, t._device)
 
 
 # ---------------------------------------------------------------------------
@@ -2905,7 +2905,7 @@ def fast_aten__scaled_dot_product_efficient_attention(
 
 
 @no_type_check
-def _fast_matmul(a, b) -> TorchMaxTensor | None:
+def _fast_matmul(a, b) -> TorchMojoTensor | None:
     """C = A @ B for 2D contiguous same-dtype float tensors."""
     if a is None or b is None:
         return None
@@ -3368,7 +3368,7 @@ def fast_aten_embedding(
 
 @no_type_check
 def fast_filled(shape, value, dtype: DType, device):
-    """A TorchMaxTensor of `shape` filled with `value`, or None."""
+    """A TorchMojoTensor of `shape` filled with `value`, or None."""
     if isinstance(value, bool):
         value = int(value)
     if not isinstance(value, int | float):
@@ -3392,7 +3392,7 @@ _ARANGE_DTYPES = _FILL_DTYPES[:-1]
 
 @no_type_check
 def fast_arange(numel, start, step, dtype: DType, device):
-    """A 1-D TorchMaxTensor holding start + i*step (device kernel), or None.
+    """A 1-D TorchMojoTensor holding start + i*step (device kernel), or None.
 
     The caller resolves torch's arange semantics (numel, dtype); values
     ride through the kernel's Float64 math, so anything beyond exact-f64
