@@ -462,6 +462,48 @@ def _spec_result2(
 
 
 @always_inline
+def _spec_result3(
+    var buf1: DeviceBuffer[DType.uint8],
+    addr1: Int,
+    nbytes1: Int,
+    rank1: Int,
+    shape1: IndexList[MAX_RANK],
+    dtype1: DType,
+    itemsize1: Int,
+    numel1: Int,
+    var buf2: DeviceBuffer[DType.uint8],
+    addr2: Int,
+    nbytes2: Int,
+    rank2: Int,
+    shape2: IndexList[MAX_RANK],
+    dtype2: DType,
+    itemsize2: Int,
+    numel2: Int,
+    var buf3: DeviceBuffer[DType.uint8],
+    addr3: Int,
+    nbytes3: Int,
+    rank3: Int,
+    shape3: IndexList[MAX_RANK],
+    dtype3: DType,
+    itemsize3: Int,
+    numel3: Int,
+    ctx_ptr: Int,
+) raises -> PyObjectPtr:
+    """Three-output spec-op result (layer/group norm: out, mean, rstd)."""
+    var g1 = _spec_group(
+        buf1^, addr1, nbytes1, rank1, shape1, dtype1, itemsize1, numel1, ctx_ptr
+    )
+    var g2 = _spec_group(
+        buf2^, addr2, nbytes2, rank2, shape2, dtype2, itemsize2, numel2, ctx_ptr
+    )
+    var g3 = _spec_group(
+        buf3^, addr3, nbytes3, rank3, shape3, dtype3, itemsize3, numel3, ctx_ptr
+    )
+    var result = Python.tuple(g1^, g2^, g3^)
+    return result^.steal_data()
+
+
+@always_inline
 def _reduce_spec_geom(
     a: TensorSpec,
     rdims_t: PyObjectPtr,

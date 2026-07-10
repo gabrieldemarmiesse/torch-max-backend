@@ -236,6 +236,16 @@ def _wrap_spec_pair(result, dtype0, dtype1, device):
 
 
 @no_type_check
+def _wrap_spec_triple(result, dtype0, dtype1, dtype2, device):
+    """Mint three torch wrappers from a three-group spec result."""
+    return (
+        _wrap_spec_result(result[0], dtype0, device),
+        _wrap_spec_result(result[1], dtype1, device),
+        _wrap_spec_result(result[2], dtype2, device),
+    )
+
+
+@no_type_check
 def _try_spec_scalar(spec_fn_name, x, scalar):
     """Contiguous tensor-with-float-scalar through a spec op, or None."""
     if not isinstance(scalar, int | float) or isinstance(scalar, bool):
@@ -2303,6 +2313,16 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
             return NOT_HANDLED
     else:
         beta = fast_filled((cols,), 0.0, a._dtype, a._device)
+    try:
+        result = eager_kernels.nn_ops.LayerNormSpec(
+            _spec_of(a), _spec_of(gamma), _spec_of(beta), k, float(eps)
+        )
+    except Exception:
+        result = None
+    if result is not None:
+        return _wrap_spec_triple(
+            result, a._dtype, DType.float32, DType.float32, a._device
+        )
     out = _alloc(a._shape, a._dtype, a._device)
     stat_shape = tuple(a._shape[:-k]) + (1,) * k
     mean = _alloc(stat_shape, DType.float32, a._device)
@@ -2973,6 +2993,23 @@ def fast_aten_native_group_norm(input, weight, bias, N, C, HxW, group, eps):
             or tuple(beta._shape) != (C,)
         ):
             return NOT_HANDLED
+        try:
+            result = eager_kernels.nn_ops.GroupNormSpec(
+                _spec_of(a),
+                _spec_of(gamma),
+                _spec_of(beta),
+                N,
+                C,
+                HxW,
+                group,
+                float(eps),
+            )
+        except Exception:
+            result = None
+        if result is not None:
+            return _wrap_spec_triple(
+                result, a._dtype, DType.float32, DType.float32, a._device
+            )
         out = _alloc(a._shape, a._dtype, a._device)
         mean = _alloc((N, group), DType.float32, a._device)
         rstd = _alloc((N, group), DType.float32, a._device)
@@ -3504,6 +3541,14 @@ def fast_aten_scaled_dot_product_attention(
             # q reads through its (batch, head) strides, so the per-head
             # transpose view of the fused qkv projection is NOT
             # materialized first.
+            try:
+                result = eager_kernels.nn_ops.AttnDecodeSpec(
+                    _spec_of(q), _spec_of(k), _spec_of(v), float(scale_val)
+                )
+            except Exception:
+                result = None
+            if result is not None:
+                return _wrap_spec_result(result, q._dtype, q._device)
             out = _alloc((b, h, 1, head_dim), q._dtype, q._device)
             eager_kernels.nn_ops.AttnDecode(
                 out._ptr,
@@ -3596,6 +3641,9 @@ def fast_aten__softmax(input, dim, half_to_float=False):
         if result is NOT_HANDLED:
             return NOT_HANDLED
         return fast_aten_transpose(result, dim, rank - 1)
+    result = _try_spec_unary("SoftmaxSpec", t, module_name="nn_ops")
+    if result is not None:
+        return result
     a = _tc(t)
     cols = a._shape[-1]
     rows = a._numel // cols
