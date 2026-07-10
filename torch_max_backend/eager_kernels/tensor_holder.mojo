@@ -14,8 +14,10 @@
 # and free all ride the device's one default stream.
 #
 # Kernels never see the holder: Python passes raw data pointers (with the
-# storage offset already applied) as ints. This module is therefore the only
-# place the holder type is registered (single-registration rule).
+# storage offset already applied) as ints. The holder/spec struct definitions
+# live in `op_utils` (single shared source, compiled into every kernel module
+# that registers them); this module registers them for Python and owns
+# `make_spec`, the one Python-facing spec constructor.
 # ===----------------------------------------------------------------------=== #
 
 from std.os import abort
@@ -32,6 +34,9 @@ from std.sys.info import has_accelerator, size_of
 from std.utils import IndexList
 
 from op_utils import (
+    MAX_RANK,
+    TensorHolder,
+    TensorSpec,
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
@@ -39,11 +44,11 @@ from op_utils import (
     _raw_int,
     _raw_ret_none,
     _raw_tuple_int,
+    _row_major8,
+    _spec_ptr,
+    _spec_result,
+    _spec_unsupported,
 )
-
-# Strided kernels always work on shapes/strides padded to this rank by the
-# Python side (leading dims of size 1 / stride 0).
-comptime MAX_RANK = 8
 
 # Every dtype a max_device tensor can hold (read_scalar / StridedFill
 # dispatch over this at compile time).
@@ -62,44 +67,6 @@ comptime ALL_DTYPES = [
     DType.uint64,
     DType.bool,
 ]
-
-
-struct TensorHolder(Movable, Writable):
-    """Owns one device allocation. Nothing else.
-
-    `buf`'s destructor (run by this struct's destructor when the CPython
-    refcount hits 0) calls `AsyncRT_DeviceBuffer_release`, which enqueues
-    the stream-ordered free.
-    """
-
-    var buf: DeviceBuffer[DType.uint8]
-    var nbytes: Int
-
-    def __init__(out self, var buf: DeviceBuffer[DType.uint8], nbytes: Int):
-        self.buf = buf^
-        self.nbytes = nbytes
-
-    def write_to(self, mut writer: Some[Writer]):
-        # Writable is mandatory for types exposed via add_type (tp_repr).
-        writer.write(
-            "TensorHolder(ptr=",
-            Int(self.buf.unsafe_ptr()),
-            ", nbytes=",
-            self.nbytes,
-            ")",
-        )
-
-    @staticmethod
-    def data_ptr(
-        self_ptr: UnsafePointer[Self, MutAnyOrigin]
-    ) raises -> PythonObject:
-        return PythonObject(Int(self_ptr[].buf.unsafe_ptr()))
-
-    @staticmethod
-    def get_nbytes(
-        self_ptr: UnsafePointer[Self, MutAnyOrigin]
-    ) raises -> PythonObject:
-        return PythonObject(self_ptr[].nbytes)
 
 
 @always_inline
@@ -457,108 +424,11 @@ def _strided_fill_dispatcher(
 
 
 # ===========================================================================
-# TensorSpec proof of concept: a Mojo-side descriptor of one tensor's layout
-# (pointer, rank-8 leading-padded shape/strides, dtype, device ctx). Held by
-# the Python `TorchMojoTensor` (built lazily on first use, attached eagerly
-# to spec-op outputs); spec-taking ops read it with one unchecked downcast
-# instead of unpacking per-field Python arguments.
-#
-# Spec ops do the full op prologue here: input checks, broadcast layout,
-# output allocation, kernel launch — one boundary call, returning
-# (holder, out_spec, shape_tuple, data_ptr). Errors are REAL: a failed check
-# raises NotImplementedError into Python (no swallowed exceptions); the
-# Python callers treat that as "take the classic path".
+# TensorSpec constructor + the POC spec ops (add / mul / relu / batch_norm).
+# The shared infrastructure (TensorSpec/TensorHolder structs, _spec_ptr,
+# _spec_result, _spec_unsupported) lives in `op_utils`; per-family spec ops
+# migrate next to their kernels (see docs/tensor_spec_design.md §3).
 # ===========================================================================
-
-
-def _spec_unsupported(e: Error) -> PyObjectPtr:
-    """Translate a Mojo Error into a real Python NotImplementedError: set the
-    CPython error indicator and return null so the dispatcher signals failure
-    (nothing is swallowed on the spec paths)."""
-    ref cpy = Python().cpython()
-    var msg = String(e)
-    cpy.PyErr_SetString(
-        cpy.get_error_global("PyExc_NotImplementedError"),
-        msg.as_c_string_slice().unsafe_ptr().as_unsafe_any_origin(),
-    )
-    return PyObjectPtr()
-
-
-struct TensorSpec(Movable, Writable):
-    """Layout descriptor for one mojo eager tensor. Effectively immutable:
-    Python swaps which spec a tensor points to (rebind) rather than mutating
-    one in place."""
-
-    var ptr: Int  # data pointer, storage offset already applied
-    var rank: Int
-    var shape: IndexList[MAX_RANK]  # leading-padded with 1s
-    var strides: IndexList[MAX_RANK]  # element strides, leading-padded with 0s
-    var offset: Int  # storage offset in elements (informational)
-    var dtype: DType
-    var itemsize: Int
-    var numel: Int
-    var contig: Bool
-    var ctx_ptr: Int  # DeviceContext address of the tensor's device
-
-    def __init__(
-        out self,
-        ptr: Int,
-        rank: Int,
-        shape: IndexList[MAX_RANK],
-        strides: IndexList[MAX_RANK],
-        offset: Int,
-        dtype: DType,
-        itemsize: Int,
-        numel: Int,
-        contig: Bool,
-        ctx_ptr: Int,
-    ):
-        self.ptr = ptr
-        self.rank = rank
-        self.shape = shape
-        self.strides = strides
-        self.offset = offset
-        self.dtype = dtype
-        self.itemsize = itemsize
-        self.numel = numel
-        self.contig = contig
-        self.ctx_ptr = ctx_ptr
-
-    def write_to(self, mut writer: Some[Writer]):
-        writer.write(
-            "TensorSpec(ptr=",
-            self.ptr,
-            ", rank=",
-            self.rank,
-            ", numel=",
-            self.numel,
-            ", dtype=",
-            self.dtype,
-            ")",
-        )
-
-    @always_inline
-    def dim(self, i: Int) -> Int:
-        """Logical dim i (hides the leading-pad convention)."""
-        return self.shape[MAX_RANK - self.rank + i]
-
-    @always_inline
-    def ctx(self) -> DeviceContext:
-        return DeviceContext(
-            OpaquePointer[MutUntrackedOrigin](unsafe_from_address=self.ctx_ptr)
-        )
-
-
-@always_inline
-def _row_major8(shape: IndexList[MAX_RANK], rank: Int) -> IndexList[MAX_RANK]:
-    """Row-major element strides over the trailing `rank` slots (leading 0s)."""
-    var strides = IndexList[MAX_RANK](0)
-    var acc = 1
-    for k in range(rank):
-        var i = MAX_RANK - 1 - k
-        strides[i] = acc
-        acc *= shape[i]
-    return strides
 
 
 def _make_spec_go(
@@ -615,50 +485,6 @@ def _make_spec_dispatcher(
         )
     except e:
         return _spec_unsupported(e)
-
-
-@always_inline
-def _spec_result(
-    var buf: DeviceBuffer[DType.uint8],
-    addr: Int,
-    nbytes: Int,
-    rank: Int,
-    shape: IndexList[MAX_RANK],
-    dtype: DType,
-    itemsize: Int,
-    numel: Int,
-    ctx_ptr: Int,
-) raises -> PyObjectPtr:
-    """(holder, out_spec, shape_tuple, data_ptr) for a fresh contiguous
-    output — everything Python needs to mint the torch wrapper."""
-    var spec_obj = PythonObject(
-        alloc=TensorSpec(
-            ptr=addr,
-            rank=rank,
-            shape=shape,
-            strides=_row_major8(shape, rank),
-            offset=0,
-            dtype=dtype,
-            itemsize=itemsize,
-            numel=numel,
-            contig=True,
-            ctx_ptr=ctx_ptr,
-        )
-    )
-    var holder_obj = PythonObject(alloc=TensorHolder(buf=buf^, nbytes=nbytes))
-    ref cpy = Python().cpython()
-    var shape_tuple = cpy.PyTuple_New(rank)
-    for i in range(rank):
-        _ = cpy.PyTuple_SetItem(
-            shape_tuple, i, cpy.PyLong_FromSsize_t(shape[MAX_RANK - rank + i])
-        )
-    var result = Python.tuple(
-        holder_obj^,
-        spec_obj^,
-        PythonObject(from_owned=shape_tuple),
-        PythonObject(addr),
-    )
-    return result^.steal_data()
 
 
 # ---------------------------------------------------------------------------
@@ -732,10 +558,8 @@ def _bin_bcast_spec[
 def _binary_spec_go[
     op_code: Int
 ](a_o: PyObjectPtr, b_o: PyObjectPtr) raises -> PyObjectPtr:
-    var a_obj = PythonObject(from_borrowed=a_o)
-    var b_obj = PythonObject(from_borrowed=b_o)
-    ref a = a_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
-    ref b = b_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    ref a = _spec_ptr(a_o)[]
+    ref b = _spec_ptr(b_o)[]
 
     if a.dtype != b.dtype:
         raise Error("mojo spec binary: operand dtypes differ")
@@ -862,8 +686,7 @@ def _relu_contig[
 
 
 def _relu_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
-    var a_obj = PythonObject(from_borrowed=a_o)
-    ref a = a_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    ref a = _spec_ptr(a_o)[]
 
     if not a.contig:
         raise Error("mojo spec relu: input not contiguous")
@@ -962,16 +785,11 @@ def _batch_norm_spec_go(
     beta_o: PyObjectPtr,
     eps_o: PyObjectPtr,
 ) raises -> PyObjectPtr:
-    var in_obj = PythonObject(from_borrowed=in_o)
-    var mean_obj = PythonObject(from_borrowed=mean_o)
-    var var_obj = PythonObject(from_borrowed=var_o)
-    var gamma_obj = PythonObject(from_borrowed=gamma_o)
-    var beta_obj = PythonObject(from_borrowed=beta_o)
-    ref inp = in_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
-    ref meanp = mean_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
-    ref varp = var_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
-    ref gammap = gamma_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
-    ref betap = beta_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    ref inp = _spec_ptr(in_o)[]
+    ref meanp = _spec_ptr(mean_o)[]
+    ref varp = _spec_ptr(var_o)[]
+    ref gammap = _spec_ptr(gamma_o)[]
+    ref betap = _spec_ptr(beta_o)[]
     var eps = Float32(_raw_f64(eps_o))
 
     if inp.rank < 2:
