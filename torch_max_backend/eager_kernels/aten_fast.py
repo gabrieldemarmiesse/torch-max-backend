@@ -236,6 +236,22 @@ def _wrap_spec_pair(result, dtype0, dtype1, device):
 
 
 @no_type_check
+def _try_spec_matmul(spec_fn_name, tensors, transpose_b):
+    """Matmul-family spec op over already-typed operands, or None. The spec
+    raises on non-contiguous operands; the classic path materializes them."""
+    ts = [_t(x) for x in tensors]
+    if any(t is None for t in ts):
+        return None
+    try:
+        result = getattr(eager_kernels.matmul_ops, spec_fn_name)(
+            *[_spec_of(t) for t in ts], transpose_b
+        )
+    except Exception:
+        return None
+    return _wrap_spec_result(result, ts[0]._dtype, ts[0]._device)
+
+
+@no_type_check
 def _wrap_spec_triple(result, dtype0, dtype1, dtype2, device):
     """Mint three torch wrappers from a three-group spec result."""
     return (
@@ -3255,6 +3271,9 @@ def _fast_matmul(a, b) -> TorchMojoTensor | None:
 
 @no_type_check
 def fast_aten_mm(x, y):
+    out = _try_spec_matmul("MatmulSpec", (x, y), 0)
+    if out is not None:
+        return out
     out = _fast_matmul(_tc(x), _tc(y))
     if out is not None:
         return out
@@ -3264,6 +3283,9 @@ def fast_aten_mm(x, y):
 @no_type_check
 def fast_aten_addmm(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     if beta == 1 and alpha == 1:
+        out = _try_spec_matmul("MatmulBiasSpec", (mat1, mat2, input), 0)
+        if out is not None:
+            return out
         bias = _tc(input)
         a = _tc(mat1)
         b = _tc(mat2)
@@ -3305,6 +3327,12 @@ def fast_aten_linear(input, weight, bias=None):
     # composite op (instead of letting torch decompose it into t() + mm)
     # matters because the GEMM kernel reads B transposed for free, so the
     # weight is never materialized in transposed layout.
+    if bias is None:
+        out = _try_spec_matmul("MatmulSpec", (input, weight), 1)
+    else:
+        out = _try_spec_matmul("MatmulBiasSpec", (input, weight, bias), 1)
+    if out is not None:
+        return out
     a = _tc(input)
     w = _tc(weight)
     if (
@@ -3347,6 +3375,9 @@ def fast_aten_linear(input, weight, bias=None):
 
 @no_type_check
 def fast_aten_bmm(input, mat2):
+    out = _try_spec_matmul("BmmSpec", (input, mat2), 0)
+    if out is not None:
+        return out
     a = _tc(input)
     b = _tc(mat2)
     if (
