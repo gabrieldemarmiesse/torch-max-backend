@@ -62,7 +62,6 @@ from op_utils import (
     _reduce_spec_geom,
     _spec_ptr,
     _spec_result,
-    _spec_result3,
     _spec_unsupported,
 )
 
@@ -2711,158 +2710,6 @@ def _softmax_spec_dispatcher(
         return _spec_unsupported(e)
 
 
-def _layer_norm_spec_go(
-    a_o: PyObjectPtr,
-    gamma_o: PyObjectPtr,
-    beta_o: PyObjectPtr,
-    k_o: PyObjectPtr,
-    eps_o: PyObjectPtr,
-) raises -> PyObjectPtr:
-    """native_layer_norm over the trailing k dims: (out, mean, rstd) in one
-    call via the three-output protocol. Python resolves the optional
-    weight/bias (filled 1s/0s) and checks normalized_shape matches."""
-    ref a = _spec_ptr(a_o)[]
-    ref gamma = _spec_ptr(gamma_o)[]
-    ref beta = _spec_ptr(beta_o)[]
-    var k = _raw_int(k_o)
-    var eps = Float32(_raw_f64(eps_o))
-
-    if not (a.contig and gamma.contig and beta.contig):
-        raise Error("mojo spec layer_norm: inputs must be contiguous")
-    if gamma.dtype != a.dtype or beta.dtype != a.dtype:
-        raise Error("mojo spec layer_norm: affine dtypes must match input")
-    var supported = False
-    comptime for dt in FLOAT_DTYPES:
-        if a.dtype == dt:
-            supported = True
-    if not supported:
-        raise Error("mojo spec layer_norm: unsupported dtype ", a.dtype)
-    if k < 1 or a.rank < k or a.numel == 0:
-        raise Error("mojo spec layer_norm: bad normalized rank")
-    var cols = 1
-    for i in range(MAX_RANK - k, MAX_RANK):
-        cols *= a.shape[i]
-    if gamma.numel != cols or beta.numel != cols:
-        raise Error("mojo spec layer_norm: affine size mismatch")
-    var rows = a.numel // cols
-
-    var ctx = a.ctx()
-    var nbytes = a.numel * a.itemsize
-    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
-    var addr = Int(buf.unsafe_ptr())
-    # mean/rstd: float32, input shape with the trailing k dims set to 1.
-    var sshape = a.shape
-    for i in range(MAX_RANK - k, MAX_RANK):
-        sshape[i] = 1
-    var snbytes = rows * 4
-    var buf_m = ctx.enqueue_create_buffer[DType.uint8](max(snbytes, 1))
-    var addr_m = Int(buf_m.unsafe_ptr())
-    var buf_r = ctx.enqueue_create_buffer[DType.uint8](max(snbytes, 1))
-    var addr_r = Int(buf_r.unsafe_ptr())
-    comptime for dt in FLOAT_DTYPES:
-        if a.dtype == dt:
-            _layer_norm[dt](
-                addr, addr_m, addr_r, a.ptr, gamma.ptr, beta.ptr, eps,
-                rows, cols, ctx,
-            )
-    return _spec_result3(
-        buf^, addr, nbytes, a.rank, a.shape, a.dtype, a.itemsize, a.numel,
-        buf_m^, addr_m, snbytes, a.rank, sshape, DType.float32, 4, rows,
-        buf_r^, addr_r, snbytes, a.rank, sshape, DType.float32, 4, rows,
-        a.ctx_ptr,
-    )
-
-
-def _layer_norm_spec_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        return _layer_norm_spec_go(args[0], args[1], args[2], args[3], args[4])
-    except e:
-        return _spec_unsupported(e)
-
-
-def _group_norm_spec_go(
-    a_o: PyObjectPtr,
-    gamma_o: PyObjectPtr,
-    beta_o: PyObjectPtr,
-    n_o: PyObjectPtr,
-    c_o: PyObjectPtr,
-    hxw_o: PyObjectPtr,
-    group_o: PyObjectPtr,
-    eps_o: PyObjectPtr,
-) raises -> PyObjectPtr:
-    """native_group_norm: (out, mean, rstd) in one call. N/C/HxW/group are
-    aten-provided scalars (argument parsing stays in Python)."""
-    ref a = _spec_ptr(a_o)[]
-    ref gamma = _spec_ptr(gamma_o)[]
-    ref beta = _spec_ptr(beta_o)[]
-    var n = _raw_int(n_o)
-    var c = _raw_int(c_o)
-    var hxw = _raw_int(hxw_o)
-    var group = _raw_int(group_o)
-    var eps = Float32(_raw_f64(eps_o))
-
-    if not (a.contig and gamma.contig and beta.contig):
-        raise Error("mojo spec group_norm: inputs must be contiguous")
-    if gamma.dtype != a.dtype or beta.dtype != a.dtype:
-        raise Error("mojo spec group_norm: affine dtypes must match input")
-    var supported = False
-    comptime for dt in FLOAT_DTYPES:
-        if a.dtype == dt:
-            supported = True
-    if not supported:
-        raise Error("mojo spec group_norm: unsupported dtype ", a.dtype)
-    if group <= 0 or c % group != 0 or a.numel != n * c * hxw or a.numel == 0:
-        raise Error("mojo spec group_norm: bad geometry")
-    if gamma.numel != c or beta.numel != c:
-        raise Error("mojo spec group_norm: affine size mismatch")
-    var cpg = c // group
-    var cols = cpg * hxw
-    var rows = n * group
-
-    var ctx = a.ctx()
-    var nbytes = a.numel * a.itemsize
-    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
-    var addr = Int(buf.unsafe_ptr())
-    var sshape = IndexList[MAX_RANK](1)
-    sshape[MAX_RANK - 2] = n
-    sshape[MAX_RANK - 1] = group
-    var snbytes = rows * 4
-    var buf_m = ctx.enqueue_create_buffer[DType.uint8](max(snbytes, 1))
-    var addr_m = Int(buf_m.unsafe_ptr())
-    var buf_r = ctx.enqueue_create_buffer[DType.uint8](max(snbytes, 1))
-    var addr_r = Int(buf_r.unsafe_ptr())
-    comptime for dt in FLOAT_DTYPES:
-        if a.dtype == dt:
-            _group_norm[dt](
-                addr, addr_m, addr_r, a.ptr, gamma.ptr, beta.ptr, eps,
-                rows, cols, hxw, group, cpg, ctx,
-            )
-    return _spec_result3(
-        buf^, addr, nbytes, a.rank, a.shape, a.dtype, a.itemsize, a.numel,
-        buf_m^, addr_m, snbytes, 2, sshape, DType.float32, 4, rows,
-        buf_r^, addr_r, snbytes, 2, sshape, DType.float32, 4, rows,
-        a.ctx_ptr,
-    )
-
-
-def _group_norm_spec_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        return _group_norm_spec_go(
-            args[0], args[1], args[2], args[3], args[4], args[5], args[6],
-            args[7],
-        )
-    except e:
-        return _spec_unsupported(e)
-
-
 def _attn_decode_spec_go(
     q_o: PyObjectPtr,
     k_o: PyObjectPtr,
@@ -2992,16 +2839,6 @@ def PyInit_nn_ops() abi("C") -> PythonObject:
             _softmax_spec_dispatcher,
             "SoftmaxSpec",
             docstring="(a_spec) -> (holder, spec, shape, ptr); trailing dim",
-        )
-        b.def_py_c_function(
-            _layer_norm_spec_dispatcher,
-            "LayerNormSpec",
-            docstring="(a, gamma, beta specs, k, eps) -> 3 result groups",
-        )
-        b.def_py_c_function(
-            _group_norm_spec_dispatcher,
-            "GroupNormSpec",
-            docstring="(a, gamma, beta specs, N, C, HxW, group, eps) -> 3 groups",
         )
         b.def_py_c_function(
             _attn_decode_spec_dispatcher,

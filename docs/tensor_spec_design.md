@@ -188,6 +188,15 @@ function with try-spec-first, run that op's tests, benchmark.
    ops return multiple `(holder, spec, shape, ptr)` groups in one tuple —
    extend `_spec_result` with a multi-output variant rather than calling
    it twice, so it stays one boundary call.
+
+   **Measured limit of this family** (migration A/B, GPU, (6, 768)):
+   each result group costs ~1 µs of Mojo-side object construction
+   (registered-type allocation via the process-global registry). Ops whose
+   classic prologue is already thin lose to that: `native_layer_norm` and
+   `native_group_norm` regressed +4 µs/call as three-group spec ops and
+   were reverted to the classic path. `min.dim` (two groups but a heavy
+   classic prologue: permute view + `_reduce_to_rows`) wins −34%. Convert
+   a multi-output op only when its classic Python routing does real work.
 6. **Matmul family** (`mm`, `bmm`, `addmm`, `linear` in
    `matmul_ops.mojo`): the tier selection (GEMV vs tiled GEMM, size gates)
    stays wherever it is cheapest — tier choice on scalar fields is fine in

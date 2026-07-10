@@ -69,6 +69,43 @@ def test_fast_path_is_used(max_device):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize(
+    "module_name,spec_name,fn",
+    [
+        ("logic_ops", "SubSpec", lambda x, y: x - y),
+        ("logic_ops", "EqSpec", lambda x, y: x == y),
+        ("elementwise_ops", "SigmoidSpec", lambda x, y: torch.sigmoid(x)),
+        ("elementwise_ops", "MulScalarSpec", lambda x, y: x * 2.0),
+        ("reduction_ops", "SumSpec", lambda x, y: x.sum(-1)),
+        ("nn_ops", "SoftmaxSpec", lambda x, y: torch.softmax(x, -1)),
+        ("matmul_ops", "MatmulSpec", lambda x, y: x @ y),
+    ],
+)
+def test_spec_path_is_used(max_device, module_name, spec_name, fn):
+    """One representative op per converted family must route through its
+    spec entry (whole prologue in one Mojo call), not the classic chain."""
+    if not fast_eager_enabled():
+        pytest.skip("fast eager path disabled")
+    from torch_max_backend import eager_kernels
+
+    module = getattr(eager_kernels, module_name)
+    calls = []
+    original = getattr(module, spec_name)
+
+    def spy(*args):
+        calls.append(args)
+        return original(*args)
+
+    setattr(module, spec_name, spy)
+    try:
+        x = torch.randn(8, 8).to(max_device)
+        y = torch.randn(8, 8).to(max_device)
+        _ = fn(x, y)
+    finally:
+        setattr(module, spec_name, original)
+    assert len(calls) == 1
+
+
 def test_fallback_broadcast(max_device):
     x = torch.randn(16, 16)
     y = torch.randn(16)

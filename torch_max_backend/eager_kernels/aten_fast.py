@@ -252,16 +252,6 @@ def _try_spec_matmul(spec_fn_name, tensors, transpose_b):
 
 
 @no_type_check
-def _wrap_spec_triple(result, dtype0, dtype1, dtype2, device):
-    """Mint three torch wrappers from a three-group spec result."""
-    return (
-        _wrap_spec_result(result[0], dtype0, device),
-        _wrap_spec_result(result[1], dtype1, device),
-        _wrap_spec_result(result[2], dtype2, device),
-    )
-
-
-@no_type_check
 def _try_spec_scalar(spec_fn_name, x, scalar):
     """Contiguous tensor-with-float-scalar through a spec op, or None."""
     if not isinstance(scalar, int | float) or isinstance(scalar, bool):
@@ -2345,16 +2335,11 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
             return NOT_HANDLED
     else:
         beta = fast_filled((cols,), 0.0, a._dtype, a._device)
-    try:
-        result = eager_kernels.nn_ops.LayerNormSpec(
-            _spec_of(a), _spec_of(gamma), _spec_of(beta), k, float(eps)
-        )
-    except Exception:
-        result = None
-    if result is not None:
-        return _wrap_spec_triple(
-            result, a._dtype, DType.float32, DType.float32, a._device
-        )
+    # Not spec-converted: the classic prologue here is already thin, and
+    # building three (holder, spec, shape, ptr) result groups measurably
+    # costs more than the removed Python work (+4us/call measured A/B on
+    # (6, 768); contrast min.dim, whose heavy classic prologue makes the
+    # two-group spec a -34% win).
     out = _alloc(a._shape, a._dtype, a._device)
     stat_shape = tuple(a._shape[:-k]) + (1,) * k
     mean = _alloc(stat_shape, DType.float32, a._device)
@@ -3025,23 +3010,9 @@ def fast_aten_native_group_norm(input, weight, bias, N, C, HxW, group, eps):
             or tuple(beta._shape) != (C,)
         ):
             return NOT_HANDLED
-        try:
-            result = eager_kernels.nn_ops.GroupNormSpec(
-                _spec_of(a),
-                _spec_of(gamma),
-                _spec_of(beta),
-                N,
-                C,
-                HxW,
-                group,
-                float(eps),
-            )
-        except Exception:
-            result = None
-        if result is not None:
-            return _wrap_spec_triple(
-                result, a._dtype, DType.float32, DType.float32, a._device
-            )
+        # Not spec-converted for the same reason as native_layer_norm
+        # above (three-group result construction outweighs the thin
+        # classic prologue).
         out = _alloc(a._shape, a._dtype, a._device)
         mean = _alloc((N, group), DType.float32, a._device)
         rstd = _alloc((N, group), DType.float32, a._device)
