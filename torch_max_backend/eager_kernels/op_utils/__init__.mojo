@@ -550,9 +550,7 @@ def _scratch_contig(
                 addr, a.ptr, a.shape, dst_strides, a.strides, ctx
             )
         else:
-            raise Error(
-                "mojo spec temp: unsupported element size ", a.itemsize
-            )
+            raise Error("mojo spec temp: unsupported element size ", a.itemsize)
     return buf^
 
 

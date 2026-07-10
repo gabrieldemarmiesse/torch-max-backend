@@ -2660,7 +2660,6 @@ def _cumsum_spec_dispatcher(
         return _spec_unsupported(e)
 
 
-
 def _softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
     """Plain softmax over the trailing dim (scale=1, no causal mask);
     full-shape output. The non-trailing dim transpose recursion and the
@@ -2803,7 +2802,6 @@ def _attn_decode_spec_dispatcher(
         return _attn_decode_spec_go(args[0], args[1], args[2], args[3])
     except e:
         return _spec_unsupported(e)
-
 
 
 # ---------------------------------------------------------------------------

@@ -1093,7 +1093,9 @@ def PyInit_logic_ops() abi("C") -> PythonObject:
         b.def_py_c_function(
             _binary_spec_dispatcher[BOP_POW, False],
             "PowSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); ** float",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); ** float"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[BOP_REMAINDER, False],
@@ -1108,57 +1110,79 @@ def PyInit_logic_ops() abi("C") -> PythonObject:
         b.def_py_c_function(
             _binary_spec_dispatcher[BOP_AND, False],
             "BitwiseAndSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); & int/bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); & int/bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[BOP_OR, False],
             "BitwiseOrSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); | int/bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); | int/bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[BOP_XOR, False],
             "BitwiseXorSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); ^ int/bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); ^ int/bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[COP_EQ, True],
             "EqSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); == -> bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); == -> bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[COP_NE, True],
             "NeSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); != -> bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); != -> bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[COP_LT, True],
             "LtSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); < -> bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); < -> bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[COP_LE, True],
             "LeSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); <= -> bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); <= -> bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[COP_GT, True],
             "GtSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); > -> bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); > -> bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[COP_GE, True],
             "GeSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); >= -> bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); >= -> bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[COP_LAND, True],
             "LogicalAndSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); and -> bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); and -> bool"
+            ),
         )
         b.def_py_c_function(
             _binary_spec_dispatcher[COP_LXOR, True],
             "LogicalXorSpec",
-            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); xor -> bool",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); xor -> bool"
+            ),
         )
         b.def_py_c_function(
             _bin_bcast_dispatcher[BOP_ADD],

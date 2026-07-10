@@ -2540,8 +2540,9 @@ def _matmul_bias_go(
     var k = _raw_tuple_int(params, 2)
     var transpose_b = _raw_tuple_int(params, 3)
     var ctx = _raw_ctx(device_context_ptr)
-    _matmul_bias_run(dtype, c_addr, a_addr, b_addr, bias_addr, m, n, k,
-                     transpose_b, ctx)
+    _matmul_bias_run(
+        dtype, c_addr, a_addr, b_addr, bias_addr, m, n, k, transpose_b, ctx
+    )
 
 
 def _matmul_bias_run(
@@ -2745,8 +2746,21 @@ def _matmul_spec_go(
 
     if ctx.api() == "cpu":
         _cpu_gemm_dtype_dispatch(
-            a.dtype, addr, a.ptr, b.ptr, 1, m, n, k, m * k,
-            transpose_b != 0, 0, 0, 0, 0, ctx,
+            a.dtype,
+            addr,
+            a.ptr,
+            b.ptr,
+            1,
+            m,
+            n,
+            k,
+            m * k,
+            transpose_b != 0,
+            0,
+            0,
+            0,
+            0,
+            ctx,
         )
     elif m == 1:
         _gemv_dtype_dispatch(
@@ -2754,15 +2768,34 @@ def _matmul_spec_go(
         )
     else:
         _gemm_dtype_dispatch(
-            a.dtype, addr, a.ptr, b.ptr, 1, m, n, k, m * k,
-            transpose_b, 0, 0, 0, ctx,
+            a.dtype,
+            addr,
+            a.ptr,
+            b.ptr,
+            1,
+            m,
+            n,
+            k,
+            m * k,
+            transpose_b,
+            0,
+            0,
+            0,
+            ctx,
         )
 
     # out shape: a's leading dims with the last dim replaced by n.
     var oshape = a.shape
     oshape[MAX_RANK - 1] = n
     return _spec_result(
-        buf^, addr, nbytes, a.rank, oshape, a.dtype, a.itemsize, numel,
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        oshape,
+        a.dtype,
+        a.itemsize,
+        numel,
         a.ctx_ptr,
     )
 
@@ -2811,7 +2844,14 @@ def _matmul_bias_spec_go(
     var oshape = a.shape
     oshape[MAX_RANK - 1] = n
     return _spec_result(
-        buf^, addr, nbytes, a.rank, oshape, a.dtype, a.itemsize, numel,
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        oshape,
+        a.dtype,
+        a.itemsize,
+        numel,
         a.ctx_ptr,
     )
 
@@ -2873,13 +2913,38 @@ def _bmm_spec_go(
     var addr = Int(buf.unsafe_ptr())
     if ctx.api() == "cpu":
         _cpu_gemm_dtype_dispatch(
-            a.dtype, addr, a.ptr, b.ptr, batch, m, n, k, m * k,
-            transpose_b != 0, 0, 0, 0, 0, ctx,
+            a.dtype,
+            addr,
+            a.ptr,
+            b.ptr,
+            batch,
+            m,
+            n,
+            k,
+            m * k,
+            transpose_b != 0,
+            0,
+            0,
+            0,
+            0,
+            ctx,
         )
     else:
         _gemm_dtype_dispatch(
-            a.dtype, addr, a.ptr, b.ptr, batch, m, n, k, m * k,
-            transpose_b, 0, 0, 0, ctx,
+            a.dtype,
+            addr,
+            a.ptr,
+            b.ptr,
+            batch,
+            m,
+            n,
+            k,
+            m * k,
+            transpose_b,
+            0,
+            0,
+            0,
+            ctx,
         )
 
     var oshape = IndexList[MAX_RANK](1)
@@ -2902,7 +2967,6 @@ def _bmm_spec_dispatcher(
         return _spec_unsupported(e)
 
 
-
 # ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
@@ -2920,7 +2984,9 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
         b.def_py_c_function(
             _matmul_bias_spec_dispatcher,
             "MatmulBiasSpec",
-            docstring="(a_spec, b_spec, bias_spec, transpose_b) -> result group",
+            docstring=(
+                "(a_spec, b_spec, bias_spec, transpose_b) -> result group"
+            ),
         )
         b.def_py_c_function(
             _bmm_spec_dispatcher,

@@ -1556,7 +1556,9 @@ def PyInit_reduction_ops() abi("C") -> PythonObject:
         b.def_py_c_function(
             _min_dim_spec_dispatcher,
             "MinDimSpec",
-            docstring="(a_spec, rdims, keepdim) -> (values group, indices group)",
+            docstring=(
+                "(a_spec, rdims, keepdim) -> (values group, indices group)"
+            ),
         )
         b.def_py_c_function(
             _var_spec_dispatcher,

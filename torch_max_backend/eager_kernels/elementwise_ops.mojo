@@ -1221,7 +1221,6 @@ def _fill_spec_dispatcher(
         return _spec_unsupported(e)
 
 
-
 # ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
@@ -1369,7 +1368,9 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
         b.def_py_c_function(
             _unary_bool_spec_dispatcher[BUOP_LOGICAL_NOT],
             "LogicalNotSpec",
-            docstring="(a_spec) -> (holder, spec, shape, ptr); logicalnot -> bool",
+            docstring=(
+                "(a_spec) -> (holder, spec, shape, ptr); logicalnot -> bool"
+            ),
         )
         b.def_py_c_function(
             _scalar_spec_dispatcher[SOP_ADD],
@@ -1399,7 +1400,9 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
         b.def_py_c_function(
             _fill_spec_dispatcher,
             "FillSpec",
-            docstring="(shape8, rank, numel, value, dtype, ctx) -> result group",
+            docstring=(
+                "(shape8, rank, numel, value, dtype, ctx) -> result group"
+            ),
         )
         b.def_py_c_function(
             _bin_dispatcher[OP_ADD],
