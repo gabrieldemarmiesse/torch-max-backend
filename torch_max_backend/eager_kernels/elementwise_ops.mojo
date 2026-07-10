@@ -51,12 +51,17 @@ from std.algorithm.functional import elementwise
 
 from op_utils import (
     FLOAT_DTYPES,
+    TensorHolder,
+    TensorSpec,
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
     _raw_f64,
     _raw_int,
     _raw_ret_none,
+    _spec_ptr,
+    _spec_result,
+    _spec_unsupported,
 )
 
 # ---------------------------------------------------------------------------
@@ -881,6 +886,242 @@ def _arange_dispatcher(
 
 
 # ---------------------------------------------------------------------------
+# TensorSpec entries (docs/tensor_spec_design.md): the whole op prologue —
+# input checks, output alloc, kernel launch — in one boundary call over
+# cached TensorSpecs, reusing the contiguous kernels above. Failed checks
+# raise a real NotImplementedError into Python ("take the classic path");
+# nothing is swallowed on spec paths.
+# ---------------------------------------------------------------------------
+
+# Dtypes the unary spec entries dispatch on for the "direct" (in-dtype) ops;
+# the transcendental ops gate down to FLOAT_DTYPES. No float64 (falls back
+# to the classic path, which handles it on the CPU device), no bool.
+comptime SPEC_UNARY_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.int8,
+    DType.int16,
+    DType.int32,
+    DType.int64,
+    DType.uint8,
+]
+
+
+def _unary_spec_go[op_code: Int](a_o: PyObjectPtr) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    if not a.contig:
+        raise Error("mojo spec unary: input not contiguous")
+
+    comptime is_direct = (
+        op_code == UOP_RELU
+        or op_code == UOP_ABS
+        or op_code == UOP_NEG
+        or op_code == UOP_SIGN
+    )
+    var supported = False
+    comptime if is_direct:
+        comptime for dt in SPEC_UNARY_DTYPES:
+            if a.dtype == dt:
+                supported = True
+    else:
+        comptime for dt in FLOAT_DTYPES:
+            if a.dtype == dt:
+                supported = True
+    if not supported:
+        raise Error("mojo spec unary: unsupported dtype ", a.dtype)
+
+    var ctx = a.ctx()
+    var nbytes = a.numel * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if a.numel > 0:
+        comptime for dt in SPEC_UNARY_DTYPES:
+            if a.dtype == dt:
+                _unary_elementwise[dt, op_code](
+                    _make_ptr[dt](addr), _make_ptr[dt](a.ptr), a.numel, ctx
+                )
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        a.shape,
+        a.dtype,
+        a.itemsize,
+        a.numel,
+        a.ctx_ptr,
+    )
+
+
+def _unary_spec_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _unary_spec_go[op_code](args[0])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _unary_bool_spec_go[op_code: Int](a_o: PyObjectPtr) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    if not a.contig:
+        raise Error("mojo spec unary bool: input not contiguous")
+    # bool inputs are read through their uint8 storage (bit-compatible).
+    var kdtype = a.dtype
+    if a.dtype == DType.bool:
+        kdtype = DType.uint8
+    var supported = False
+    comptime for dt in SPEC_UNARY_DTYPES:
+        if kdtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec unary bool: unsupported dtype ", a.dtype)
+
+    var ctx = a.ctx()
+    var nbytes = a.numel  # bool output, itemsize 1
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if a.numel > 0:
+        comptime for dt in SPEC_UNARY_DTYPES:
+            if kdtype == dt:
+                _unary_bool[dt, op_code](
+                    _make_ptr[DType.bool](addr),
+                    _make_ptr[dt](a.ptr),
+                    a.numel,
+                    ctx,
+                )
+    return _spec_result(
+        buf^, addr, nbytes, a.rank, a.shape, DType.bool, 1, a.numel, a.ctx_ptr
+    )
+
+
+def _unary_bool_spec_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _unary_bool_spec_go[op_code](args[0])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _scalar_spec_go[
+    op_code: Int
+](a_o: PyObjectPtr, scalar_o: PyObjectPtr) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    if not a.contig:
+        raise Error("mojo spec scalar: input not contiguous")
+    var supported = False
+    comptime for dt in FLOAT_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec scalar: unsupported dtype ", a.dtype)
+
+    var scalar = Float32(_raw_f64(scalar_o))
+    var ctx = a.ctx()
+    var nbytes = a.numel * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if a.numel > 0:
+        comptime for dt in FLOAT_DTYPES:
+            if a.dtype == dt:
+                _scalar_elementwise[dt, op_code](
+                    _make_ptr[dt](addr),
+                    _make_ptr[dt](a.ptr),
+                    scalar,
+                    a.numel,
+                    ctx,
+                )
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        a.shape,
+        a.dtype,
+        a.itemsize,
+        a.numel,
+        a.ctx_ptr,
+    )
+
+
+def _scalar_spec_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _scalar_spec_go[op_code](args[0], args[1])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _int_scalar_spec_go[
+    op_code: Int
+](a_o: PyObjectPtr, scalar_o: PyObjectPtr) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    if not a.contig:
+        raise Error("mojo spec int scalar: input not contiguous")
+    var supported = False
+    comptime for dt in [DType.int32, DType.int64]:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec int scalar: unsupported dtype ", a.dtype)
+
+    var scalar = _raw_int(scalar_o)
+    var ctx = a.ctx()
+    var nbytes = a.numel * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if a.numel > 0:
+        comptime for dt in [DType.int32, DType.int64]:
+            if a.dtype == dt:
+                _int_scalar_elementwise[dt, op_code](
+                    _make_ptr[dt](addr),
+                    _make_ptr[dt](a.ptr),
+                    scalar,
+                    a.numel,
+                    ctx,
+                )
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        a.shape,
+        a.dtype,
+        a.itemsize,
+        a.numel,
+        a.ctx_ptr,
+    )
+
+
+def _int_scalar_spec_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _int_scalar_spec_go[op_code](args[0], args[1])
+    except e:
+        return _spec_unsupported(e)
+
+
+# ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
 
@@ -889,6 +1130,171 @@ def _arange_dispatcher(
 def PyInit_elementwise_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("elementwise_ops")
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_RELU],
+            "ReluSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); relu",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_EXP],
+            "ExpSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); exp",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_TANH],
+            "TanhSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); tanh",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_ABS],
+            "AbsSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); abs",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_NEG],
+            "NegSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); neg",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_SIGN],
+            "SignSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); sign",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_CEIL],
+            "CeilSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); ceil",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_FLOOR],
+            "FloorSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); floor",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_ACOS],
+            "AcosSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); acos",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_ASINH],
+            "AsinhSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); asinh",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_ATANH],
+            "AtanhSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); atanh",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_COS],
+            "CosSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); cos",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_COSH],
+            "CoshSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); cosh",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_ERF],
+            "ErfSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); erf",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_LOG],
+            "LogSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); log",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_LOG1P],
+            "Log1pSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); log1p",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_RECIPROCAL],
+            "ReciprocalSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); reciprocal",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_RSQRT],
+            "RsqrtSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); rsqrt",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_SIGMOID],
+            "SigmoidSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); sigmoid",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_SILU],
+            "SiluSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); silu",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_SIN],
+            "SinSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); sin",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_SINH],
+            "SinhSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); sinh",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_SQRT],
+            "SqrtSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); sqrt",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_TAN],
+            "TanSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); tan",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_GELU_NONE],
+            "GeluNoneSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); gelunone",
+        )
+        b.def_py_c_function(
+            _unary_spec_dispatcher[UOP_GELU_TANH],
+            "GeluTanhSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); gelutanh",
+        )
+        b.def_py_c_function(
+            _unary_bool_spec_dispatcher[BUOP_ISNAN],
+            "IsNanSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); isnan -> bool",
+        )
+        b.def_py_c_function(
+            _unary_bool_spec_dispatcher[BUOP_LOGICAL_NOT],
+            "LogicalNotSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); logicalnot -> bool",
+        )
+        b.def_py_c_function(
+            _scalar_spec_dispatcher[SOP_ADD],
+            "AddScalarSpec",
+            docstring="(a_spec, scalar) -> (holder, spec, shape, ptr); float",
+        )
+        b.def_py_c_function(
+            _scalar_spec_dispatcher[SOP_MUL],
+            "MulScalarSpec",
+            docstring="(a_spec, scalar) -> (holder, spec, shape, ptr); float",
+        )
+        b.def_py_c_function(
+            _scalar_spec_dispatcher[SOP_POW],
+            "PowScalarSpec",
+            docstring="(a_spec, scalar) -> (holder, spec, shape, ptr); float",
+        )
+        b.def_py_c_function(
+            _int_scalar_spec_dispatcher[IOP_ADD],
+            "AddScalarIntSpec",
+            docstring="(a_spec, scalar) -> (holder, spec, shape, ptr); int",
+        )
+        b.def_py_c_function(
+            _int_scalar_spec_dispatcher[IOP_MUL],
+            "MulScalarIntSpec",
+            docstring="(a_spec, scalar) -> (holder, spec, shape, ptr); int",
+        )
         b.def_py_c_function(
             _bin_dispatcher[OP_ADD],
             "Add",

@@ -133,11 +133,13 @@ _view_of = TorchMojoTensor._view_of
 
 
 # ---------------------------------------------------------------------------
-# TensorSpec proof of concept (see tensor_holder.mojo). A spec is the
-# Mojo-side descriptor of a tensor's layout; spec ops do checks, broadcast,
-# output alloc and kernel launch in one boundary call and raise a real
-# NotImplementedError when the inputs don't qualify — the callers below
-# treat any exception as "take the classic path".
+# TensorSpec fast paths (docs/tensor_spec_design.md). A spec is the
+# Mojo-side descriptor of a tensor's layout; spec ops live next to their
+# kernels (binary/comparison in logic_ops, relu/batch_norm still in
+# tensor_holder) and do checks, broadcast, output alloc and kernel launch
+# in one boundary call, raising a real NotImplementedError when the inputs
+# don't qualify — the callers below treat any exception as "take the
+# classic path". make_spec (the constructor) stays in tensor_holder.
 # ---------------------------------------------------------------------------
 
 
@@ -174,15 +176,51 @@ def _wrap_spec_result(result, dtype, device):
 
 
 @no_type_check
-def _try_spec_binary(spec_fn_name, lhs, rhs):
-    """Tensor-tensor broadcast binary through a spec op, or None."""
+def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
+    """Tensor-tensor broadcast binary through a logic_ops spec op, or None.
+
+    `out_dtype` overrides the wrapper dtype for ops whose output dtype
+    differs from the operands' (comparisons/logical -> bool)."""
     a = _t(lhs)
     b = _t(rhs)
     if a is None or b is None or a._dtype != b._dtype or a._device != b._device:
         return None
     try:
-        result = getattr(eager_kernels.tensor_holder, spec_fn_name)(
+        result = getattr(eager_kernels.logic_ops, spec_fn_name)(
             _spec_of(a), _spec_of(b)
+        )
+    except Exception:
+        return None
+    return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
+
+
+@no_type_check
+def _try_spec_unary(spec_fn_name, x, out_dtype=None):
+    """Contiguous unary through an elementwise_ops spec op, or None.
+
+    `out_dtype` overrides the wrapper dtype for the bool-output ops
+    (isnan / logical_not)."""
+    a = _t(x)
+    if a is None:
+        return None
+    try:
+        result = getattr(eager_kernels.elementwise_ops, spec_fn_name)(_spec_of(a))
+    except Exception:
+        return None
+    return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
+
+
+@no_type_check
+def _try_spec_scalar(spec_fn_name, x, scalar):
+    """Contiguous tensor-with-float-scalar through a spec op, or None."""
+    if not isinstance(scalar, int | float) or isinstance(scalar, bool):
+        return None
+    a = _t(x)
+    if a is None:
+        return None
+    try:
+        result = getattr(eager_kernels.elementwise_ops, spec_fn_name)(
+            _spec_of(a), float(scalar)
         )
     except Exception:
         return None
@@ -190,12 +228,17 @@ def _try_spec_binary(spec_fn_name, lhs, rhs):
 
 
 @no_type_check
-def _try_spec_relu(x):
+def _try_spec_int_scalar(spec_fn_name, x, scalar):
+    """Contiguous tensor-with-int-scalar through a spec op, or None."""
+    if not isinstance(scalar, int) or isinstance(scalar, bool):
+        return None
     a = _t(x)
     if a is None:
         return None
     try:
-        result = eager_kernels.tensor_holder.ReluSpec(_spec_of(a))
+        result = getattr(eager_kernels.elementwise_ops, spec_fn_name)(
+            _spec_of(a), scalar
+        )
     except Exception:
         return None
     return _wrap_spec_result(result, a._dtype, a._device)
@@ -540,7 +583,11 @@ def _scaled_operand(other, alpha):
         if isinstance(other, int | float) and not isinstance(other, bool):
             return other * alpha
         return None
-    scaled = _try_scalar(eager_kernels.elementwise_ops.MulScalar, b, alpha)
+    scaled = _try_spec_scalar("MulScalarSpec", b, alpha)
+    if scaled is None:
+        scaled = _try_scalar(eager_kernels.elementwise_ops.MulScalar, b, alpha)
+    if scaled is None:
+        scaled = _try_spec_int_scalar("MulScalarIntSpec", b, alpha)
     if scaled is None:
         scaled = _try_int_scalar(eager_kernels.elementwise_ops.MulScalarInt, b, alpha)
     return scaled
@@ -556,7 +603,11 @@ def fast_aten_add(input, other, alpha=1):
     if result is None:
         result = _try_binary(eager_kernels.elementwise_ops.Add, input, other)
     if result is None:
+        result = _try_spec_scalar("AddScalarSpec", input, other)
+    if result is None:
         result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, other)
+    if result is None:
+        result = _try_spec_int_scalar("AddScalarIntSpec", input, other)
     if result is None:
         result = _try_int_scalar(
             eager_kernels.elementwise_ops.AddScalarInt, input, other
@@ -616,13 +667,21 @@ def fast_aten_sub(input, other, alpha=1):
         other = _scaled_operand(other, alpha)
         if other is None:
             return NOT_HANDLED
-    result = _try_binary(eager_kernels.elementwise_ops.Sub, input, other)
+    result = _try_spec_binary("SubSpec", input, other)
+    if result is None:
+        result = _try_binary(eager_kernels.elementwise_ops.Sub, input, other)
     if (
         result is None
         and isinstance(other, int | float)
         and not isinstance(other, bool)
     ):
-        result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, -other)
+        result = _try_spec_scalar("AddScalarSpec", input, -other)
+        if result is None:
+            result = _try_scalar(
+                eager_kernels.elementwise_ops.AddScalar, input, -other
+            )
+        if result is None and isinstance(other, int):
+            result = _try_spec_int_scalar("AddScalarIntSpec", input, -other)
         if result is None and isinstance(other, int):
             result = _try_int_scalar(
                 eager_kernels.elementwise_ops.AddScalarInt, input, -other
@@ -644,7 +703,11 @@ def fast_aten_mul(input, other):
     if result is None:
         result = _try_bool_and(input, other)
     if result is None:
+        result = _try_spec_scalar("MulScalarSpec", input, other)
+    if result is None:
         result = _try_scalar(eager_kernels.elementwise_ops.MulScalar, input, other)
+    if result is None:
+        result = _try_spec_int_scalar("MulScalarIntSpec", input, other)
     if result is None:
         result = _try_int_scalar(
             eager_kernels.elementwise_ops.MulScalarInt, input, other
@@ -664,7 +727,9 @@ def fast_aten_div(input, other, *, rounding_mode=None):
         return NOT_HANDLED
     a = _t(input)
     if a is not None and a._dtype in _FLOAT_DTYPES:
-        result = _try_binary(eager_kernels.elementwise_ops.Div, input, other)
+        result = _try_spec_binary("DivSpec", input, other)
+        if result is None:
+            result = _try_binary(eager_kernels.elementwise_ops.Div, input, other)
         if result is None:
             result = _try_binary_bcast("DivBcast", input, other)
         if result is None:
@@ -732,7 +797,9 @@ def fast_aten_fill__scalar(input, value):
 
 @no_type_check
 def fast_aten_maximum(x, y):
-    result = _try_binary(eager_kernels.elementwise_ops.Max, x, y)
+    result = _try_spec_binary("MaximumSpec", x, y)
+    if result is None:
+        result = _try_binary(eager_kernels.elementwise_ops.Max, x, y)
     if result is None:
         result = _try_binary(eager_kernels.elementwise_ops.Max, _tc(x), _tc(y))
     if result is not None:
@@ -742,7 +809,9 @@ def fast_aten_maximum(x, y):
 
 @no_type_check
 def fast_aten_minimum(x, y):
-    result = _try_binary(eager_kernels.elementwise_ops.Min, x, y)
+    result = _try_spec_binary("MinimumSpec", x, y)
+    if result is None:
+        result = _try_binary(eager_kernels.elementwise_ops.Min, x, y)
     if result is None:
         result = _try_binary(eager_kernels.elementwise_ops.Min, _tc(x), _tc(y))
     if result is not None:
@@ -752,7 +821,7 @@ def fast_aten_minimum(x, y):
 
 @no_type_check
 def fast_aten_relu(tensor):
-    result = _try_spec_relu(tensor)
+    result = _try_spec_unary("ReluSpec", tensor)
     if result is None:
         result = _try_unary(eager_kernels.elementwise_ops.Relu, tensor)
     if result is not None:
@@ -762,7 +831,9 @@ def fast_aten_relu(tensor):
 
 @no_type_check
 def fast_aten_exp(input):
-    result = _try_unary(eager_kernels.elementwise_ops.Exp, input, _FLOAT_DTYPES)
+    result = _try_spec_unary("ExpSpec", input)
+    if result is None:
+        result = _try_unary(eager_kernels.elementwise_ops.Exp, input, _FLOAT_DTYPES)
     if result is not None:
         return result
     return NOT_HANDLED
@@ -770,7 +841,9 @@ def fast_aten_exp(input):
 
 @no_type_check
 def fast_aten_tanh(x):
-    result = _try_unary(eager_kernels.elementwise_ops.Tanh, x, _FLOAT_DTYPES)
+    result = _try_spec_unary("TanhSpec", x)
+    if result is None:
+        result = _try_unary(eager_kernels.elementwise_ops.Tanh, x, _FLOAT_DTYPES)
     if result is not None:
         return result
     return NOT_HANDLED
@@ -778,7 +851,9 @@ def fast_aten_tanh(x):
 
 @no_type_check
 def fast_aten_pow(x, y):
-    result = _try_scalar(eager_kernels.elementwise_ops.PowScalar, x, y)
+    result = _try_spec_scalar("PowScalarSpec", x, y)
+    if result is None:
+        result = _try_scalar(eager_kernels.elementwise_ops.PowScalar, x, y)
     if result is not None:
         return result
     return NOT_HANDLED
@@ -832,24 +907,32 @@ def _try_unary_bool(mojo_fn, x):
 
 
 @no_type_check
-def _unary_op(mojo_fn, x, dtypes=_FLOAT_DTYPES):
-    result = _try_unary(mojo_fn, x, dtypes)
+def _unary_op(mojo_fn, x, dtypes=_FLOAT_DTYPES, spec=None):
+    result = _try_spec_unary(spec, x) if spec is not None else None
+    if result is None:
+        result = _try_unary(mojo_fn, x, dtypes)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_abs(x):
-    return _unary_op(eager_kernels.elementwise_ops.Abs, x, _SIGNED_UNARY_DTYPES)
+    return _unary_op(
+        eager_kernels.elementwise_ops.Abs, x, _SIGNED_UNARY_DTYPES, spec="AbsSpec"
+    )
 
 
 @no_type_check
 def fast_aten_neg(x):
-    return _unary_op(eager_kernels.elementwise_ops.Neg, x, _SIGNED_UNARY_DTYPES)
+    return _unary_op(
+        eager_kernels.elementwise_ops.Neg, x, _SIGNED_UNARY_DTYPES, spec="NegSpec"
+    )
 
 
 @no_type_check
 def fast_aten_sign(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sign, x, _SIGNED_UNARY_DTYPES)
+    return _unary_op(
+        eager_kernels.elementwise_ops.Sign, x, _SIGNED_UNARY_DTYPES, spec="SignSpec"
+    )
 
 
 @no_type_check
@@ -866,7 +949,7 @@ def fast_aten_ceil(x):
     result = _int_unary_identity(x)
     if result is not None:
         return result
-    return _unary_op(eager_kernels.elementwise_ops.Ceil, x)
+    return _unary_op(eager_kernels.elementwise_ops.Ceil, x, spec="CeilSpec")
 
 
 @no_type_check
@@ -874,109 +957,113 @@ def fast_aten_floor(x):
     result = _int_unary_identity(x)
     if result is not None:
         return result
-    return _unary_op(eager_kernels.elementwise_ops.Floor, x)
+    return _unary_op(eager_kernels.elementwise_ops.Floor, x, spec="FloorSpec")
 
 
 @no_type_check
 def fast_aten_acos(x):
-    return _unary_op(eager_kernels.elementwise_ops.Acos, x)
+    return _unary_op(eager_kernels.elementwise_ops.Acos, x, spec="AcosSpec")
 
 
 @no_type_check
 def fast_aten_asinh(x):
-    return _unary_op(eager_kernels.elementwise_ops.Asinh, x)
+    return _unary_op(eager_kernels.elementwise_ops.Asinh, x, spec="AsinhSpec")
 
 
 @no_type_check
 def fast_aten_atanh(x):
-    return _unary_op(eager_kernels.elementwise_ops.Atanh, x)
+    return _unary_op(eager_kernels.elementwise_ops.Atanh, x, spec="AtanhSpec")
 
 
 @no_type_check
 def fast_aten_cos(x):
-    return _unary_op(eager_kernels.elementwise_ops.Cos, x)
+    return _unary_op(eager_kernels.elementwise_ops.Cos, x, spec="CosSpec")
 
 
 @no_type_check
 def fast_aten_cosh(x):
-    return _unary_op(eager_kernels.elementwise_ops.Cosh, x)
+    return _unary_op(eager_kernels.elementwise_ops.Cosh, x, spec="CoshSpec")
 
 
 @no_type_check
 def fast_aten_erf(x):
-    return _unary_op(eager_kernels.elementwise_ops.Erf, x)
+    return _unary_op(eager_kernels.elementwise_ops.Erf, x, spec="ErfSpec")
 
 
 @no_type_check
 def fast_aten_log(x):
-    return _unary_op(eager_kernels.elementwise_ops.Log, x)
+    return _unary_op(eager_kernels.elementwise_ops.Log, x, spec="LogSpec")
 
 
 @no_type_check
 def fast_aten_log1p(x):
-    return _unary_op(eager_kernels.elementwise_ops.Log1p, x)
+    return _unary_op(eager_kernels.elementwise_ops.Log1p, x, spec="Log1pSpec")
 
 
 @no_type_check
 def fast_aten_reciprocal(x):
-    return _unary_op(eager_kernels.elementwise_ops.Reciprocal, x)
+    return _unary_op(eager_kernels.elementwise_ops.Reciprocal, x, spec="ReciprocalSpec")
 
 
 @no_type_check
 def fast_aten_rsqrt(x):
-    return _unary_op(eager_kernels.elementwise_ops.Rsqrt, x)
+    return _unary_op(eager_kernels.elementwise_ops.Rsqrt, x, spec="RsqrtSpec")
 
 
 @no_type_check
 def fast_aten_sigmoid(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sigmoid, x)
+    return _unary_op(eager_kernels.elementwise_ops.Sigmoid, x, spec="SigmoidSpec")
 
 
 @no_type_check
 def fast_aten_silu(x):
-    return _unary_op(eager_kernels.elementwise_ops.Silu, x)
+    return _unary_op(eager_kernels.elementwise_ops.Silu, x, spec="SiluSpec")
 
 
 @no_type_check
 def fast_aten_sin(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sin, x)
+    return _unary_op(eager_kernels.elementwise_ops.Sin, x, spec="SinSpec")
 
 
 @no_type_check
 def fast_aten_sinh(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sinh, x)
+    return _unary_op(eager_kernels.elementwise_ops.Sinh, x, spec="SinhSpec")
 
 
 @no_type_check
 def fast_aten_sqrt(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sqrt, x)
+    return _unary_op(eager_kernels.elementwise_ops.Sqrt, x, spec="SqrtSpec")
 
 
 @no_type_check
 def fast_aten_tan(x):
-    return _unary_op(eager_kernels.elementwise_ops.Tan, x)
+    return _unary_op(eager_kernels.elementwise_ops.Tan, x, spec="TanSpec")
 
 
 @no_type_check
 def fast_aten_gelu(input, approximate="none"):
     if approximate == "none":
-        fn = eager_kernels.elementwise_ops.GeluNone
+        fn, spec = eager_kernels.elementwise_ops.GeluNone, "GeluNoneSpec"
     elif approximate == "tanh":
-        fn = eager_kernels.elementwise_ops.GeluTanh
+        fn, spec = eager_kernels.elementwise_ops.GeluTanh, "GeluTanhSpec"
     else:
         return NOT_HANDLED
-    return _unary_op(fn, input)
+    return _unary_op(fn, input, spec=spec)
 
 
 @no_type_check
 def fast_aten_isnan(x):
-    result = _try_unary_bool(eager_kernels.elementwise_ops.IsNan, x)
+    result = _try_spec_unary("IsNanSpec", x, DType.bool)
+    if result is None:
+        result = _try_unary_bool(eager_kernels.elementwise_ops.IsNan, x)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_logical_not(x):
-    result = _try_unary_bool(eager_kernels.elementwise_ops.LogicalNot, x)
+    result = _try_spec_unary("LogicalNotSpec", x, DType.bool)
+    if result is None:
+        result = _try_unary_bool(eager_kernels.elementwise_ops.LogicalNot, x)
     return result if result is not None else NOT_HANDLED
 
 
@@ -989,55 +1076,73 @@ def fast_aten_logical_not(x):
 
 @no_type_check
 def fast_aten_eq(input, other):
-    result = _try_cmp("EqBcast", input, other)
+    result = _try_spec_binary("EqSpec", input, other, DType.bool)
+    if result is None:
+        result = _try_cmp("EqBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_ne(input, other):
-    result = _try_cmp("NeBcast", input, other)
+    result = _try_spec_binary("NeSpec", input, other, DType.bool)
+    if result is None:
+        result = _try_cmp("NeBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_lt(input, other):
-    result = _try_cmp("LtBcast", input, other)
+    result = _try_spec_binary("LtSpec", input, other, DType.bool)
+    if result is None:
+        result = _try_cmp("LtBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_le(input, other):
-    result = _try_cmp("LeBcast", input, other)
+    result = _try_spec_binary("LeSpec", input, other, DType.bool)
+    if result is None:
+        result = _try_cmp("LeBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_gt(input, other):
-    result = _try_cmp("GtBcast", input, other)
+    result = _try_spec_binary("GtSpec", input, other, DType.bool)
+    if result is None:
+        result = _try_cmp("GtBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_ge(input, other):
-    result = _try_cmp("GeBcast", input, other)
+    result = _try_spec_binary("GeSpec", input, other, DType.bool)
+    if result is None:
+        result = _try_cmp("GeBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_bitwise_and(input, other):
-    result = _try_bitwise("AndBcast", input, other)
+    result = _try_spec_binary("BitwiseAndSpec", input, other)
+    if result is None:
+        result = _try_bitwise("AndBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_bitwise_or(input, other):
-    result = _try_bitwise("OrBcast", input, other)
+    result = _try_spec_binary("BitwiseOrSpec", input, other)
+    if result is None:
+        result = _try_bitwise("OrBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_bitwise_xor(input, other):
-    result = _try_bitwise("XorBcast", input, other)
+    result = _try_spec_binary("BitwiseXorSpec", input, other)
+    if result is None:
+        result = _try_bitwise("XorBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
@@ -1105,7 +1210,9 @@ def fast_aten_isin(elements, test_elements, *, assume_unique=False, invert=False
 @no_type_check
 def fast_aten_remainder(input, other):
     # Divisor-signed remainder (Python/torch `%`), float and int dtypes.
-    result = _try_binary_bcast("RemainderBcast", input, other)
+    result = _try_spec_binary("RemainderSpec", input, other)
+    if result is None:
+        result = _try_binary_bcast("RemainderBcast", input, other)
     if result is None:
         result = _try_binary_bcast("RemainderBcast", _tc(input), _tc(other))
     return result if result is not None else NOT_HANDLED
@@ -1114,7 +1221,9 @@ def fast_aten_remainder(input, other):
 @no_type_check
 def fast_aten_floor_divide(input, other):
     # floor(input / other), float and int dtypes.
-    result = _try_binary_bcast("FloorDivBcast", input, other)
+    result = _try_spec_binary("FloorDivSpec", input, other)
+    if result is None:
+        result = _try_binary_bcast("FloorDivBcast", input, other)
     if result is None:
         result = _try_binary_bcast("FloorDivBcast", _tc(input), _tc(other))
     return result if result is not None else NOT_HANDLED
@@ -1127,7 +1236,9 @@ def fast_aten_pow_tensor_tensor(input, exponent):
     a = _t(input)
     if a is None or a._dtype not in _FLOAT_DTYPES:
         return NOT_HANDLED
-    result = _try_binary_bcast("PowBcast", input, exponent)
+    result = _try_spec_binary("PowSpec", input, exponent)
+    if result is None:
+        result = _try_binary_bcast("PowBcast", input, exponent)
     if result is None:
         result = _try_binary_bcast("PowBcast", _tc(input), _tc(exponent))
     return result if result is not None else NOT_HANDLED
@@ -1169,13 +1280,17 @@ def _try_logical(kernel_name, input, other):
 
 @no_type_check
 def fast_aten_logical_and(input, other):
-    result = _try_logical("LogicalAndBcast", input, other)
+    result = _try_spec_binary("LogicalAndSpec", input, other, DType.bool)
+    if result is None:
+        result = _try_logical("LogicalAndBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_logical_xor(input, other):
-    result = _try_logical("LogicalXorBcast", input, other)
+    result = _try_spec_binary("LogicalXorSpec", input, other, DType.bool)
+    if result is None:
+        result = _try_logical("LogicalXorBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 

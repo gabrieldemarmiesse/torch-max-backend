@@ -32,7 +32,12 @@ from std.utils.coord import Coord
 
 from std.algorithm.functional import elementwise
 
+from std.utils import IndexList
+
 from op_utils import (
+    MAX_RANK,
+    TensorHolder,
+    TensorSpec,
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
@@ -40,6 +45,9 @@ from op_utils import (
     _raw_int,
     _raw_ret_none,
     _raw_tuple_int,
+    _spec_ptr,
+    _spec_result,
+    _spec_unsupported,
 )
 
 
@@ -871,6 +879,179 @@ def _ternary_bcast_dispatcher[
 
 
 # ---------------------------------------------------------------------------
+# TensorSpec entries (docs/tensor_spec_design.md): the whole binary-broadcast
+# op prologue — input checks, broadcast layout, output alloc, kernel launch —
+# in one boundary call over cached TensorSpecs, reusing `_bin_bcast` /
+# `_cmp_bcast` above. Failed checks raise a real NotImplementedError into
+# Python ("take the classic path"); nothing is swallowed on spec paths.
+# ---------------------------------------------------------------------------
+
+comptime SPEC_BCAST_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.int8,
+    DType.int16,
+    DType.int32,
+    DType.int64,
+    DType.uint8,
+]
+
+
+def _binary_spec_go[
+    op_code: Int, is_cmp: Bool
+](a_o: PyObjectPtr, b_o: PyObjectPtr) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    ref b = _spec_ptr(b_o)[]
+
+    if a.dtype != b.dtype:
+        raise Error("mojo spec binary: operand dtypes differ")
+    if a.ctx_ptr != b.ctx_ptr:
+        raise Error("mojo spec binary: operands on different devices")
+    if a.rank > 4 or b.rank > 4:
+        raise Error("mojo spec binary: rank > 4")
+
+    # Kernel dispatch dtype: bool operands are read through uint8
+    # (bit-compatible; torch bool is one byte holding 0/1). Only comparisons,
+    # logical combinators and bitwise ops accept bool operands.
+    var kdtype = a.dtype
+    if a.dtype == DType.bool:
+        comptime if (
+            is_cmp
+            or op_code == BOP_AND
+            or op_code == BOP_OR
+            or op_code == BOP_XOR
+        ):
+            kdtype = DType.uint8
+        else:
+            raise Error("mojo spec binary: bool operands not supported")
+
+    # Pre-gate the per-op dtype restrictions with spec-protocol messages so
+    # the kernel-level comptime raises never fire.
+    comptime if not is_cmp:
+        comptime if op_code == BOP_DIV or op_code == BOP_POW:
+            if not kdtype.is_floating_point():
+                raise Error("mojo spec binary: div/pow requires a float dtype")
+        comptime if (
+            op_code == BOP_AND or op_code == BOP_OR or op_code == BOP_XOR
+        ):
+            if kdtype.is_floating_point():
+                raise Error("mojo spec binary: bitwise requires an int dtype")
+
+    var supported = False
+    comptime for dt in SPEC_BCAST_DTYPES:
+        if kdtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec binary: unsupported dtype ", a.dtype)
+
+    # Comparisons/logical write a bool output regardless of operand dtype.
+    var out_dtype = a.dtype
+    var out_itemsize = a.itemsize
+    comptime if is_cmp:
+        out_dtype = DType.bool
+        out_itemsize = 1
+
+    # Broadcast over the trailing 4 slots; leading padding aligns ranks.
+    var d = IndexList[4](1)
+    var ls = IndexList[4](0)
+    var rs = IndexList[4](0)
+    for k in range(4):
+        var i = MAX_RANK - 4 + k
+        var sa = a.shape[i]
+        var sb = b.shape[i]
+        var s: Int
+        if sa == sb:
+            s = sa
+        elif sa == 1:
+            s = sb
+        elif sb == 1:
+            s = sa
+        else:
+            raise Error("mojo spec binary: shapes do not broadcast")
+        d[k] = s
+        ls[k] = a.strides[i] if sa != 1 else 0
+        rs[k] = b.strides[i] if sb != 1 else 0
+
+    var out_rank = max(a.rank, b.rank)
+    var numel = d[0] * d[1] * d[2] * d[3]
+    var nbytes = numel * out_itemsize
+    var ctx = a.ctx()
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+
+    if numel > 0:
+        comptime for dt in SPEC_BCAST_DTYPES:
+            if kdtype == dt:
+                comptime if is_cmp:
+                    _cmp_bcast[dt, op_code](
+                        addr,
+                        a.ptr,
+                        b.ptr,
+                        d[1],
+                        d[2],
+                        d[3],
+                        ls[0],
+                        ls[1],
+                        ls[2],
+                        ls[3],
+                        rs[0],
+                        rs[1],
+                        rs[2],
+                        rs[3],
+                        numel,
+                        ctx,
+                    )
+                else:
+                    _bin_bcast[dt, op_code](
+                        addr,
+                        a.ptr,
+                        b.ptr,
+                        d[1],
+                        d[2],
+                        d[3],
+                        ls[0],
+                        ls[1],
+                        ls[2],
+                        ls[3],
+                        rs[0],
+                        rs[1],
+                        rs[2],
+                        rs[3],
+                        numel,
+                        ctx,
+                    )
+
+    var oshape = IndexList[MAX_RANK](1)
+    for k in range(4):
+        oshape[MAX_RANK - 4 + k] = d[k]
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        out_rank,
+        oshape,
+        out_dtype,
+        out_itemsize,
+        numel,
+        a.ctx_ptr,
+    )
+
+
+def _binary_spec_dispatcher[
+    op_code: Int, is_cmp: Bool
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _binary_spec_go[op_code, is_cmp](args[0], args[1])
+    except e:
+        return _spec_unsupported(e)
+
+
+# ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
 
@@ -879,6 +1060,106 @@ def _ternary_bcast_dispatcher[
 def PyInit_logic_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("logic_ops")
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_ADD, False],
+            "AddSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); + ",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_SUB, False],
+            "SubSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); - ",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_MUL, False],
+            "MulSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); * ",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_DIV, False],
+            "DivSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); / float",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_MAX, False],
+            "MaximumSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); max",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_MIN, False],
+            "MinimumSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); min",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_POW, False],
+            "PowSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); ** float",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_REMAINDER, False],
+            "RemainderSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); %",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_FLOORDIV, False],
+            "FloorDivSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); //",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_AND, False],
+            "BitwiseAndSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); & int/bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_OR, False],
+            "BitwiseOrSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); | int/bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[BOP_XOR, False],
+            "BitwiseXorSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); ^ int/bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[COP_EQ, True],
+            "EqSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); == -> bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[COP_NE, True],
+            "NeSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); != -> bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[COP_LT, True],
+            "LtSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); < -> bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[COP_LE, True],
+            "LeSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); <= -> bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[COP_GT, True],
+            "GtSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); > -> bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[COP_GE, True],
+            "GeSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); >= -> bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[COP_LAND, True],
+            "LogicalAndSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); and -> bool",
+        )
+        b.def_py_c_function(
+            _binary_spec_dispatcher[COP_LXOR, True],
+            "LogicalXorSpec",
+            docstring="(a_spec, b_spec) -> (holder, spec, shape, ptr); xor -> bool",
+        )
         b.def_py_c_function(
             _bin_bcast_dispatcher[BOP_ADD],
             "AddBcast",

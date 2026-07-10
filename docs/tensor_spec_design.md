@@ -128,30 +128,29 @@ at a time, never as part of the conversion commit itself.
 
 ## 3. Module layout: where spec ops live
 
-CPython type registrations are **per extension module**: a type registered
-by `tensor_holder`'s `PyInit` is only constructible
-(`PythonObject(alloc=...)`) inside `tensor_holder.so`. The POC therefore
-put all four spec ops in `tensor_holder.mojo`. That does not scale to
-matmul/attention (their kernels must not be duplicated), so the full
-migration uses:
+The Mojo type registry (`MOJO_PYTHON_TYPE_OBJECTS`) is a **process-wide**
+`_Global` shared by every extension module in the process, keyed by Mojo
+type id — and `_register_py_type_object` *raises* on double registration
+(the PyInit `abort` turns that into SIGILL at import). Measured on the
+pinned nightly during the migration; the original per-module-registration
+plan crashes. The layout that works:
 
-- **`op_utils/` owns the shared source**: move `TensorSpec`, the
-  downcast accessor, `_row_major8`, `_spec_result`, `_spec_unsupported`
-  and the dispatcher boilerplate into `op_utils/` so every kernel module
-  compiles the *same* struct definition. The struct layout has a single
-  source of truth; per-module copies are layout-identical because they are
-  compiled from identical source by the same compiler.
-- **Each kernel module registers its own `TensorSpec` (and, if it
-  allocates outputs, its own `TensorHolder`) in its `PyInit`** and
-  implements spec entries next to its kernels (`matmul_ops.mojo` gets
-  `MatmulSpec`, `nn_ops.mojo` gets `LayerNormSpec`, …).
-- Specs created by one module are read by another via the unchecked
-  bitcast — this works across modules precisely because it never consults
-  the type registry. The holders/specs a module *returns* carry that
-  module's PyTypeObject; Python never isinstance-checks either, and
-  refcounting/destructors are per-instance, so this is sound. Document the
-  invariant in `op_utils`: **never let per-module struct definitions
-  diverge.**
+- **`op_utils/` owns the shared source**: `TensorSpec`, `TensorHolder`,
+  `_spec_ptr` (the downcast accessor), `_row_major8`, `_spec_result` and
+  `_spec_unsupported` live in `op_utils/` so every kernel module compiles
+  the *same* struct definitions with the same type ids.
+- **Only `tensor_holder` registers the types** (`add_type[TensorSpec]`,
+  `add_type[TensorHolder]`) — exactly once per process. Every other
+  module's `PyInit` registers *no* types. `PythonObject(alloc=...)` in any
+  module finds the registration through the process-wide registry at
+  runtime. Ordering is guaranteed: a spec op's inputs are mojo tensors, and
+  creating any mojo tensor imports `tensor_holder` first.
+- Each kernel module implements spec entries next to its kernels
+  (`logic_ops.mojo` owns the binary/comparison specs, `elementwise_ops.mojo`
+  the unary/scalar specs, `matmul_ops.mojo` gets `MatmulSpec`, …), calling
+  the module's existing inner kernels directly — no duplicated kernel
+  bodies. Specs flow freely across modules: `_spec_ptr` is a pure pointer
+  bitcast that never consults the registry.
 
 Keep `make_spec` (the Python-facing constructor used by `_spec_of`) in
 `tensor_holder` only — one constructor is enough since specs flow freely
