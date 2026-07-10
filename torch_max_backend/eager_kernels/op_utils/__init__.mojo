@@ -368,7 +368,7 @@ def _row_major8(shape: IndexList[MAX_RANK], rank: Int) -> IndexList[MAX_RANK]:
 
 
 @always_inline
-def _spec_result(
+def _spec_group(
     var buf: DeviceBuffer[DType.uint8],
     addr: Int,
     nbytes: Int,
@@ -378,9 +378,9 @@ def _spec_result(
     itemsize: Int,
     numel: Int,
     ctx_ptr: Int,
-) raises -> PyObjectPtr:
-    """(holder, out_spec, shape_tuple, data_ptr) for a fresh contiguous
-    output — everything Python needs to mint the torch wrapper."""
+) raises -> PythonObject:
+    """One (holder, out_spec, shape_tuple, data_ptr) group for a fresh
+    contiguous output — everything Python needs to mint the torch wrapper."""
     var spec_obj = PythonObject(
         alloc=TensorSpec(
             ptr=addr,
@@ -402,10 +402,105 @@ def _spec_result(
         _ = cpy.PyTuple_SetItem(
             shape_tuple, i, cpy.PyLong_FromSsize_t(shape[MAX_RANK - rank + i])
         )
-    var result = Python.tuple(
+    return Python.tuple(
         holder_obj^,
         spec_obj^,
         PythonObject(from_owned=shape_tuple),
         PythonObject(addr),
     )
+
+
+@always_inline
+def _spec_result(
+    var buf: DeviceBuffer[DType.uint8],
+    addr: Int,
+    nbytes: Int,
+    rank: Int,
+    shape: IndexList[MAX_RANK],
+    dtype: DType,
+    itemsize: Int,
+    numel: Int,
+    ctx_ptr: Int,
+) raises -> PyObjectPtr:
+    """Single-output spec-op result: one (holder, spec, shape, ptr) tuple."""
+    var group = _spec_group(
+        buf^, addr, nbytes, rank, shape, dtype, itemsize, numel, ctx_ptr
+    )
+    return group^.steal_data()
+
+
+@always_inline
+def _spec_result2(
+    var buf1: DeviceBuffer[DType.uint8],
+    addr1: Int,
+    nbytes1: Int,
+    rank1: Int,
+    shape1: IndexList[MAX_RANK],
+    dtype1: DType,
+    itemsize1: Int,
+    numel1: Int,
+    var buf2: DeviceBuffer[DType.uint8],
+    addr2: Int,
+    nbytes2: Int,
+    rank2: Int,
+    shape2: IndexList[MAX_RANK],
+    dtype2: DType,
+    itemsize2: Int,
+    numel2: Int,
+    ctx_ptr: Int,
+) raises -> PyObjectPtr:
+    """Two-output spec-op result: ((holder, spec, shape, ptr) x 2) in ONE
+    tuple, so multi-output ops stay one boundary call."""
+    var g1 = _spec_group(
+        buf1^, addr1, nbytes1, rank1, shape1, dtype1, itemsize1, numel1, ctx_ptr
+    )
+    var g2 = _spec_group(
+        buf2^, addr2, nbytes2, rank2, shape2, dtype2, itemsize2, numel2, ctx_ptr
+    )
+    var result = Python.tuple(g1^, g2^)
     return result^.steal_data()
+
+
+@always_inline
+def _reduce_spec_geom(
+    a: TensorSpec,
+    rdims_t: PyObjectPtr,
+    keepdim_o: PyObjectPtr,
+    mut rows: Int,
+    mut cols: Int,
+    mut out_rank: Int,
+    mut oshape: IndexList[MAX_RANK],
+) raises:
+    """Rows/cols/output geometry for a trailing-dims reduction spec op.
+
+    `rdims_t` is a tuple of sorted, normalized reduce dims (Python does the
+    dim-spec parsing); the spec path only takes the hot layout — reduce dims
+    already trailing on a contiguous input — and raises otherwise so the
+    classic permute+materialize path handles the rest. The output shape is
+    leading-padded for `out_rank`: keepdim keeps the input shape with the
+    reduce slots set to 1; otherwise the kept dims shift right into the
+    trailing `out_rank` slots (the padding convention reads trailing slots).
+    """
+    if not a.contig:
+        raise Error("mojo spec reduce: input not contiguous")
+    var n = _raw_tuple_len(rdims_t)
+    if n > a.rank:
+        raise Error("mojo spec reduce: more reduce dims than rank")
+    for k in range(n):
+        if _raw_tuple_int(rdims_t, k) != a.rank - n + k:
+            raise Error("mojo spec reduce: reduce dims not trailing")
+    cols = 1
+    for k in range(n):
+        cols *= a.shape[MAX_RANK - n + k]
+    rows = 1
+    for i in range(MAX_RANK - a.rank, MAX_RANK - n):
+        rows *= a.shape[i]
+    oshape = IndexList[MAX_RANK](1)
+    if _raw_int(keepdim_o) != 0:
+        out_rank = a.rank
+        for i in range(MAX_RANK - a.rank, MAX_RANK - n):
+            oshape[i] = a.shape[i]
+    else:
+        out_rank = a.rank - n
+        for i in range(out_rank):
+            oshape[MAX_RANK - out_rank + i] = a.shape[MAX_RANK - a.rank + i]

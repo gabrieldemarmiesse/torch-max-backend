@@ -48,6 +48,7 @@ from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 from op_utils import (
     FLOAT_DTYPES,
+    MAX_RANK,
     _enqueue_cached,
     _make_ptr,
     _raw_ctx,
@@ -58,6 +59,10 @@ from op_utils import (
     _raw_tuple_f64,
     _raw_tuple_int,
     _raw_tuple_len,
+    _reduce_spec_geom,
+    _spec_ptr,
+    _spec_result,
+    _spec_unsupported,
 )
 
 
@@ -2451,6 +2456,212 @@ def _cumsum_rows_dispatcher(
 
 
 # ---------------------------------------------------------------------------
+# TensorSpec entries (docs/tensor_spec_design.md) for the reduction-shaped
+# kernels that live in this module (mean / max / argmax / cumsum): trailing
+# dims, contiguous input, geometry + alloc + launch in one boundary call.
+# Failed checks raise a real NotImplementedError ("take the classic path").
+# ---------------------------------------------------------------------------
+
+comptime SPEC_MAXROWS_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.int64,
+    DType.int32,
+]
+
+
+def _mean_spec_go(
+    a_o: PyObjectPtr, rdims_t: PyObjectPtr, keepdim_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    var supported = False
+    comptime for dt in FLOAT_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec mean: unsupported dtype ", a.dtype)
+    var rows = 0
+    var cols = 0
+    var out_rank = 0
+    var oshape = IndexList[MAX_RANK](1)
+    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    if cols == 0:
+        raise Error("mojo spec mean: empty reduce dim")
+
+    var ctx = a.ctx()
+    var nbytes = rows * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if rows > 0:
+        comptime for dt in FLOAT_DTYPES:
+            if a.dtype == dt:
+                _mean_rows[dt](addr, a.ptr, rows, cols, ctx)
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        out_rank,
+        oshape,
+        a.dtype,
+        a.itemsize,
+        rows,
+        a.ctx_ptr,
+    )
+
+
+def _mean_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _mean_spec_go(args[0], args[1], args[2])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _max_spec_go(
+    a_o: PyObjectPtr, rdims_t: PyObjectPtr, keepdim_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    var supported = False
+    comptime for dt in SPEC_MAXROWS_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec max: unsupported dtype ", a.dtype)
+    if a.numel == 0:
+        raise Error("mojo spec max: empty input")
+    var rows = 0
+    var cols = 0
+    var out_rank = 0
+    var oshape = IndexList[MAX_RANK](1)
+    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+
+    var ctx = a.ctx()
+    var nbytes = rows * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if rows > 0:
+        comptime for dt in SPEC_MAXROWS_DTYPES:
+            if a.dtype == dt:
+                _max_rows[dt](addr, a.ptr, rows, cols, ctx)
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        out_rank,
+        oshape,
+        a.dtype,
+        a.itemsize,
+        rows,
+        a.ctx_ptr,
+    )
+
+
+def _max_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _max_spec_go(args[0], args[1], args[2])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _argmax_spec_go(
+    a_o: PyObjectPtr, rdims_t: PyObjectPtr, keepdim_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    var supported = False
+    comptime for dt in SPEC_MAXROWS_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec argmax: unsupported dtype ", a.dtype)
+    if a.numel == 0:
+        raise Error("mojo spec argmax: empty input")
+    var rows = 0
+    var cols = 0
+    var out_rank = 0
+    var oshape = IndexList[MAX_RANK](1)
+    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+
+    var ctx = a.ctx()
+    var nbytes = rows * 8  # int64 output
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if rows > 0:
+        comptime for dt in SPEC_MAXROWS_DTYPES:
+            if a.dtype == dt:
+                _argmax_rows[dt](addr, a.ptr, rows, cols, ctx)
+    return _spec_result(
+        buf^, addr, nbytes, out_rank, oshape, DType.int64, 8, rows, a.ctx_ptr
+    )
+
+
+def _argmax_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _argmax_spec_go(args[0], args[1], args[2])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _cumsum_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
+    """Cumulative sum over the trailing dim; full-shape output."""
+    ref a = _spec_ptr(a_o)[]
+    if not a.contig:
+        raise Error("mojo spec cumsum: input not contiguous")
+    var supported = False
+    comptime for dt in [DType.int64, DType.int32, DType.float32]:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec cumsum: unsupported dtype ", a.dtype)
+    if a.rank < 1 or a.numel == 0:
+        raise Error("mojo spec cumsum: empty or rank-0 input")
+
+    var cols = a.shape[MAX_RANK - 1]
+    var rows = a.numel // cols
+    var ctx = a.ctx()
+    var nbytes = a.numel * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    comptime for dt in [DType.int64, DType.int32, DType.float32]:
+        if a.dtype == dt:
+            _cumsum_rows[dt](addr, a.ptr, rows, cols, ctx)
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        a.shape,
+        a.dtype,
+        a.itemsize,
+        a.numel,
+        a.ctx_ptr,
+    )
+
+
+def _cumsum_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _cumsum_spec_go(args[0])
+    except e:
+        return _spec_unsupported(e)
+
+
+
+# ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
 
@@ -2459,6 +2670,26 @@ def _cumsum_rows_dispatcher(
 def PyInit_nn_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("nn_ops")
+        b.def_py_c_function(
+            _mean_spec_dispatcher,
+            "MeanSpec",
+            docstring="(a_spec, rdims, keepdim) -> (holder, spec, shape, ptr)",
+        )
+        b.def_py_c_function(
+            _max_spec_dispatcher,
+            "MaxSpec",
+            docstring="(a_spec, rdims, keepdim) -> (holder, spec, shape, ptr)",
+        )
+        b.def_py_c_function(
+            _argmax_spec_dispatcher,
+            "ArgmaxSpec",
+            docstring="(a_spec, rdims, keepdim) -> int64 result group",
+        )
+        b.def_py_c_function(
+            _cumsum_spec_dispatcher,
+            "CumsumSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); trailing dim",
+        )
         b.def_py_c_function(
             _batch_norm_dispatcher,
             "BatchNormInference",

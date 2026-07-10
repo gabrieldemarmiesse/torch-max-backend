@@ -195,8 +195,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
 
 
 @no_type_check
-def _try_spec_unary(spec_fn_name, x, out_dtype=None):
-    """Contiguous unary through an elementwise_ops spec op, or None.
+def _try_spec_unary(spec_fn_name, x, out_dtype=None, module_name="elementwise_ops"):
+    """Contiguous unary through a spec op, or None.
 
     `out_dtype` overrides the wrapper dtype for the bool-output ops
     (isnan / logical_not)."""
@@ -204,10 +204,35 @@ def _try_spec_unary(spec_fn_name, x, out_dtype=None):
     if a is None:
         return None
     try:
-        result = getattr(eager_kernels.elementwise_ops, spec_fn_name)(_spec_of(a))
+        result = getattr(getattr(eager_kernels, module_name), spec_fn_name)(_spec_of(a))
     except Exception:
         return None
     return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
+
+
+@no_type_check
+def _try_spec_reduce(
+    spec_fn_name, a, rdims, keepdim, *extra, out_dtype=None, module_name="reduction_ops"
+):
+    """Trailing-dims reduction through a spec op, or None. `a` is already a
+    TorchMojoTensor (dtype promotion happened upstream); the spec op raises
+    on non-trailing dims / strided input and the classic path takes over."""
+    try:
+        result = getattr(getattr(eager_kernels, module_name), spec_fn_name)(
+            _spec_of(a), tuple(rdims), 1 if keepdim else 0, *extra
+        )
+    except Exception:
+        return None
+    return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
+
+
+@no_type_check
+def _wrap_spec_pair(result, dtype0, dtype1, device):
+    """Mint two torch wrappers from a two-group spec result."""
+    return (
+        _wrap_spec_result(result[0], dtype0, device),
+        _wrap_spec_result(result[1], dtype1, device),
+    )
 
 
 @no_type_check
@@ -677,9 +702,7 @@ def fast_aten_sub(input, other, alpha=1):
     ):
         result = _try_spec_scalar("AddScalarSpec", input, -other)
         if result is None:
-            result = _try_scalar(
-                eager_kernels.elementwise_ops.AddScalar, input, -other
-            )
+            result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, -other)
         if result is None and isinstance(other, int):
             result = _try_spec_int_scalar("AddScalarIntSpec", input, -other)
         if result is None and isinstance(other, int):
@@ -2407,6 +2430,9 @@ def fast_aten_mean(input, dim=None, keepdim=False, *, dtype=None):
     rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
     if rdims is None:
         return NOT_HANDLED
+    result = _try_spec_reduce("MeanSpec", a, rdims, keepdim, module_name="nn_ops")
+    if result is not None:
+        return result
     contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
     if cols == 0:
         return NOT_HANDLED  # mean of an empty dim is nan; torch warns/errors
@@ -2443,6 +2469,9 @@ def fast_aten_sum(input, dim=None, keepdim=False, *, dtype=None):
     rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
     if rdims is None:
         return NOT_HANDLED
+    result = _try_spec_reduce("SumSpec", a, rdims, keepdim)
+    if result is not None:
+        return result
     contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
     if rows * cols == 0:
         # Empty reduction: torch defines sum over 0 elements as 0.
@@ -2464,6 +2493,10 @@ def _amax_amin(input, dim, keepdim, kernel_name):
     rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
     if rdims is None:
         return NOT_HANDLED
+    spec_name = "AmaxSpec" if kernel_name == "MaxRowsR" else "AminSpec"
+    result = _try_spec_reduce(spec_name, a, rdims, keepdim)
+    if result is not None:
+        return result
     contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
     if cols == 0:
         return NOT_HANDLED  # torch errors on amax/amin over an empty dim
@@ -2488,6 +2521,11 @@ def fast_aten_amin(input, dim=(), keepdim=False):
 @no_type_check
 def fast_aten_min(input):
     # Values-only full reduction: aten::min(Tensor) -> Tensor.
+    t = _t(input)
+    if t is not None and t._numel > 0:
+        result = _try_spec_reduce("AminSpec", t, range(len(t._shape)), False)
+        if result is not None:
+            return result
     a = _tc(input)
     if a is None or a._numel == 0 or a._dtype not in _ROW_REDUCE_DTYPES:
         return NOT_HANDLED
@@ -2507,6 +2545,14 @@ def fast_aten_min_dim(input, dim, keepdim=False):
     rank = len(a._shape)
     if rank == 0 or not -rank <= dim < rank:
         return NOT_HANDLED
+    try:
+        result = eager_kernels.reduction_ops.MinDimSpec(
+            _spec_of(a), (dim % rank,), 1 if keepdim else 0
+        )
+    except Exception:
+        result = None
+    if result is not None:
+        return _wrap_spec_pair(result, a._dtype, DType.int64, a._device)
     contig, rows, cols, out_shape = _reduce_to_rows(a, [dim % rank], keepdim)
     if cols == 0:
         return NOT_HANDLED
@@ -2532,6 +2578,17 @@ def _argreduce(input, dim, keepdim, is_min):
     if a is None or a._numel == 0 or a._dtype not in _ROW_REDUCE_DTYPES:
         return NOT_HANDLED
     rank = len(a._shape)
+    rdims = list(range(rank)) if dim is None else None
+    if rdims is None and isinstance(dim, int) and rank > 0 and -rank <= dim < rank:
+        rdims = [dim % rank]
+    if rdims is not None:
+        spec_name = "ArgminSpec" if is_min else "ArgmaxSpec"
+        module_name = "reduction_ops" if is_min else "nn_ops"
+        result = _try_spec_reduce(
+            spec_name, a, rdims, keepdim, out_dtype=DType.int64, module_name=module_name
+        )
+        if result is not None:
+            return result
     if dim is None:
         contig = _tc(a)
         rows, cols = 1, a._numel
@@ -2568,6 +2625,13 @@ def fast_aten_max(input, *args, **kwargs):
     # Only the values-only overload max(Tensor) -> Tensor.
     if args or kwargs:
         return NOT_HANDLED
+    t = _t(input)
+    if t is not None and t._numel > 0:
+        result = _try_spec_reduce(
+            "MaxSpec", t, range(len(t._shape)), False, module_name="nn_ops"
+        )
+        if result is not None:
+            return result
     a = _tc(input)
     if a is None or a._numel == 0 or a._dtype not in _ROW_REDUCE_DTYPES:
         return NOT_HANDLED
@@ -2591,6 +2655,9 @@ def fast_aten_var(input, dim=None, *, correction=1, keepdim=False):
     rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
     if rdims is None:
         return NOT_HANDLED
+    result = _try_spec_reduce("VarSpec", a, rdims, keepdim, float(correction))
+    if result is not None:
+        return result
     contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
     if cols == 0:
         return NOT_HANDLED
@@ -2627,6 +2694,11 @@ def _any_all(input, dim, keepdim, is_all):
     rdims = _norm_reduce_dims(dim, rank, empty_is_all=False)
     if rdims is None:
         return NOT_HANDLED
+    result = _try_spec_reduce(
+        "AllSpec" if is_all else "AnySpec", a, rdims, keepdim, out_dtype=DType.bool
+    )
+    if result is not None:
+        return result
     contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
     out = _alloc(out_shape, DType.bool, a._device)
     if out._numel > 0:
@@ -2678,6 +2750,9 @@ def fast_aten__log_softmax(input, dim, half_to_float=False):
         if result is NOT_HANDLED:
             return NOT_HANDLED
         return fast_aten_transpose(result, dim, rank - 1)
+    result = _try_spec_unary("LogSoftmaxSpec", t, module_name="reduction_ops")
+    if result is not None:
+        return result
     a = _tc(t)
     cols = a._shape[-1]
     rows = a._numel // cols
@@ -2700,6 +2775,9 @@ def fast_aten_cumsum(input, dim, *, dtype=None):
     rank = len(a._shape)
     if not isinstance(dim, int) or rank == 0 or dim % rank != rank - 1:
         return NOT_HANDLED
+    result = _try_spec_unary("CumsumSpec", a, module_name="nn_ops")
+    if result is not None:
+        return result
     cols = a._shape[-1]
     rows = a._numel // cols
     out = _alloc(a._shape, a._dtype, a._device)

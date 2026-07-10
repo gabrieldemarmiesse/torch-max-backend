@@ -46,6 +46,8 @@ from std.algorithm.reduction import min as reduce_min
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 from op_utils import (
+    FLOAT_DTYPES,
+    MAX_RANK,
     _enqueue_cached,
     _make_ptr,
     _raw_ctx,
@@ -53,6 +55,11 @@ from op_utils import (
     _raw_f64,
     _raw_int,
     _raw_ret_none,
+    _reduce_spec_geom,
+    _spec_ptr,
+    _spec_result,
+    _spec_result2,
+    _spec_unsupported,
 )
 
 
@@ -1175,6 +1182,349 @@ def _anyall_rows_dispatcher[
 
 
 # ---------------------------------------------------------------------------
+# TensorSpec entries (docs/tensor_spec_design.md): trailing-dims reductions
+# over a contiguous input — dim checks, rows/cols/keepdim geometry, output
+# alloc and launch in one boundary call, reusing the row kernels above.
+# Python still parses the dim spec (`_norm_reduce_dims`) and does dtype
+# promotion; non-trailing/strided layouts raise so the classic
+# permute+materialize path keeps handling them. Failed checks raise a real
+# NotImplementedError into Python ("take the classic path").
+# ---------------------------------------------------------------------------
+
+comptime SPEC_ROWRED_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.int64,
+    DType.int32,
+]
+
+comptime SPEC_ANYALL_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.int64,
+    DType.int32,
+    DType.int16,
+    DType.int8,
+    DType.uint8,
+    DType.bool,
+]
+
+
+def _rowred_spec_go[
+    op_code: Int
+](
+    a_o: PyObjectPtr, rdims_t: PyObjectPtr, keepdim_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    var supported = False
+    comptime for dt in SPEC_ROWRED_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec reduce: unsupported dtype ", a.dtype)
+    if a.numel == 0:
+        # sum-of-empty is a Python-side fill; amax/amin reject empty dims.
+        raise Error("mojo spec reduce: empty input")
+    var rows = 0
+    var cols = 0
+    var out_rank = 0
+    var oshape = IndexList[MAX_RANK](1)
+    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+
+    var ctx = a.ctx()
+    var nbytes = rows * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if rows > 0:
+        comptime for dt in SPEC_ROWRED_DTYPES:
+            if a.dtype == dt:
+                _reduce_rows[dt, op_code](addr, a.ptr, rows, cols, ctx)
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        out_rank,
+        oshape,
+        a.dtype,
+        a.itemsize,
+        rows,
+        a.ctx_ptr,
+    )
+
+
+def _rowred_spec_dispatcher[
+    op_code: Int
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _rowred_spec_go[op_code](args[0], args[1], args[2])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _argmin_spec_go(
+    a_o: PyObjectPtr, rdims_t: PyObjectPtr, keepdim_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    var supported = False
+    comptime for dt in SPEC_ROWRED_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec argmin: unsupported dtype ", a.dtype)
+    if a.numel == 0:
+        raise Error("mojo spec argmin: empty input")
+    var rows = 0
+    var cols = 0
+    var out_rank = 0
+    var oshape = IndexList[MAX_RANK](1)
+    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+
+    var ctx = a.ctx()
+    var nbytes = rows * 8  # int64 output
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if rows > 0:
+        comptime for dt in SPEC_ROWRED_DTYPES:
+            if a.dtype == dt:
+                _argmin_rows[dt](addr, a.ptr, rows, cols, ctx)
+    return _spec_result(
+        buf^, addr, nbytes, out_rank, oshape, DType.int64, 8, rows, a.ctx_ptr
+    )
+
+
+def _argmin_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _argmin_spec_go(args[0], args[1], args[2])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _min_dim_spec_go(
+    a_o: PyObjectPtr, rdims_t: PyObjectPtr, keepdim_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    """aten::min.dim values+indices in one call — the multi-output protocol
+    (`_spec_result2`): two (holder, spec, shape, ptr) groups in one tuple."""
+    ref a = _spec_ptr(a_o)[]
+    var supported = False
+    comptime for dt in SPEC_ROWRED_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec min.dim: unsupported dtype ", a.dtype)
+    if a.numel == 0:
+        raise Error("mojo spec min.dim: empty input")
+    var rows = 0
+    var cols = 0
+    var out_rank = 0
+    var oshape = IndexList[MAX_RANK](1)
+    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+
+    var ctx = a.ctx()
+    var nbytes_v = rows * a.itemsize
+    var buf_v = ctx.enqueue_create_buffer[DType.uint8](max(nbytes_v, 1))
+    var addr_v = Int(buf_v.unsafe_ptr())
+    var nbytes_i = rows * 8  # int64 indices
+    var buf_i = ctx.enqueue_create_buffer[DType.uint8](max(nbytes_i, 1))
+    var addr_i = Int(buf_i.unsafe_ptr())
+    if rows > 0:
+        comptime for dt in SPEC_ROWRED_DTYPES:
+            if a.dtype == dt:
+                _minmax_idx_rows[dt, True](
+                    addr_v, addr_i, a.ptr, rows, cols, ctx
+                )
+    return _spec_result2(
+        buf_v^,
+        addr_v,
+        nbytes_v,
+        out_rank,
+        oshape,
+        a.dtype,
+        a.itemsize,
+        rows,
+        buf_i^,
+        addr_i,
+        nbytes_i,
+        out_rank,
+        oshape,
+        DType.int64,
+        8,
+        rows,
+        a.ctx_ptr,
+    )
+
+
+def _min_dim_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _min_dim_spec_go(args[0], args[1], args[2])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _var_spec_go(
+    a_o: PyObjectPtr,
+    rdims_t: PyObjectPtr,
+    keepdim_o: PyObjectPtr,
+    corr_o: PyObjectPtr,
+) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    var supported = False
+    comptime for dt in FLOAT_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec var: unsupported dtype ", a.dtype)
+    if a.numel == 0:
+        raise Error("mojo spec var: empty input")
+    var correction = Float32(_raw_f64(corr_o))
+    var rows = 0
+    var cols = 0
+    var out_rank = 0
+    var oshape = IndexList[MAX_RANK](1)
+    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+
+    var ctx = a.ctx()
+    var nbytes = rows * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if rows > 0:
+        comptime for dt in FLOAT_DTYPES:
+            if a.dtype == dt:
+                _var_rows[dt](addr, a.ptr, rows, cols, correction, ctx)
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        out_rank,
+        oshape,
+        a.dtype,
+        a.itemsize,
+        rows,
+        a.ctx_ptr,
+    )
+
+
+def _var_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _var_spec_go(args[0], args[1], args[2], args[3])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _anyall_spec_go[
+    is_all: Bool
+](
+    a_o: PyObjectPtr, rdims_t: PyObjectPtr, keepdim_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    ref a = _spec_ptr(a_o)[]
+    var supported = False
+    comptime for dt in SPEC_ANYALL_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec any/all: unsupported dtype ", a.dtype)
+    var rows = 0
+    var cols = 0
+    var out_rank = 0
+    var oshape = IndexList[MAX_RANK](1)
+    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    if cols == 0 and rows > 0:
+        # Mirror the classic path (which folds this into rows == 0) rather
+        # than trusting the kernel's empty-row init on a new code path.
+        raise Error("mojo spec any/all: empty reduce dim")
+
+    var ctx = a.ctx()
+    var nbytes = rows  # bool output
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if rows > 0:
+        comptime for dt in SPEC_ANYALL_DTYPES:
+            if a.dtype == dt:
+                _anyall_rows[dt, is_all](addr, a.ptr, rows, cols, ctx)
+    return _spec_result(
+        buf^, addr, nbytes, out_rank, oshape, DType.bool, 1, rows, a.ctx_ptr
+    )
+
+
+def _anyall_spec_dispatcher[
+    is_all: Bool
+](
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _anyall_spec_go[is_all](args[0], args[1], args[2])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _log_softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
+    """log_softmax over the trailing dim; full-shape output. The non-trailing
+    dim transpose recursion stays in Python (view ops)."""
+    ref a = _spec_ptr(a_o)[]
+    if not a.contig:
+        raise Error("mojo spec log_softmax: input not contiguous")
+    var supported = False
+    comptime for dt in FLOAT_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec log_softmax: unsupported dtype ", a.dtype)
+    if a.rank < 1 or a.numel == 0:
+        raise Error("mojo spec log_softmax: empty or rank-0 input")
+
+    var cols = a.shape[MAX_RANK - 1]
+    var rows = a.numel // cols
+    var ctx = a.ctx()
+    var nbytes = a.numel * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    comptime for dt in FLOAT_DTYPES:
+        if a.dtype == dt:
+            _log_softmax_rows[dt](addr, a.ptr, rows, cols, ctx)
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        a.shape,
+        a.dtype,
+        a.itemsize,
+        a.numel,
+        a.ctx_ptr,
+    )
+
+
+def _log_softmax_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _log_softmax_spec_go(args[0])
+    except e:
+        return _spec_unsupported(e)
+
+
+# ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
 
@@ -1183,6 +1533,51 @@ def _anyall_rows_dispatcher[
 def PyInit_reduction_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("reduction_ops")
+        b.def_py_c_function(
+            _rowred_spec_dispatcher[RED_SUM],
+            "SumSpec",
+            docstring="(a_spec, rdims, keepdim) -> (holder, spec, shape, ptr)",
+        )
+        b.def_py_c_function(
+            _rowred_spec_dispatcher[RED_MAX],
+            "AmaxSpec",
+            docstring="(a_spec, rdims, keepdim) -> (holder, spec, shape, ptr)",
+        )
+        b.def_py_c_function(
+            _rowred_spec_dispatcher[RED_MIN],
+            "AminSpec",
+            docstring="(a_spec, rdims, keepdim) -> (holder, spec, shape, ptr)",
+        )
+        b.def_py_c_function(
+            _argmin_spec_dispatcher,
+            "ArgminSpec",
+            docstring="(a_spec, rdims, keepdim) -> int64 result group",
+        )
+        b.def_py_c_function(
+            _min_dim_spec_dispatcher,
+            "MinDimSpec",
+            docstring="(a_spec, rdims, keepdim) -> (values group, indices group)",
+        )
+        b.def_py_c_function(
+            _var_spec_dispatcher,
+            "VarSpec",
+            docstring="(a_spec, rdims, keepdim, correction) -> result group",
+        )
+        b.def_py_c_function(
+            _anyall_spec_dispatcher[False],
+            "AnySpec",
+            docstring="(a_spec, rdims, keepdim) -> bool result group",
+        )
+        b.def_py_c_function(
+            _anyall_spec_dispatcher[True],
+            "AllSpec",
+            docstring="(a_spec, rdims, keepdim) -> bool result group",
+        )
+        b.def_py_c_function(
+            _log_softmax_spec_dispatcher,
+            "LogSoftmaxSpec",
+            docstring="(a_spec) -> (holder, spec, shape, ptr); trailing dim",
+        )
         b.def_py_c_function(
             _reduce_dispatcher[RED_SUM],
             "SumRows",
