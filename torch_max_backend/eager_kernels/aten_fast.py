@@ -456,6 +456,14 @@ def _bcast_meta(*tensors):
 @no_type_check
 def _scalar_tensor_0d(value, dtype, device) -> TorchMojoTensor:
     """A 0-d tensor holding `value`, for stride-0 broadcast operands."""
+    try:
+        result = eager_kernels.elementwise_ops.FillSpec(
+            _pad8((), 1), 0, 1, float(value), dtype.value, _ctx_ptr(device)
+        )
+    except Exception:
+        result = None
+    if result is not None:
+        return _wrap_spec_result(result, dtype, device)
     out = _alloc((), dtype, device)
     eager_kernels.elementwise_ops.Fill(
         out._ptr, float(value), 1, dtype.value, _ctx_ptr(device)
@@ -466,6 +474,14 @@ def _scalar_tensor_0d(value, dtype, device) -> TorchMojoTensor:
 @no_type_check
 def _cast_tensor(x: TorchMojoTensor, dtype: DType) -> TorchMojoTensor:
     """Contiguous dtype cast through the Cast kernel."""
+    t = _t(x)
+    if t is not None:
+        try:
+            result = eager_kernels.data_movement_ops.CastSpec(_spec_of(t), dtype.value)
+        except Exception:
+            result = None
+        if result is not None:
+            return _wrap_spec_result(result, dtype, t._device)
     a = _tc(x)
     out = _alloc(a._shape, dtype, a._device)
     if out._numel > 0:
@@ -3746,7 +3762,21 @@ def fast_filled(shape, value, dtype: DType, device):
         return None
     if dtype not in _FILL_DTYPES:
         return None
-    out = _alloc(tuple(shape), dtype, device)
+    shape = tuple(shape)
+    try:
+        result = eager_kernels.elementwise_ops.FillSpec(
+            _pad8(shape, 1),
+            len(shape),
+            math.prod(shape),
+            float(value),
+            dtype.value,
+            _ctx_ptr(device),
+        )
+    except Exception:
+        result = None
+    if result is not None:
+        return _wrap_spec_result(result, dtype, device)
+    out = _alloc(shape, dtype, device)
     if out._numel > 0:
         eager_kernels.elementwise_ops.Fill(
             out._ptr, float(value), out._numel, dtype.value, _ctx_ptr(device)

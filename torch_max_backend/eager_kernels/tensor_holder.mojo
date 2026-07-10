@@ -37,6 +37,7 @@ from op_utils import (
     MAX_RANK,
     TensorHolder,
     TensorSpec,
+    _copy_strided,
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
@@ -242,45 +243,6 @@ def _parallel_for[
             elementwise[func, simd_width=1, target="gpu"](Coord(count), ctx)
         else:
             raise Error("no GPU accelerator available at compile time")
-
-
-@always_inline
-def _copy_strided[
-    dtype: DType
-](
-    dst_addr: Int,
-    src_addr: Int,
-    shape: IndexList[MAX_RANK],
-    dst_strides: IndexList[MAX_RANK],
-    src_strides: IndexList[MAX_RANK],
-    ctx: DeviceContext,
-) raises:
-    var dst_ptr = _make_ptr[dtype](dst_addr)
-    var src_ptr = _make_ptr[dtype](src_addr)
-    var total = 1
-    for i in range(MAX_RANK):
-        total *= shape[i]
-    if total == 0:
-        return
-
-    @always_inline
-    @parameter
-    @__copy_capture(dst_ptr, src_ptr, shape, dst_strides, src_strides)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var rest = Int(idx[0].value())
-        var dst_off = 0
-        var src_off = 0
-
-        comptime for d in range(MAX_RANK - 1, 0, -1):
-            var coord = rest % shape[d]
-            rest = rest // shape[d]
-            dst_off += coord * dst_strides[d]
-            src_off += coord * src_strides[d]
-        dst_off += rest * dst_strides[0]
-        src_off += rest * src_strides[0]
-        dst_ptr[dst_off] = src_ptr[src_off]
-
-    _parallel_for[func](total, ctx)
 
 
 def _copy_strided_go(

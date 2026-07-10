@@ -27,6 +27,8 @@ from std.utils import IndexList
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 from op_utils import (
+    MAX_RANK,
+    TensorSpec,
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
@@ -34,11 +36,14 @@ from op_utils import (
     _raw_int,
     _raw_ret_none,
     _raw_tuple_int,
+    _spec_ptr,
+    _spec_result,
+    _spec_unsupported,
 )
 
 # Strided kernels that work on rank-<=8 tensors pad shapes/strides to this
-# rank on the Python side (leading dims of size 1 / stride 0).
-comptime MAX_RANK = 8
+# rank on the Python side (leading dims of size 1 / stride 0); MAX_RANK is
+# the shared op_utils constant.
 
 # Dtypes ScatterDim dispatches on: it needs the real dtype (a scalar value is
 # cast to it) so element-size dispatch is not enough.
@@ -1366,6 +1371,62 @@ def _scatter_dim_dispatcher(
     return _raw_ret_none()
 
 
+def _cast_spec_go(
+    a_o: PyObjectPtr, out_dtype_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    """Contiguous dtype cast: checks + output alloc + launch in one call
+    (docs/tensor_spec_design.md; the classic path is Python-side _alloc +
+    Cast). Raises a real NotImplementedError on unsupported inputs."""
+    ref a = _spec_ptr(a_o)[]
+    var dst = _raw_dtype_int(out_dtype_o)
+    if not a.contig:
+        raise Error("mojo spec cast: input not contiguous")
+    var src_ok = False
+    comptime for dt in CAST_DTYPES:
+        if a.dtype == dt:
+            src_ok = True
+    var dst_ok = False
+    var dst_itemsize = 0
+    comptime for dt in CAST_DTYPES:
+        if dst == dt:
+            dst_ok = True
+            dst_itemsize = size_of[dt]()
+    if not (src_ok and dst_ok):
+        raise Error("mojo spec cast: unsupported dtype pair")
+
+    var ctx = a.ctx()
+    var nbytes = a.numel * dst_itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if a.numel > 0:
+        comptime for src_dt in CAST_DTYPES:
+            if a.dtype == src_dt:
+                _cast_to[src_dt](dst, addr, a.ptr, a.numel, ctx)
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        a.shape,
+        dst,
+        dst_itemsize,
+        a.numel,
+        a.ctx_ptr,
+    )
+
+
+def _cast_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _cast_spec_go(args[0], args[1])
+    except e:
+        return _spec_unsupported(e)
+
+
+
 # ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
@@ -1375,6 +1436,11 @@ def _scatter_dim_dispatcher(
 def PyInit_data_movement_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("data_movement_ops")
+        b.def_py_c_function(
+            _cast_spec_dispatcher,
+            "CastSpec",
+            docstring="(a_spec, out_dtype) -> (holder, spec, shape, ptr)",
+        )
         b.def_py_c_function(
             _permute_copy_dispatcher,
             "PermuteCopy",

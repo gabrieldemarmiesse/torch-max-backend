@@ -6,13 +6,16 @@
 # pointer that `device._device_context_ptr()` hands us on the Python side.
 # ===----------------------------------------------------------------------=== #
 
+from std.algorithm.functional import elementwise
 from std.builtin.device_passable import DevicePassable
 from std.ffi import _get_global_or_null, external_call
 from std.gpu.host import DeviceBuffer, DeviceContext
 from std.memory import OpaquePointer, alloc
 from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
+from std.sys.info import has_accelerator
 from std.utils import IndexList
+from std.utils.coord import Coord
 
 
 # The floating-point dtypes the fast kernels specialize for. Dispatchers loop
@@ -459,6 +462,98 @@ def _spec_result2(
     )
     var result = Python.tuple(g1^, g2^)
     return result^.steal_data()
+
+
+@always_inline
+def _parallel_for[
+    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None
+](count: Int, ctx: DeviceContext) raises:
+    if ctx.api() == "cpu":
+        elementwise[func, simd_width=1](Coord(count), ctx)
+    else:
+        comptime if has_accelerator():
+            elementwise[func, simd_width=1, target="gpu"](Coord(count), ctx)
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
+
+@always_inline
+def _copy_strided[
+    dtype: DType
+](
+    dst_addr: Int,
+    src_addr: Int,
+    shape: IndexList[MAX_RANK],
+    dst_strides: IndexList[MAX_RANK],
+    src_strides: IndexList[MAX_RANK],
+    ctx: DeviceContext,
+) raises:
+    """dst[coords] = src[coords] over a rank-8-padded strided index space
+    (0-stride broadcast reads included). Layout-only: dispatch on element
+    *size*, not dtype."""
+    var dst_ptr = _make_ptr[dtype](dst_addr)
+    var src_ptr = _make_ptr[dtype](src_addr)
+    var total = 1
+    for i in range(MAX_RANK):
+        total *= shape[i]
+    if total == 0:
+        return
+
+    @always_inline
+    @parameter
+    @__copy_capture(dst_ptr, src_ptr, shape, dst_strides, src_strides)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var rest = Int(idx[0].value())
+        var dst_off = 0
+        var src_off = 0
+
+        comptime for d in range(MAX_RANK - 1, 0, -1):
+            var coord = rest % shape[d]
+            rest = rest // shape[d]
+            dst_off += coord * dst_strides[d]
+            src_off += coord * src_strides[d]
+        dst_off += rest * dst_strides[0]
+        src_off += rest * src_strides[0]
+        dst_ptr[dst_off] = src_ptr[src_off]
+
+    _parallel_for[func](total, ctx)
+
+
+@always_inline
+def _scratch_contig(
+    a: TensorSpec, ctx: DeviceContext
+) raises -> DeviceBuffer[DType.uint8]:
+    """Materialize a strided spec into a fresh contiguous scratch buffer —
+    the Mojo-side temporary of docs/tensor_spec_design.md §4.7. Python never
+    sees a wrapper for it; the caller keeps the returned buffer alive until
+    its kernel launch is enqueued (`_ = buf^`), and the stream-ordered free
+    rides the same queue."""
+    var nbytes = a.numel * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if a.numel > 0:
+        var dst_strides = _row_major8(a.shape, a.rank)
+        if a.itemsize == 4:
+            _copy_strided[DType.uint32](
+                addr, a.ptr, a.shape, dst_strides, a.strides, ctx
+            )
+        elif a.itemsize == 2:
+            _copy_strided[DType.uint16](
+                addr, a.ptr, a.shape, dst_strides, a.strides, ctx
+            )
+        elif a.itemsize == 8:
+            _copy_strided[DType.uint64](
+                addr, a.ptr, a.shape, dst_strides, a.strides, ctx
+            )
+        elif a.itemsize == 1:
+            _copy_strided[DType.uint8](
+                addr, a.ptr, a.shape, dst_strides, a.strides, ctx
+            )
+        else:
+            raise Error(
+                "mojo spec temp: unsupported element size ", a.itemsize
+            )
+    return buf^
 
 
 @always_inline

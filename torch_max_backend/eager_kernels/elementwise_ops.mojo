@@ -43,7 +43,8 @@ from std.memory import OpaquePointer
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator, simd_width_of
+from std.sys.info import has_accelerator, simd_width_of, size_of
+from std.utils.index import IndexList
 from std.utils.coord import Coord
 from std.utils.numerics import isnan
 
@@ -51,6 +52,7 @@ from std.algorithm.functional import elementwise
 
 from op_utils import (
     FLOAT_DTYPES,
+    MAX_RANK,
     TensorHolder,
     TensorSpec,
     _make_ptr,
@@ -59,6 +61,8 @@ from op_utils import (
     _raw_f64,
     _raw_int,
     _raw_ret_none,
+    _raw_tuple_int,
+    _scratch_contig,
     _spec_ptr,
     _spec_result,
     _spec_unsupported,
@@ -910,8 +914,6 @@ comptime SPEC_UNARY_DTYPES = [
 
 def _unary_spec_go[op_code: Int](a_o: PyObjectPtr) raises -> PyObjectPtr:
     ref a = _spec_ptr(a_o)[]
-    if not a.contig:
-        raise Error("mojo spec unary: input not contiguous")
 
     comptime is_direct = (
         op_code == UOP_RELU
@@ -936,11 +938,27 @@ def _unary_spec_go[op_code: Int](a_o: PyObjectPtr) raises -> PyObjectPtr:
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if a.numel > 0:
-        comptime for dt in SPEC_UNARY_DTYPES:
-            if a.dtype == dt:
-                _unary_elementwise[dt, op_code](
-                    _make_ptr[dt](addr), _make_ptr[dt](a.ptr), a.numel, ctx
-                )
+        if a.contig:
+            comptime for dt in SPEC_UNARY_DTYPES:
+                if a.dtype == dt:
+                    _unary_elementwise[dt, op_code](
+                        _make_ptr[dt](addr), _make_ptr[dt](a.ptr), a.numel, ctx
+                    )
+        else:
+            # Mojo-side temporary (design doc §4.7): materialize the strided
+            # input into a scratch buffer inside the call — Python never
+            # mints a wrapper for it.
+            var tmp = _scratch_contig(a, ctx)
+            var tmp_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in SPEC_UNARY_DTYPES:
+                if a.dtype == dt:
+                    _unary_elementwise[dt, op_code](
+                        _make_ptr[dt](addr),
+                        _make_ptr[dt](tmp_addr),
+                        a.numel,
+                        ctx,
+                    )
+            _ = tmp^
     return _spec_result(
         buf^,
         addr,
@@ -969,8 +987,6 @@ def _unary_spec_dispatcher[
 
 def _unary_bool_spec_go[op_code: Int](a_o: PyObjectPtr) raises -> PyObjectPtr:
     ref a = _spec_ptr(a_o)[]
-    if not a.contig:
-        raise Error("mojo spec unary bool: input not contiguous")
     # bool inputs are read through their uint8 storage (bit-compatible).
     var kdtype = a.dtype
     if a.dtype == DType.bool:
@@ -987,14 +1003,28 @@ def _unary_bool_spec_go[op_code: Int](a_o: PyObjectPtr) raises -> PyObjectPtr:
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if a.numel > 0:
-        comptime for dt in SPEC_UNARY_DTYPES:
-            if kdtype == dt:
-                _unary_bool[dt, op_code](
-                    _make_ptr[DType.bool](addr),
-                    _make_ptr[dt](a.ptr),
-                    a.numel,
-                    ctx,
-                )
+        if a.contig:
+            comptime for dt in SPEC_UNARY_DTYPES:
+                if kdtype == dt:
+                    _unary_bool[dt, op_code](
+                        _make_ptr[DType.bool](addr),
+                        _make_ptr[dt](a.ptr),
+                        a.numel,
+                        ctx,
+                    )
+        else:
+            # Mojo-side temporary; see _unary_spec_go.
+            var tmp = _scratch_contig(a, ctx)
+            var tmp_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in SPEC_UNARY_DTYPES:
+                if kdtype == dt:
+                    _unary_bool[dt, op_code](
+                        _make_ptr[DType.bool](addr),
+                        _make_ptr[dt](tmp_addr),
+                        a.numel,
+                        ctx,
+                    )
+            _ = tmp^
     return _spec_result(
         buf^, addr, nbytes, a.rank, a.shape, DType.bool, 1, a.numel, a.ctx_ptr
     )
@@ -1119,6 +1149,77 @@ def _int_scalar_spec_dispatcher[
         return _int_scalar_spec_go[op_code](args[0], args[1])
     except e:
         return _spec_unsupported(e)
+
+
+comptime SPEC_FILL_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.float64,
+    DType.int64,
+    DType.int32,
+    DType.int16,
+    DType.int8,
+    DType.uint8,
+    DType.bool,
+]
+
+
+def _fill_spec_go(
+    shape_t: PyObjectPtr,
+    rank_o: PyObjectPtr,
+    numel_o: PyObjectPtr,
+    value_o: PyObjectPtr,
+    dtype_o: PyObjectPtr,
+    ctx_o: PyObjectPtr,
+) raises -> PyObjectPtr:
+    """Filled-tensor construction: alloc + fill in one boundary call (the
+    classic path is a Python-side _alloc plus a Fill call)."""
+    var rank = _raw_int(rank_o)
+    var numel = _raw_int(numel_o)
+    var value = _raw_f64(value_o)
+    var dtype = _raw_dtype_int(dtype_o)
+    var shape = IndexList[MAX_RANK](1)
+    for i in range(MAX_RANK):
+        shape[i] = _raw_tuple_int(shape_t, i)
+
+    var supported = False
+    var itemsize = 0
+    comptime for dt in SPEC_FILL_DTYPES:
+        if dtype == dt:
+            supported = True
+            itemsize = size_of[dt]()
+    if not supported:
+        raise Error("mojo spec fill: unsupported dtype ", dtype)
+    # bool fill must store exactly 0/1.
+    if dtype == DType.bool:
+        value = Float64(1) if value != 0 else Float64(0)
+
+    var ctx = _raw_ctx(ctx_o)
+    var nbytes = numel * itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if numel > 0:
+        comptime for dt in SPEC_FILL_DTYPES:
+            if dtype == dt:
+                _fill[dt](_make_ptr[dt](addr), value, numel, ctx)
+    return _spec_result(
+        buf^, addr, nbytes, rank, shape, dtype, itemsize, numel, _raw_int(ctx_o)
+    )
+
+
+def _fill_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _fill_spec_go(
+            args[0], args[1], args[2], args[3], args[4], args[5]
+        )
+    except e:
+        return _spec_unsupported(e)
+
 
 
 # ---------------------------------------------------------------------------
@@ -1294,6 +1395,11 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
             _int_scalar_spec_dispatcher[IOP_MUL],
             "MulScalarIntSpec",
             docstring="(a_spec, scalar) -> (holder, spec, shape, ptr); int",
+        )
+        b.def_py_c_function(
+            _fill_spec_dispatcher,
+            "FillSpec",
+            docstring="(shape8, rank, numel, value, dtype, ctx) -> result group",
         )
         b.def_py_c_function(
             _bin_dispatcher[OP_ADD],
