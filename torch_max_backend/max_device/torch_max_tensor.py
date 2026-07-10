@@ -295,6 +295,13 @@ def _rebind_payload(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     dst._itemsize = src._itemsize
     dst._numel = src._numel
     dst._is_contiguous = src._is_contiguous
+    # The cached Mojo TensorSpec describes the OLD payload; rebinding is the
+    # one sanctioned metadata mutation, so swap (or drop) the spec here too.
+    spec = src.__dict__.get("_spec")
+    if spec is not None:
+        dst._spec = spec
+    else:
+        dst.__dict__.pop("_spec", None)
 
 
 @no_type_check

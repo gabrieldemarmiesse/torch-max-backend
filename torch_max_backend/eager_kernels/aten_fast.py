@@ -132,6 +132,75 @@ _alloc = TorchMojoTensor._alloc
 _view_of = TorchMojoTensor._view_of
 
 
+# ---------------------------------------------------------------------------
+# TensorSpec proof of concept (see tensor_holder.mojo). A spec is the
+# Mojo-side descriptor of a tensor's layout; spec ops do checks, broadcast,
+# output alloc and kernel launch in one boundary call and raise a real
+# NotImplementedError when the inputs don't qualify — the callers below
+# treat any exception as "take the classic path".
+# ---------------------------------------------------------------------------
+
+
+@no_type_check
+def _spec_of(t):
+    """t's cached Mojo TensorSpec, built on first use."""
+    spec = t.__dict__.get("_spec")
+    if spec is None:
+        spec = eager_kernels.tensor_holder.make_spec(
+            t._ptr,
+            len(t._shape),
+            _pad8(t._shape, 1),
+            _pad8(t._strides, 0),
+            t._offset,
+            t._dtype.value,
+            t._itemsize,
+            t._numel,
+            1 if t._is_contiguous else 0,
+            _ctx_ptr(t._device),
+        )
+        t._spec = spec
+    return spec
+
+
+@no_type_check
+def _wrap_spec_result(result, dtype, device):
+    """Mint the torch wrapper for a spec op's (holder, spec, shape, ptr)."""
+    holder, spec, shape, ptr = result
+    out = TorchMojoTensor._make(
+        holder, ptr, shape, _row_major_strides(shape), 0, dtype, device, contiguous=True
+    )
+    out._spec = spec
+    return out
+
+
+@no_type_check
+def _try_spec_binary(spec_fn_name, lhs, rhs):
+    """Tensor-tensor broadcast binary through a spec op, or None."""
+    a = _t(lhs)
+    b = _t(rhs)
+    if a is None or b is None or a._dtype != b._dtype or a._device != b._device:
+        return None
+    try:
+        result = getattr(eager_kernels.tensor_holder, spec_fn_name)(
+            _spec_of(a), _spec_of(b)
+        )
+    except Exception:
+        return None
+    return _wrap_spec_result(result, a._dtype, a._device)
+
+
+@no_type_check
+def _try_spec_relu(x):
+    a = _t(x)
+    if a is None:
+        return None
+    try:
+        result = eager_kernels.tensor_holder.ReluSpec(_spec_of(a))
+    except Exception:
+        return None
+    return _wrap_spec_result(result, a._dtype, a._device)
+
+
 @no_type_check
 def _on_gpu(t: TorchMojoTensor) -> bool:
     return t._device.label == "gpu"
@@ -483,7 +552,9 @@ def fast_aten_add(input, other, alpha=1):
         other = _scaled_operand(other, alpha)
         if other is None:
             return NOT_HANDLED
-    result = _try_binary(eager_kernels.elementwise_ops.Add, input, other)
+    result = _try_spec_binary("AddSpec", input, other)
+    if result is None:
+        result = _try_binary(eager_kernels.elementwise_ops.Add, input, other)
     if result is None:
         result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, other)
     if result is None:
@@ -567,7 +638,9 @@ def fast_aten_sub(input, other, alpha=1):
 
 @no_type_check
 def fast_aten_mul(input, other):
-    result = _try_binary(eager_kernels.elementwise_ops.Mul, input, other)
+    result = _try_spec_binary("MulSpec", input, other)
+    if result is None:
+        result = _try_binary(eager_kernels.elementwise_ops.Mul, input, other)
     if result is None:
         result = _try_bool_and(input, other)
     if result is None:
@@ -679,7 +752,9 @@ def fast_aten_minimum(x, y):
 
 @no_type_check
 def fast_aten_relu(tensor):
-    result = _try_unary(eager_kernels.elementwise_ops.Relu, tensor)
+    result = _try_spec_relu(tensor)
+    if result is None:
+        result = _try_unary(eager_kernels.elementwise_ops.Relu, tensor)
     if result is not None:
         return result
     return NOT_HANDLED
@@ -1991,6 +2066,28 @@ def fast_aten_nonzero(input):
 
 @no_type_check
 def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, eps):
+    a = _t(input)
+    stats = [_t(x) for x in (running_mean, running_var, weight, bias)]
+    if a is not None and all(s is not None for s in stats):
+        try:
+            result = eager_kernels.tensor_holder.BatchNormSpec(
+                _spec_of(a),
+                _spec_of(stats[0]),
+                _spec_of(stats[1]),
+                _spec_of(stats[2]),
+                _spec_of(stats[3]),
+                float(eps),
+            )
+        except Exception:
+            pass
+        else:
+            out = _wrap_spec_result(result, a._dtype, a._device)
+            # Inference mode returns empty (0,) tensors for the saved stats.
+            return (
+                out,
+                _alloc((0,), a._dtype, a._device),
+                _alloc((0,), a._dtype, a._device),
+            )
     a = _tc(input)
     if a is None or a._dtype not in _FLOAT_DTYPES or len(a._shape) < 2:
         return NOT_HANDLED

@@ -20,6 +20,8 @@
 
 from std.os import abort
 from std.gpu.host import DeviceContext, DeviceBuffer
+from std.math import sqrt
+from std.memory import OpaquePointer
 from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
@@ -32,6 +34,7 @@ from std.utils import IndexList
 from op_utils import (
     _make_ptr,
     _raw_ctx,
+    _raw_dtype_int,
     _raw_f64,
     _raw_int,
     _raw_ret_none,
@@ -453,6 +456,600 @@ def _strided_fill_dispatcher(
     return _raw_ret_none()
 
 
+# ===========================================================================
+# TensorSpec proof of concept: a Mojo-side descriptor of one tensor's layout
+# (pointer, rank-8 leading-padded shape/strides, dtype, device ctx). Held by
+# the Python `TorchMojoTensor` (built lazily on first use, attached eagerly
+# to spec-op outputs); spec-taking ops read it with one unchecked downcast
+# instead of unpacking per-field Python arguments.
+#
+# Spec ops do the full op prologue here: input checks, broadcast layout,
+# output allocation, kernel launch — one boundary call, returning
+# (holder, out_spec, shape_tuple, data_ptr). Errors are REAL: a failed check
+# raises NotImplementedError into Python (no swallowed exceptions); the
+# Python callers treat that as "take the classic path".
+# ===========================================================================
+
+
+def _spec_unsupported(e: Error) -> PyObjectPtr:
+    """Translate a Mojo Error into a real Python NotImplementedError: set the
+    CPython error indicator and return null so the dispatcher signals failure
+    (nothing is swallowed on the spec paths)."""
+    ref cpy = Python().cpython()
+    var msg = String(e)
+    cpy.PyErr_SetString(
+        cpy.get_error_global("PyExc_NotImplementedError"),
+        msg.as_c_string_slice().unsafe_ptr().as_unsafe_any_origin(),
+    )
+    return PyObjectPtr()
+
+
+struct TensorSpec(Movable, Writable):
+    """Layout descriptor for one mojo eager tensor. Effectively immutable:
+    Python swaps which spec a tensor points to (rebind) rather than mutating
+    one in place."""
+
+    var ptr: Int  # data pointer, storage offset already applied
+    var rank: Int
+    var shape: IndexList[MAX_RANK]  # leading-padded with 1s
+    var strides: IndexList[MAX_RANK]  # element strides, leading-padded with 0s
+    var offset: Int  # storage offset in elements (informational)
+    var dtype: DType
+    var itemsize: Int
+    var numel: Int
+    var contig: Bool
+    var ctx_ptr: Int  # DeviceContext address of the tensor's device
+
+    def __init__(
+        out self,
+        ptr: Int,
+        rank: Int,
+        shape: IndexList[MAX_RANK],
+        strides: IndexList[MAX_RANK],
+        offset: Int,
+        dtype: DType,
+        itemsize: Int,
+        numel: Int,
+        contig: Bool,
+        ctx_ptr: Int,
+    ):
+        self.ptr = ptr
+        self.rank = rank
+        self.shape = shape
+        self.strides = strides
+        self.offset = offset
+        self.dtype = dtype
+        self.itemsize = itemsize
+        self.numel = numel
+        self.contig = contig
+        self.ctx_ptr = ctx_ptr
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write(
+            "TensorSpec(ptr=",
+            self.ptr,
+            ", rank=",
+            self.rank,
+            ", numel=",
+            self.numel,
+            ", dtype=",
+            self.dtype,
+            ")",
+        )
+
+    @always_inline
+    def dim(self, i: Int) -> Int:
+        """Logical dim i (hides the leading-pad convention)."""
+        return self.shape[MAX_RANK - self.rank + i]
+
+    @always_inline
+    def ctx(self) -> DeviceContext:
+        return DeviceContext(
+            OpaquePointer[MutUntrackedOrigin](unsafe_from_address=self.ctx_ptr)
+        )
+
+
+@always_inline
+def _row_major8(shape: IndexList[MAX_RANK], rank: Int) -> IndexList[MAX_RANK]:
+    """Row-major element strides over the trailing `rank` slots (leading 0s)."""
+    var strides = IndexList[MAX_RANK](0)
+    var acc = 1
+    for k in range(rank):
+        var i = MAX_RANK - 1 - k
+        strides[i] = acc
+        acc *= shape[i]
+    return strides
+
+
+def _make_spec_go(
+    ptr_o: PyObjectPtr,
+    rank_o: PyObjectPtr,
+    shape_t: PyObjectPtr,
+    strides_t: PyObjectPtr,
+    offset_o: PyObjectPtr,
+    dtype_o: PyObjectPtr,
+    itemsize_o: PyObjectPtr,
+    numel_o: PyObjectPtr,
+    contig_o: PyObjectPtr,
+    ctx_o: PyObjectPtr,
+) raises -> PyObjectPtr:
+    var shape = IndexList[MAX_RANK](1)
+    var strides = IndexList[MAX_RANK](0)
+    for i in range(MAX_RANK):
+        shape[i] = _raw_tuple_int(shape_t, i)
+        strides[i] = _raw_tuple_int(strides_t, i)
+    var obj = PythonObject(
+        alloc=TensorSpec(
+            ptr=_raw_int(ptr_o),
+            rank=_raw_int(rank_o),
+            shape=shape,
+            strides=strides,
+            offset=_raw_int(offset_o),
+            dtype=_raw_dtype_int(dtype_o),
+            itemsize=_raw_int(itemsize_o),
+            numel=_raw_int(numel_o),
+            contig=_raw_int(contig_o) != 0,
+            ctx_ptr=_raw_int(ctx_o),
+        )
+    )
+    return obj^.steal_data()
+
+
+def _make_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _make_spec_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+            args[8],
+            args[9],
+        )
+    except e:
+        return _spec_unsupported(e)
+
+
+@always_inline
+def _spec_result(
+    var buf: DeviceBuffer[DType.uint8],
+    addr: Int,
+    nbytes: Int,
+    rank: Int,
+    shape: IndexList[MAX_RANK],
+    dtype: DType,
+    itemsize: Int,
+    numel: Int,
+    ctx_ptr: Int,
+) raises -> PyObjectPtr:
+    """(holder, out_spec, shape_tuple, data_ptr) for a fresh contiguous
+    output — everything Python needs to mint the torch wrapper."""
+    var spec_obj = PythonObject(
+        alloc=TensorSpec(
+            ptr=addr,
+            rank=rank,
+            shape=shape,
+            strides=_row_major8(shape, rank),
+            offset=0,
+            dtype=dtype,
+            itemsize=itemsize,
+            numel=numel,
+            contig=True,
+            ctx_ptr=ctx_ptr,
+        )
+    )
+    var holder_obj = PythonObject(alloc=TensorHolder(buf=buf^, nbytes=nbytes))
+    ref cpy = Python().cpython()
+    var shape_tuple = cpy.PyTuple_New(rank)
+    for i in range(rank):
+        _ = cpy.PyTuple_SetItem(
+            shape_tuple, i, cpy.PyLong_FromSsize_t(shape[MAX_RANK - rank + i])
+        )
+    var result = Python.tuple(
+        holder_obj^,
+        spec_obj^,
+        PythonObject(from_owned=shape_tuple),
+        PythonObject(addr),
+    )
+    return result^.steal_data()
+
+
+# ---------------------------------------------------------------------------
+# Binary broadcast spec ops (add / mul). One entry replaces the Python-side
+# same-shape gate, `_bcast_meta`, output alloc and kernel launch: broadcast
+# degenerates to same-shape naturally, and leading-padded rank-8 layouts
+# align at the trailing edge with no rank bookkeeping at all.
+# ---------------------------------------------------------------------------
+
+comptime SOP_ADD = 0
+comptime SOP_MUL = 1
+
+comptime SPEC_BIN_DTYPES = [
+    DType.float32,
+    DType.float16,
+    DType.bfloat16,
+    DType.int8,
+    DType.int16,
+    DType.int32,
+    DType.int64,
+    DType.uint8,
+]
+
+
+@always_inline
+def _bin_bcast_spec[
+    dtype: DType, op_code: Int
+](
+    out_addr: Int,
+    l_addr: Int,
+    r_addr: Int,
+    d1: Int,
+    d2: Int,
+    d3: Int,
+    ls0: Int,
+    ls1: Int,
+    ls2: Int,
+    ls3: Int,
+    rs0: Int,
+    rs1: Int,
+    rs2: Int,
+    rs3: Int,
+    total: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var l_ptr = _make_ptr[dtype](l_addr)
+    var r_ptr = _make_ptr[dtype](r_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, l_ptr, r_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var i3 = i % d3
+        var rest = i // d3
+        var i2 = rest % d2
+        rest = rest // d2
+        var i1 = rest % d1
+        var i0 = rest // d1
+        var a = l_ptr[i0 * ls0 + i1 * ls1 + i2 * ls2 + i3 * ls3]
+        var b = r_ptr[i0 * rs0 + i1 * rs1 + i2 * rs2 + i3 * rs3]
+        comptime if op_code == SOP_ADD:
+            out_ptr[i] = a + b
+        comptime if op_code == SOP_MUL:
+            out_ptr[i] = a * b
+
+    _parallel_for[func](total, ctx)
+
+
+def _binary_spec_go[
+    op_code: Int
+](a_o: PyObjectPtr, b_o: PyObjectPtr) raises -> PyObjectPtr:
+    var a_obj = PythonObject(from_borrowed=a_o)
+    var b_obj = PythonObject(from_borrowed=b_o)
+    ref a = a_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    ref b = b_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+
+    if a.dtype != b.dtype:
+        raise Error("mojo spec binary: operand dtypes differ")
+    if a.ctx_ptr != b.ctx_ptr:
+        raise Error("mojo spec binary: operands on different devices")
+    if a.rank > 4 or b.rank > 4:
+        raise Error("mojo spec binary: rank > 4")
+    var supported = False
+    comptime for dt in SPEC_BIN_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec binary: unsupported dtype ", a.dtype)
+
+    # Broadcast over the trailing 4 slots; leading padding aligns ranks.
+    var d = IndexList[4](1)
+    var ls = IndexList[4](0)
+    var rs = IndexList[4](0)
+    for k in range(4):
+        var i = MAX_RANK - 4 + k
+        var sa = a.shape[i]
+        var sb = b.shape[i]
+        var s: Int
+        if sa == sb:
+            s = sa
+        elif sa == 1:
+            s = sb
+        elif sb == 1:
+            s = sa
+        else:
+            raise Error("mojo spec binary: shapes do not broadcast")
+        d[k] = s
+        ls[k] = a.strides[i] if sa != 1 else 0
+        rs[k] = b.strides[i] if sb != 1 else 0
+
+    var out_rank = max(a.rank, b.rank)
+    var numel = d[0] * d[1] * d[2] * d[3]
+    var nbytes = numel * a.itemsize
+    var ctx = a.ctx()
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+
+    if numel > 0:
+        comptime for dt in SPEC_BIN_DTYPES:
+            if a.dtype == dt:
+                _bin_bcast_spec[dt, op_code](
+                    addr,
+                    a.ptr,
+                    b.ptr,
+                    d[1],
+                    d[2],
+                    d[3],
+                    ls[0],
+                    ls[1],
+                    ls[2],
+                    ls[3],
+                    rs[0],
+                    rs[1],
+                    rs[2],
+                    rs[3],
+                    numel,
+                    ctx,
+                )
+
+    var oshape = IndexList[MAX_RANK](1)
+    for k in range(4):
+        oshape[MAX_RANK - 4 + k] = d[k]
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        out_rank,
+        oshape,
+        a.dtype,
+        a.itemsize,
+        numel,
+        a.ctx_ptr,
+    )
+
+
+def _add_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _binary_spec_go[SOP_ADD](args[0], args[1])
+    except e:
+        return _spec_unsupported(e)
+
+
+def _mul_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _binary_spec_go[SOP_MUL](args[0], args[1])
+    except e:
+        return _spec_unsupported(e)
+
+
+# ---------------------------------------------------------------------------
+# Relu spec op: contiguous unary, checks + alloc + launch in one call.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _relu_contig[
+    dtype: DType
+](out_addr: Int, in_addr: Int, total: Int, ctx: DeviceContext) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var a = in_ptr.load[width=width](i)
+        out_ptr.store[width=width](i, max(a, SIMD[dtype, width](0)))
+
+    _parallel_for[func](total, ctx)
+
+
+def _relu_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
+    var a_obj = PythonObject(from_borrowed=a_o)
+    ref a = a_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+
+    if not a.contig:
+        raise Error("mojo spec relu: input not contiguous")
+    var supported = False
+    comptime for dt in SPEC_BIN_DTYPES:
+        if a.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec relu: unsupported dtype ", a.dtype)
+
+    var ctx = a.ctx()
+    var nbytes = a.numel * a.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if a.numel > 0:
+        comptime for dt in SPEC_BIN_DTYPES:
+            if a.dtype == dt:
+                _relu_contig[dt](addr, a.ptr, a.numel, ctx)
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        a.shape,
+        a.dtype,
+        a.itemsize,
+        a.numel,
+        a.ctx_ptr,
+    )
+
+
+def _relu_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _relu_spec_go(args[0])
+    except e:
+        return _spec_unsupported(e)
+
+
+# ---------------------------------------------------------------------------
+# Batch norm (inference) spec op: geometry (channels/inner) derived from the
+# input spec instead of being computed in Python and smuggled in a tuple.
+# ---------------------------------------------------------------------------
+
+comptime SPEC_FLOAT_DTYPES = [DType.float32, DType.float16, DType.bfloat16]
+
+
+@always_inline
+def _batch_norm_spec_kernel[
+    dtype: DType
+](
+    out_addr: Int,
+    in_addr: Int,
+    mean_addr: Int,
+    var_addr: Int,
+    gamma_addr: Int,
+    beta_addr: Int,
+    eps: Float32,
+    channels: Int,
+    inner: Int,
+    total: Int,
+    ctx: DeviceContext,
+) raises:
+    var out_ptr = _make_ptr[dtype](out_addr)
+    var in_ptr = _make_ptr[dtype](in_addr)
+    var mean_ptr = _make_ptr[dtype](mean_addr)
+    var var_ptr = _make_ptr[dtype](var_addr)
+    var gamma_ptr = _make_ptr[dtype](gamma_addr)
+    var beta_ptr = _make_ptr[dtype](beta_addr)
+
+    @always_inline
+    @parameter
+    @__copy_capture(out_ptr, in_ptr, mean_ptr, var_ptr, gamma_ptr, beta_ptr)
+    def func[width: Int, alignment: Int = 1](idx: Coord):
+        var i = Int(idx[0].value())
+        var c = (i // inner) % channels
+        var m = mean_ptr[c].cast[DType.float32]()
+        var v = var_ptr[c].cast[DType.float32]()
+        var g = gamma_ptr[c].cast[DType.float32]()
+        var b = beta_ptr[c].cast[DType.float32]()
+        var scale = g / sqrt(v + eps)
+        var a = in_ptr[i].cast[DType.float32]()
+        out_ptr[i] = ((a - m) * scale + b).cast[dtype]()
+
+    _parallel_for[func](total, ctx)
+
+
+def _batch_norm_spec_go(
+    in_o: PyObjectPtr,
+    mean_o: PyObjectPtr,
+    var_o: PyObjectPtr,
+    gamma_o: PyObjectPtr,
+    beta_o: PyObjectPtr,
+    eps_o: PyObjectPtr,
+) raises -> PyObjectPtr:
+    var in_obj = PythonObject(from_borrowed=in_o)
+    var mean_obj = PythonObject(from_borrowed=mean_o)
+    var var_obj = PythonObject(from_borrowed=var_o)
+    var gamma_obj = PythonObject(from_borrowed=gamma_o)
+    var beta_obj = PythonObject(from_borrowed=beta_o)
+    ref inp = in_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    ref meanp = mean_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    ref varp = var_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    ref gammap = gamma_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    ref betap = beta_obj.unchecked_downcast_value_ptr[TensorSpec]()[]
+    var eps = Float32(_raw_f64(eps_o))
+
+    if inp.rank < 2:
+        raise Error("mojo spec batch_norm: input rank must be >= 2")
+    if inp.numel == 0:
+        raise Error("mojo spec batch_norm: empty input")
+    if not (
+        inp.contig
+        and meanp.contig
+        and varp.contig
+        and gammap.contig
+        and betap.contig
+    ):
+        raise Error("mojo spec batch_norm: all inputs must be contiguous")
+    if (
+        meanp.dtype != inp.dtype
+        or varp.dtype != inp.dtype
+        or gammap.dtype != inp.dtype
+        or betap.dtype != inp.dtype
+    ):
+        raise Error("mojo spec batch_norm: stat/affine dtypes must match input")
+    var supported = False
+    comptime for dt in SPEC_FLOAT_DTYPES:
+        if inp.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec batch_norm: unsupported dtype ", inp.dtype)
+
+    var channels = inp.dim(1)
+    var inner = 1
+    for i in range(MAX_RANK - inp.rank + 2, MAX_RANK):
+        inner *= inp.shape[i]
+
+    var ctx = inp.ctx()
+    var nbytes = inp.numel * inp.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    comptime for dt in SPEC_FLOAT_DTYPES:
+        if inp.dtype == dt:
+            _batch_norm_spec_kernel[dt](
+                addr,
+                inp.ptr,
+                meanp.ptr,
+                varp.ptr,
+                gammap.ptr,
+                betap.ptr,
+                eps,
+                channels,
+                inner,
+                inp.numel,
+                ctx,
+            )
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        inp.rank,
+        inp.shape,
+        inp.dtype,
+        inp.itemsize,
+        inp.numel,
+        inp.ctx_ptr,
+    )
+
+
+def _batch_norm_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _batch_norm_spec_go(
+            args[0], args[1], args[2], args[3], args[4], args[5]
+        )
+    except e:
+        return _spec_unsupported(e)
+
+
 # ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
@@ -466,6 +1063,47 @@ def PyInit_tensor_holder() abi("C") -> PythonObject:
             m.add_type[TensorHolder]("TensorHolder")
             .def_method[TensorHolder.data_ptr]("data_ptr")
             .def_method[TensorHolder.get_nbytes]("get_nbytes")
+        )
+        _ = m.add_type[TensorSpec]("TensorSpec")
+        m.def_py_c_function(
+            _make_spec_dispatcher,
+            "make_spec",
+            docstring=(
+                "(ptr, rank, shape8, strides8, offset, dtype, itemsize,"
+                " numel, contig, ctx_ptr) -> TensorSpec"
+            ),
+        )
+        m.def_py_c_function(
+            _add_spec_dispatcher,
+            "AddSpec",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); broadcast"
+                " add with checks/alloc/launch in Mojo"
+            ),
+        )
+        m.def_py_c_function(
+            _mul_spec_dispatcher,
+            "MulSpec",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); broadcast"
+                " mul with checks/alloc/launch in Mojo"
+            ),
+        )
+        m.def_py_c_function(
+            _relu_spec_dispatcher,
+            "ReluSpec",
+            docstring=(
+                "(a_spec) -> (holder, spec, shape, ptr); contiguous relu"
+                " with checks/alloc/launch in Mojo"
+            ),
+        )
+        m.def_py_c_function(
+            _batch_norm_spec_dispatcher,
+            "BatchNormSpec",
+            docstring=(
+                "(in, mean, var, gamma, beta specs, eps) -> (holder, spec,"
+                " shape, ptr); inference batch norm, geometry from specs"
+            ),
         )
         m.def_function[alloc]("alloc")
         m.def_function[alloc_from_host]("alloc_from_host")
