@@ -126,6 +126,19 @@ matches the classic gates (tests pass with the fallback deleted), the
 fallback for that family may be removed in a dedicated commit — one family
 at a time, never as part of the conversion commit itself.
 
+**Status: the fallback deletion is done** (commits 151b28d..b9a164f). The
+unary (incl. float64 on CPU), scalar, cast/fill, binary (scalar operands,
+promotion, bool-mul, rank>4 flat, f64 via `_parallel_for_dt`), reduction
+(Mojo-side permute+materialize through `_scratch_copy`) and matmul
+(operand temporaries) families are spec-only; their classic kernels and
+Python chains are deleted. Classic entries that remain, deliberately:
+`Add` (the in-place `add_` fast path writes into an existing buffer),
+`SoftmaxRows`/`Bmm`/`Matmul`/`MatmulBias` (the SDPA chain and convolution
+drive them with offsets/shared-A modes), `BatchNormInference` (fallback
+for strided stats), `CopyStrided`/`StridedFill`/`Arange`, and the
+unconverted ternary family (where/masked_fill/addcmul/addcdiv/clamp/isin
+plus `AnyBool`/`AllBool`, `_bcast_meta`/`_launch_bcast`).
+
 ## 3. Module layout: where spec ops live
 
 The Mojo type registry (`MOJO_PYTHON_TYPE_OBJECTS`) is a **process-wide**
