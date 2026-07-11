@@ -57,6 +57,8 @@ from op_utils import (
     _raw_int,
     _raw_ret_none,
     _reduce_spec_geom,
+    _scratch_contig,
+    _scratch_copy,
     _spec_ptr,
     _spec_result,
     _spec_result2,
@@ -260,46 +262,6 @@ def _reduce_rows[
 
 
 @always_inline
-def _reduce_rows_go[
-    op_code: Int
-](
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var out_addr = _raw_int(out_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var ctx = _raw_ctx(device_context_ptr)
-
-    # The stdlib GPU reduction warp-shuffles the accumulator, which supports
-    # float32/float16/bfloat16/int32/int64 but not sub-32-bit ints. aten only
-    # ever routes sum/amax/amin/min here with these dtypes: bool/uint8 sums are
-    # promoted to int64 upstream in fast_aten_sum (they are in _CAST_DTYPES),
-    # while int8/int16 return NOT_HANDLED there and never reach this kernel. So
-    # the narrower list loses no reachable coverage.
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.int64,
-        DType.int32,
-    ]:
-        if dtype == dt:
-            _reduce_rows[dt, op_code](
-                out_addr, in_addr, rows_val, cols_val, ctx
-            )
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast reduce: " + String(dtype))
-
-
 # ---------------------------------------------------------------------------
 # Row-wise argmin: input viewed as (rows, cols), out is `rows` int64 indices
 # (first occurrence wins, matching torch). Mirror of nn_ops' ArgmaxRows with
@@ -404,36 +366,6 @@ def _argmin_rows[
             )
         else:
             raise Error("no GPU accelerator available at compile time")
-
-
-def _argmin_rows_go(
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var out_addr = _raw_int(out_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var ctx = _raw_ctx(device_context_ptr)
-
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.int64,
-        DType.int32,
-    ]:
-        if dtype == dt:
-            _argmin_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast argmin: " + String(dtype))
 
 
 # ---------------------------------------------------------------------------
@@ -556,63 +488,6 @@ def _minmax_idx_rows[
 
 
 @always_inline
-def _minmax_idx_dispatch[
-    is_min: Bool
-](
-    dtype: DType,
-    val_addr: Int,
-    idx_addr: Int,
-    in_addr: Int,
-    rows: Int,
-    cols: Int,
-    ctx: DeviceContext,
-) raises:
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.int64,
-        DType.int32,
-    ]:
-        if dtype == dt:
-            _minmax_idx_rows[dt, is_min](
-                val_addr, idx_addr, in_addr, rows, cols, ctx
-            )
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast min/max.dim: " + String(dtype))
-
-
-def _minmax_idx_rows_go(
-    val_ptr_obj: PyObjectPtr,
-    idx_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    is_min: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var val_addr = _raw_int(val_ptr_obj)
-    var idx_addr = _raw_int(idx_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var is_min_val = _raw_int(is_min)
-    var ctx = _raw_ctx(device_context_ptr)
-
-    if is_min_val != 0:
-        _minmax_idx_dispatch[True](
-            dtype, val_addr, idx_addr, in_addr, rows_val, cols_val, ctx
-        )
-    else:
-        _minmax_idx_dispatch[False](
-            dtype, val_addr, idx_addr, in_addr, rows_val, cols_val, ctx
-        )
-
-
 # ---------------------------------------------------------------------------
 # Row-wise variance (two-pass mean then squared deviations, float32 accum),
 # divided by (cols - correction). Covers aten.var.correction.
@@ -723,34 +598,6 @@ def _var_rows[
             )
         else:
             raise Error("no GPU accelerator available at compile time")
-
-
-def _var_rows_go(
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    correction: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var out_addr = _raw_int(out_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var correction_val = Float32(_raw_f64(correction))
-    var ctx = _raw_ctx(device_context_ptr)
-
-    var handled = False
-    comptime for dt in [DType.float32, DType.float16, DType.bfloat16]:
-        if dtype == dt:
-            _var_rows[dt](
-                out_addr, in_addr, rows_val, cols_val, correction_val, ctx
-            )
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast var: " + String(dtype))
 
 
 # ---------------------------------------------------------------------------
@@ -865,30 +712,6 @@ def _log_softmax_rows[
             )
         else:
             raise Error("no GPU accelerator available at compile time")
-
-
-def _log_softmax_rows_go(
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var out_addr = _raw_int(out_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var ctx = _raw_ctx(device_context_ptr)
-
-    var handled = False
-    comptime for dt in [DType.float32, DType.float16, DType.bfloat16]:
-        if dtype == dt:
-            _log_softmax_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast log_softmax: " + String(dtype))
 
 
 # ---------------------------------------------------------------------------
@@ -1048,126 +871,6 @@ def _anyall_rows_dispatch[
         raise Error("unsupported dtype for fast any/all: " + String(dtype))
 
 
-def _anyall_rows_go[
-    is_all: Bool
-](
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    _anyall_rows_dispatch[is_all](
-        _raw_dtype_int(dtype_obj),
-        _raw_int(out_ptr_obj),
-        _raw_int(in_ptr_obj),
-        _raw_int(rows),
-        _raw_int(cols),
-        _raw_ctx(device_context_ptr),
-    )
-
-
-# ---------------------------------------------------------------------------
-# METH_FASTCALL wrappers: raw CPython argument unpacking (no owning
-# PythonObject per argument). Argument types are guaranteed by the internal
-# Python callers; raise sites are unsupported-dtype guards gated upstream.
-# ---------------------------------------------------------------------------
-
-
-def _reduce_dispatcher[
-    op_code: Int
-](
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _reduce_rows_go[op_code](
-            args[0], args[1], args[2], args[3], args[4], args[5]
-        )
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _argmin_rows_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _argmin_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _minmax_idx_rows_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _minmax_idx_rows_go(
-            args[0],
-            args[1],
-            args[2],
-            args[3],
-            args[4],
-            args[5],
-            args[6],
-            args[7],
-        )
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _var_rows_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _var_rows_go(
-            args[0], args[1], args[2], args[3], args[4], args[5], args[6]
-        )
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _log_softmax_rows_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _log_softmax_rows_go(
-            args[0], args[1], args[2], args[3], args[4], args[5]
-        )
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _anyall_rows_dispatcher[
-    is_all: Bool
-](
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _anyall_rows_go[is_all](
-            args[0], args[1], args[2], args[3], args[4], args[5]
-        )
-    except:
-        pass
-    return _raw_ret_none()
-
-
 # ---------------------------------------------------------------------------
 # TensorSpec entries (docs/tensor_spec_design.md): trailing-dims reductions
 # over a contiguous input — dim checks, rows/cols/keepdim geometry, output
@@ -1218,16 +921,34 @@ def _rowred_spec_go[
     var cols = 0
     var out_rank = 0
     var oshape = IndexList[MAX_RANK](1)
-    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    var pshape = IndexList[MAX_RANK](1)
+    var pstrides = IndexList[MAX_RANK](0)
+    var needs_copy = False
+    _reduce_spec_geom(
+        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
+        pstrides, needs_copy,
+    )
 
     var ctx = a.ctx()
     var nbytes = rows * a.itemsize
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if rows > 0:
-        comptime for dt in SPEC_ROWRED_DTYPES:
-            if a.dtype == dt:
-                _reduce_rows[dt, op_code](addr, a.ptr, rows, cols, ctx)
+        if needs_copy:
+            # Mojo-side temporary: materialize the permuted layout the
+            # classic path used to build with Python permute+_tc.
+            var tmp = _scratch_copy(
+                a.ptr, pshape, pstrides, a.rank, a.numel, a.itemsize, ctx
+            )
+            var in_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in SPEC_ROWRED_DTYPES:
+                if a.dtype == dt:
+                    _reduce_rows[dt, op_code](addr, in_addr, rows, cols, ctx)
+            _ = tmp^
+        else:
+            comptime for dt in SPEC_ROWRED_DTYPES:
+                if a.dtype == dt:
+                    _reduce_rows[dt, op_code](addr, a.ptr, rows, cols, ctx)
     return _spec_result(
         buf^,
         addr,
@@ -1270,16 +991,34 @@ def _argmin_spec_go(
     var cols = 0
     var out_rank = 0
     var oshape = IndexList[MAX_RANK](1)
-    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    var pshape = IndexList[MAX_RANK](1)
+    var pstrides = IndexList[MAX_RANK](0)
+    var needs_copy = False
+    _reduce_spec_geom(
+        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
+        pstrides, needs_copy,
+    )
 
     var ctx = a.ctx()
     var nbytes = rows * 8  # int64 output
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if rows > 0:
-        comptime for dt in SPEC_ROWRED_DTYPES:
-            if a.dtype == dt:
-                _argmin_rows[dt](addr, a.ptr, rows, cols, ctx)
+        if needs_copy:
+            # Mojo-side temporary: materialize the permuted layout the
+            # classic path used to build with Python permute+_tc.
+            var tmp = _scratch_copy(
+                a.ptr, pshape, pstrides, a.rank, a.numel, a.itemsize, ctx
+            )
+            var in_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in SPEC_ROWRED_DTYPES:
+                if a.dtype == dt:
+                    _argmin_rows[dt](addr, in_addr, rows, cols, ctx)
+            _ = tmp^
+        else:
+            comptime for dt in SPEC_ROWRED_DTYPES:
+                if a.dtype == dt:
+                    _argmin_rows[dt](addr, a.ptr, rows, cols, ctx)
     return _spec_result(
         buf^, addr, nbytes, out_rank, oshape, DType.int64, 8, rows, a.ctx_ptr
     )
@@ -1314,7 +1053,13 @@ def _min_dim_spec_go(
     var cols = 0
     var out_rank = 0
     var oshape = IndexList[MAX_RANK](1)
-    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    var pshape = IndexList[MAX_RANK](1)
+    var pstrides = IndexList[MAX_RANK](0)
+    var needs_copy = False
+    _reduce_spec_geom(
+        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
+        pstrides, needs_copy,
+    )
 
     var ctx = a.ctx()
     var nbytes_v = rows * a.itemsize
@@ -1324,11 +1069,25 @@ def _min_dim_spec_go(
     var buf_i = ctx.enqueue_create_buffer[DType.uint8](max(nbytes_i, 1))
     var addr_i = Int(buf_i.unsafe_ptr())
     if rows > 0:
-        comptime for dt in SPEC_ROWRED_DTYPES:
-            if a.dtype == dt:
-                _minmax_idx_rows[dt, True](
-                    addr_v, addr_i, a.ptr, rows, cols, ctx
-                )
+        if needs_copy:
+            # Mojo-side temporary: materialize the permuted layout the
+            # classic path used to build with Python permute+_tc.
+            var tmp = _scratch_copy(
+                a.ptr, pshape, pstrides, a.rank, a.numel, a.itemsize, ctx
+            )
+            var in_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in SPEC_ROWRED_DTYPES:
+                if a.dtype == dt:
+                    _minmax_idx_rows[dt, True](
+                        addr_v, addr_i, in_addr, rows, cols, ctx
+                    )
+            _ = tmp^
+        else:
+            comptime for dt in SPEC_ROWRED_DTYPES:
+                if a.dtype == dt:
+                    _minmax_idx_rows[dt, True](
+                        addr_v, addr_i, a.ptr, rows, cols, ctx
+                    )
     return _spec_result2(
         buf_v^,
         addr_v,
@@ -1381,16 +1140,34 @@ def _var_spec_go(
     var cols = 0
     var out_rank = 0
     var oshape = IndexList[MAX_RANK](1)
-    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    var pshape = IndexList[MAX_RANK](1)
+    var pstrides = IndexList[MAX_RANK](0)
+    var needs_copy = False
+    _reduce_spec_geom(
+        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
+        pstrides, needs_copy,
+    )
 
     var ctx = a.ctx()
     var nbytes = rows * a.itemsize
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if rows > 0:
-        comptime for dt in FLOAT_DTYPES:
-            if a.dtype == dt:
-                _var_rows[dt](addr, a.ptr, rows, cols, correction, ctx)
+        if needs_copy:
+            # Mojo-side temporary: materialize the permuted layout the
+            # classic path used to build with Python permute+_tc.
+            var tmp = _scratch_copy(
+                a.ptr, pshape, pstrides, a.rank, a.numel, a.itemsize, ctx
+            )
+            var in_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in FLOAT_DTYPES:
+                if a.dtype == dt:
+                    _var_rows[dt](addr, in_addr, rows, cols, correction, ctx)
+            _ = tmp^
+        else:
+            comptime for dt in FLOAT_DTYPES:
+                if a.dtype == dt:
+                    _var_rows[dt](addr, a.ptr, rows, cols, correction, ctx)
     return _spec_result(
         buf^,
         addr,
@@ -1431,20 +1208,33 @@ def _anyall_spec_go[
     var cols = 0
     var out_rank = 0
     var oshape = IndexList[MAX_RANK](1)
-    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
-    if cols == 0 and rows > 0:
-        # Mirror the classic path (which folds this into rows == 0) rather
-        # than trusting the kernel's empty-row init on a new code path.
-        raise Error("mojo spec any/all: empty reduce dim")
-
+    var pshape = IndexList[MAX_RANK](1)
+    var pstrides = IndexList[MAX_RANK](0)
+    var needs_copy = False
+    _reduce_spec_geom(
+        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
+        pstrides, needs_copy,
+    )
     var ctx = a.ctx()
     var nbytes = rows  # bool output
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if rows > 0:
-        comptime for dt in SPEC_ANYALL_DTYPES:
-            if a.dtype == dt:
-                _anyall_rows[dt, is_all](addr, a.ptr, rows, cols, ctx)
+        if needs_copy:
+            # Mojo-side temporary: materialize the permuted layout the
+            # classic path used to build with Python permute+_tc.
+            var tmp = _scratch_copy(
+                a.ptr, pshape, pstrides, a.rank, a.numel, a.itemsize, ctx
+            )
+            var in_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in SPEC_ANYALL_DTYPES:
+                if a.dtype == dt:
+                    _anyall_rows[dt, is_all](addr, in_addr, rows, cols, ctx)
+            _ = tmp^
+        else:
+            comptime for dt in SPEC_ANYALL_DTYPES:
+                if a.dtype == dt:
+                    _anyall_rows[dt, is_all](addr, a.ptr, rows, cols, ctx)
     return _spec_result(
         buf^, addr, nbytes, out_rank, oshape, DType.bool, 1, rows, a.ctx_ptr
     )
@@ -1467,8 +1257,6 @@ def _log_softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
     """log_softmax over the trailing dim; full-shape output. The non-trailing
     dim transpose recursion stays in Python (view ops)."""
     ref a = _spec_ptr(a_o)[]
-    if not a.contig:
-        raise Error("mojo spec log_softmax: input not contiguous")
     var supported = False
     comptime for dt in FLOAT_DTYPES:
         if a.dtype == dt:
@@ -1484,9 +1272,18 @@ def _log_softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
     var nbytes = a.numel * a.itemsize
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
-    comptime for dt in FLOAT_DTYPES:
-        if a.dtype == dt:
-            _log_softmax_rows[dt](addr, a.ptr, rows, cols, ctx)
+    if a.contig:
+        comptime for dt in FLOAT_DTYPES:
+            if a.dtype == dt:
+                _log_softmax_rows[dt](addr, a.ptr, rows, cols, ctx)
+    else:
+        # Mojo-side temporary; see _unary_spec_go in elementwise_ops.
+        var tmp = _scratch_contig(a, ctx)
+        var tmp_addr = Int(tmp.unsafe_ptr())
+        comptime for dt in FLOAT_DTYPES:
+            if a.dtype == dt:
+                _log_softmax_rows[dt](addr, tmp_addr, rows, cols, ctx)
+        _ = tmp^
     return _spec_result(
         buf^,
         addr,
@@ -1566,68 +1363,6 @@ def PyInit_reduction_ops() abi("C") -> PythonObject:
             _log_softmax_spec_dispatcher,
             "LogSoftmaxSpec",
             docstring="(a_spec) -> (holder, spec, shape, ptr); trailing dim",
-        )
-        b.def_py_c_function(
-            _reduce_dispatcher[RED_SUM],
-            "SumRows",
-            docstring="sum over the last dim (rows, cols) -> (rows,)",
-        )
-        b.def_py_c_function(
-            _reduce_dispatcher[RED_MAX],
-            "MaxRowsR",
-            docstring="max over the last dim (rows, cols) -> (rows,)",
-        )
-        b.def_py_c_function(
-            _reduce_dispatcher[RED_MIN],
-            "MinRows",
-            docstring="min over the last dim (rows, cols) -> (rows,)",
-        )
-        b.def_py_c_function(
-            _reduce_dispatcher[RED_PROD],
-            "ProdRows",
-            docstring="prod over the last dim (rows, cols) -> (rows,)",
-        )
-        b.def_py_c_function(
-            _argmin_rows_dispatcher,
-            "ArgminRows",
-            docstring="argmin over the last dim (rows, cols) -> int64 (rows,)",
-        )
-        b.def_py_c_function(
-            _minmax_idx_rows_dispatcher,
-            "MinMaxIdxRows",
-            docstring=(
-                "min/max over the last dim with int64 indices (rows, cols) ->"
-                " values (rows,), indices (rows,); is_min flag picks direction"
-            ),
-        )
-        b.def_py_c_function(
-            _var_rows_dispatcher,
-            "VarRows",
-            docstring=(
-                "variance over the last dim (rows, cols) -> (rows,), divided by"
-                " (cols - correction), float32 accumulation"
-            ),
-        )
-        b.def_py_c_function(
-            _log_softmax_rows_dispatcher,
-            "LogSoftmaxRows",
-            docstring=(
-                "log-softmax over the last dim (rows, cols) -> (rows, cols)"
-            ),
-        )
-        b.def_py_c_function(
-            _anyall_rows_dispatcher[False],
-            "AnyRows",
-            docstring=(
-                "any (nonzero) over the last dim (rows, cols) -> bool (rows,)"
-            ),
-        )
-        b.def_py_c_function(
-            _anyall_rows_dispatcher[True],
-            "AllRows",
-            docstring=(
-                "all (nonzero) over the last dim (rows, cols) -> bool (rows,)"
-            ),
         )
         return b.finalize()
     except e:

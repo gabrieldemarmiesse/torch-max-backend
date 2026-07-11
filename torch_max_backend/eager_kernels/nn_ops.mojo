@@ -61,6 +61,8 @@ from op_utils import (
     _raw_tuple_int,
     _raw_tuple_len,
     _reduce_spec_geom,
+    _scratch_contig,
+    _scratch_copy,
     _spec_ptr,
     _spec_result,
     _spec_unsupported,
@@ -892,30 +894,6 @@ def _mean_rows[
             raise Error("no GPU accelerator available at compile time")
 
 
-def _mean_rows_go(
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var out_addr = _raw_int(out_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var ctx = _raw_ctx(device_context_ptr)
-
-    var handled = False
-    comptime for dt in FLOAT_DTYPES:
-        if dtype == dt:
-            _mean_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast mean: " + String(dtype))
-
-
 # ---------------------------------------------------------------------------
 # Max pool 2D over NCHW contiguous input, with indices (torch semantics:
 # index of the max within the flattened H*W input plane, int64).
@@ -1411,36 +1389,6 @@ def _argmax_rows[
             raise Error("no GPU accelerator available at compile time")
 
 
-def _argmax_rows_go(
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var out_addr = _raw_int(out_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var ctx = _raw_ctx(device_context_ptr)
-
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.int64,
-        DType.int32,
-    ]:
-        if dtype == dt:
-            _argmax_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast argmax: " + String(dtype))
-
-
 # ---------------------------------------------------------------------------
 # Row-wise max reduction (values only): input viewed as (rows, cols), out
 # has `rows` elements of the same dtype. rows=1 covers aten.max() (no dim).
@@ -1547,36 +1495,6 @@ def _max_rows[
             raise Error("no GPU accelerator available at compile time")
 
 
-def _max_rows_go(
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var out_addr = _raw_int(out_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var ctx = _raw_ctx(device_context_ptr)
-
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.int64,
-        DType.int32,
-    ]:
-        if dtype == dt:
-            _max_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast max: " + String(dtype))
-
-
 # ---------------------------------------------------------------------------
 # Row-wise cumulative sum along the last dim: input viewed as (rows, cols).
 # One sequential task per row — used on the small int tensors of the
@@ -1603,30 +1521,6 @@ def _cumsum_rows[
             out_ptr[base + j] = total
 
     _parallel_for[func](rows, ctx)
-
-
-def _cumsum_rows_go(
-    out_ptr_obj: PyObjectPtr,
-    in_ptr_obj: PyObjectPtr,
-    rows: PyObjectPtr,
-    cols: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    var dtype = _raw_dtype_int(dtype_obj)
-    var out_addr = _raw_int(out_ptr_obj)
-    var in_addr = _raw_int(in_ptr_obj)
-    var rows_val = _raw_int(rows)
-    var cols_val = _raw_int(cols)
-    var ctx = _raw_ctx(device_context_ptr)
-
-    var handled = False
-    comptime for dt in [DType.int64, DType.int32, DType.float32]:
-        if dtype == dt:
-            _cumsum_rows[dt](out_addr, in_addr, rows_val, cols_val, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast cumsum: " + String(dtype))
 
 
 # ---------------------------------------------------------------------------
@@ -2279,18 +2173,6 @@ def _attn_decode_dispatcher(
     return _raw_ret_none()
 
 
-def _mean_rows_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _mean_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
-    except:
-        pass
-    return _raw_ret_none()
-
-
 def _max_pool2d_dispatcher(
     py_self: PyObjectPtr,
     args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
@@ -2406,49 +2288,6 @@ def _any_bool_dispatcher(
     return _raw_ret_none()
 
 
-def _argmax_rows_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _argmax_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _max_rows_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _max_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _cumsum_rows_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _cumsum_rows_go(args[0], args[1], args[2], args[3], args[4], args[5])
-    except:
-        pass
-    return _raw_ret_none()
-
-
-# ---------------------------------------------------------------------------
-# TensorSpec entries (docs/tensor_spec_design.md) for the reduction-shaped
-# kernels that live in this module (mean / max / argmax / cumsum): trailing
-# dims, contiguous input, geometry + alloc + launch in one boundary call.
-# Failed checks raise a real NotImplementedError ("take the classic path").
-# ---------------------------------------------------------------------------
-
 comptime SPEC_MAXROWS_DTYPES = [
     DType.float32,
     DType.float16,
@@ -2472,7 +2311,13 @@ def _mean_spec_go(
     var cols = 0
     var out_rank = 0
     var oshape = IndexList[MAX_RANK](1)
-    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    var pshape = IndexList[MAX_RANK](1)
+    var pstrides = IndexList[MAX_RANK](0)
+    var needs_copy = False
+    _reduce_spec_geom(
+        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
+        pstrides, needs_copy,
+    )
     if cols == 0:
         raise Error("mojo spec mean: empty reduce dim")
 
@@ -2481,9 +2326,21 @@ def _mean_spec_go(
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if rows > 0:
-        comptime for dt in FLOAT_DTYPES:
-            if a.dtype == dt:
-                _mean_rows[dt](addr, a.ptr, rows, cols, ctx)
+        if needs_copy:
+            # Mojo-side temporary: materialize the permuted layout the
+            # classic path used to build with Python permute+_tc.
+            var tmp = _scratch_copy(
+                a.ptr, pshape, pstrides, a.rank, a.numel, a.itemsize, ctx
+            )
+            var in_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in FLOAT_DTYPES:
+                if a.dtype == dt:
+                    _mean_rows[dt](addr, in_addr, rows, cols, ctx)
+            _ = tmp^
+        else:
+            comptime for dt in FLOAT_DTYPES:
+                if a.dtype == dt:
+                    _mean_rows[dt](addr, a.ptr, rows, cols, ctx)
     return _spec_result(
         buf^,
         addr,
@@ -2524,16 +2381,34 @@ def _max_spec_go(
     var cols = 0
     var out_rank = 0
     var oshape = IndexList[MAX_RANK](1)
-    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    var pshape = IndexList[MAX_RANK](1)
+    var pstrides = IndexList[MAX_RANK](0)
+    var needs_copy = False
+    _reduce_spec_geom(
+        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
+        pstrides, needs_copy,
+    )
 
     var ctx = a.ctx()
     var nbytes = rows * a.itemsize
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if rows > 0:
-        comptime for dt in SPEC_MAXROWS_DTYPES:
-            if a.dtype == dt:
-                _max_rows[dt](addr, a.ptr, rows, cols, ctx)
+        if needs_copy:
+            # Mojo-side temporary: materialize the permuted layout the
+            # classic path used to build with Python permute+_tc.
+            var tmp = _scratch_copy(
+                a.ptr, pshape, pstrides, a.rank, a.numel, a.itemsize, ctx
+            )
+            var in_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in SPEC_MAXROWS_DTYPES:
+                if a.dtype == dt:
+                    _max_rows[dt](addr, in_addr, rows, cols, ctx)
+            _ = tmp^
+        else:
+            comptime for dt in SPEC_MAXROWS_DTYPES:
+                if a.dtype == dt:
+                    _max_rows[dt](addr, a.ptr, rows, cols, ctx)
     return _spec_result(
         buf^,
         addr,
@@ -2574,16 +2449,34 @@ def _argmax_spec_go(
     var cols = 0
     var out_rank = 0
     var oshape = IndexList[MAX_RANK](1)
-    _reduce_spec_geom(a, rdims_t, keepdim_o, rows, cols, out_rank, oshape)
+    var pshape = IndexList[MAX_RANK](1)
+    var pstrides = IndexList[MAX_RANK](0)
+    var needs_copy = False
+    _reduce_spec_geom(
+        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
+        pstrides, needs_copy,
+    )
 
     var ctx = a.ctx()
     var nbytes = rows * 8  # int64 output
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if rows > 0:
-        comptime for dt in SPEC_MAXROWS_DTYPES:
-            if a.dtype == dt:
-                _argmax_rows[dt](addr, a.ptr, rows, cols, ctx)
+        if needs_copy:
+            # Mojo-side temporary: materialize the permuted layout the
+            # classic path used to build with Python permute+_tc.
+            var tmp = _scratch_copy(
+                a.ptr, pshape, pstrides, a.rank, a.numel, a.itemsize, ctx
+            )
+            var in_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in SPEC_MAXROWS_DTYPES:
+                if a.dtype == dt:
+                    _argmax_rows[dt](addr, in_addr, rows, cols, ctx)
+            _ = tmp^
+        else:
+            comptime for dt in SPEC_MAXROWS_DTYPES:
+                if a.dtype == dt:
+                    _argmax_rows[dt](addr, a.ptr, rows, cols, ctx)
     return _spec_result(
         buf^, addr, nbytes, out_rank, oshape, DType.int64, 8, rows, a.ctx_ptr
     )
@@ -2603,8 +2496,6 @@ def _argmax_spec_dispatcher(
 def _cumsum_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
     """Cumulative sum over the trailing dim; full-shape output."""
     ref a = _spec_ptr(a_o)[]
-    if not a.contig:
-        raise Error("mojo spec cumsum: input not contiguous")
     var supported = False
     comptime for dt in [DType.int64, DType.int32, DType.float32]:
         if a.dtype == dt:
@@ -2620,9 +2511,18 @@ def _cumsum_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
     var nbytes = a.numel * a.itemsize
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
-    comptime for dt in [DType.int64, DType.int32, DType.float32]:
-        if a.dtype == dt:
-            _cumsum_rows[dt](addr, a.ptr, rows, cols, ctx)
+    if a.contig:
+        comptime for dt in [DType.int64, DType.int32, DType.float32]:
+            if a.dtype == dt:
+                _cumsum_rows[dt](addr, a.ptr, rows, cols, ctx)
+    else:
+        # Mojo-side temporary; see _unary_spec_go in elementwise_ops.
+        var tmp = _scratch_contig(a, ctx)
+        var tmp_addr = Int(tmp.unsafe_ptr())
+        comptime for dt in [DType.int64, DType.int32, DType.float32]:
+            if a.dtype == dt:
+                _cumsum_rows[dt](addr, tmp_addr, rows, cols, ctx)
+        _ = tmp^
     return _spec_result(
         buf^,
         addr,
@@ -2746,8 +2646,6 @@ def _softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
     full-shape output. The non-trailing dim transpose recursion and the
     half_to_float cast stay in Python."""
     ref a = _spec_ptr(a_o)[]
-    if not a.contig:
-        raise Error("mojo spec softmax: input not contiguous")
     var supported = False
     comptime for dt in FLOAT_DTYPES:
         if a.dtype == dt:
@@ -2763,9 +2661,22 @@ def _softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
     var nbytes = a.numel * a.itemsize
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
-    comptime for dt in FLOAT_DTYPES:
-        if a.dtype == dt:
-            _softmax_rows[dt](addr, a.ptr, rows, cols, Float32(1.0), 0, 1, ctx)
+    if a.contig:
+        comptime for dt in FLOAT_DTYPES:
+            if a.dtype == dt:
+                _softmax_rows[dt](
+                    addr, a.ptr, rows, cols, Float32(1.0), 0, 1, ctx
+                )
+    else:
+        # Mojo-side temporary; see _unary_spec_go in elementwise_ops.
+        var tmp = _scratch_contig(a, ctx)
+        var tmp_addr = Int(tmp.unsafe_ptr())
+        comptime for dt in FLOAT_DTYPES:
+            if a.dtype == dt:
+                _softmax_rows[dt](
+                    addr, tmp_addr, rows, cols, Float32(1.0), 0, 1, ctx
+                )
+        _ = tmp^
     return _spec_result(
         buf^,
         addr,
@@ -2963,11 +2874,6 @@ def PyInit_nn_ops() abi("C") -> PythonObject:
             ),
         )
         b.def_py_c_function(
-            _mean_rows_dispatcher,
-            "MeanRows",
-            docstring="mean over the trailing dims (rows, cols) -> (rows,)",
-        )
-        b.def_py_c_function(
             _max_pool2d_dispatcher,
             "MaxPool2dWithIndices",
             docstring=(
@@ -3015,21 +2921,6 @@ def PyInit_nn_ops() abi("C") -> PythonObject:
             _any_bool_dispatcher,
             "AnyBool",
             docstring="any() over a bool tensor -> scalar bool",
-        )
-        b.def_py_c_function(
-            _argmax_rows_dispatcher,
-            "ArgmaxRows",
-            docstring="argmax over the last dim (rows, cols) -> int64 (rows,)",
-        )
-        b.def_py_c_function(
-            _max_rows_dispatcher,
-            "MaxRows",
-            docstring="max over the last dim (rows, cols) -> (rows,)",
-        )
-        b.def_py_c_function(
-            _cumsum_rows_dispatcher,
-            "CumsumRows",
-            docstring="cumulative sum along the last dim (rows, cols)",
         )
         return b.finalize()
     except e:

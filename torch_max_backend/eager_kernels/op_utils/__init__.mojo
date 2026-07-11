@@ -536,39 +536,54 @@ def _copy_strided[
 
 
 @always_inline
+def _scratch_copy(
+    src_addr: Int,
+    shape: IndexList[MAX_RANK],
+    strides: IndexList[MAX_RANK],
+    rank: Int,
+    numel: Int,
+    itemsize: Int,
+    ctx: DeviceContext,
+) raises -> DeviceBuffer[DType.uint8]:
+    """Materialize the logical order of (shape, strides) into a fresh
+    contiguous scratch buffer — the Mojo-side temporary of
+    docs/tensor_spec_design.md §4.7. Python never sees a wrapper for it;
+    the caller keeps the returned buffer alive until its kernel launch is
+    enqueued (`_ = buf^`); the stream-ordered free rides the same queue."""
+    var nbytes = numel * itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if numel > 0:
+        var dst_strides = _row_major8(shape, rank)
+        if itemsize == 4:
+            _copy_strided[DType.uint32](
+                addr, src_addr, shape, dst_strides, strides, ctx
+            )
+        elif itemsize == 2:
+            _copy_strided[DType.uint16](
+                addr, src_addr, shape, dst_strides, strides, ctx
+            )
+        elif itemsize == 8:
+            _copy_strided[DType.uint64](
+                addr, src_addr, shape, dst_strides, strides, ctx
+            )
+        elif itemsize == 1:
+            _copy_strided[DType.uint8](
+                addr, src_addr, shape, dst_strides, strides, ctx
+            )
+        else:
+            raise Error("mojo spec temp: unsupported element size ", itemsize)
+    return buf^
+
+
+@always_inline
 def _scratch_contig(
     a: TensorSpec, ctx: DeviceContext
 ) raises -> DeviceBuffer[DType.uint8]:
-    """Materialize a strided spec into a fresh contiguous scratch buffer —
-    the Mojo-side temporary of docs/tensor_spec_design.md §4.7. Python never
-    sees a wrapper for it; the caller keeps the returned buffer alive until
-    its kernel launch is enqueued (`_ = buf^`), and the stream-ordered free
-    rides the same queue."""
-    var nbytes = a.numel * a.itemsize
-    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
-    var addr = Int(buf.unsafe_ptr())
-    if a.numel > 0:
-        var dst_strides = _row_major8(a.shape, a.rank)
-        if a.itemsize == 4:
-            _copy_strided[DType.uint32](
-                addr, a.ptr, a.shape, dst_strides, a.strides, ctx
-            )
-        elif a.itemsize == 2:
-            _copy_strided[DType.uint16](
-                addr, a.ptr, a.shape, dst_strides, a.strides, ctx
-            )
-        elif a.itemsize == 8:
-            _copy_strided[DType.uint64](
-                addr, a.ptr, a.shape, dst_strides, a.strides, ctx
-            )
-        elif a.itemsize == 1:
-            _copy_strided[DType.uint8](
-                addr, a.ptr, a.shape, dst_strides, a.strides, ctx
-            )
-        else:
-            raise Error("mojo spec temp: unsupported element size ", a.itemsize)
-    return buf^
-
+    """`_scratch_copy` over a spec's own logical layout."""
+    return _scratch_copy(
+        a.ptr, a.shape, a.strides, a.rank, a.numel, a.itemsize, ctx
+    )
 
 @always_inline
 def _reduce_spec_geom(
@@ -579,37 +594,65 @@ def _reduce_spec_geom(
     mut cols: Int,
     mut out_rank: Int,
     mut oshape: IndexList[MAX_RANK],
+    mut pshape: IndexList[MAX_RANK],
+    mut pstrides: IndexList[MAX_RANK],
+    mut needs_copy: Bool,
 ) raises:
-    """Rows/cols/output geometry for a trailing-dims reduction spec op.
+    """Geometry for a reduction spec op over arbitrary (sorted, normalized)
+    reduce dims — Python only parses the dim spec.
 
-    `rdims_t` is a tuple of sorted, normalized reduce dims (Python does the
-    dim-spec parsing); the spec path only takes the hot layout — reduce dims
-    already trailing on a contiguous input — and raises otherwise so the
-    classic permute+materialize path handles the rest. The output shape is
-    leading-padded for `out_rank`: keepdim keeps the input shape with the
-    reduce slots set to 1; otherwise the kept dims shift right into the
-    trailing `out_rank` slots (the padding convention reads trailing slots).
+    (pshape, pstrides) is the permuted logical layout — kept dims ascending,
+    then reduce dims ascending, trailing-aligned — i.e. the layout the
+    Python classic path used to build with permute+materialize. When the
+    input is contiguous with trailing reduce dims (the hot path) it is
+    already exactly that layout and `needs_copy` stays False; otherwise the
+    caller materializes it via `_scratch_copy` inside the call. The output
+    shape is leading-padded for `out_rank`: keepdim puts 1s at the original
+    reduce positions; otherwise the kept dims pack the trailing slots.
     """
-    if not a.contig:
-        raise Error("mojo spec reduce: input not contiguous")
     var n = _raw_tuple_len(rdims_t)
     if n > a.rank:
         raise Error("mojo spec reduce: more reduce dims than rank")
+    var is_red = IndexList[MAX_RANK](0)
+    for k in range(n):
+        var d = _raw_tuple_int(rdims_t, k)
+        if d < 0 or d >= a.rank:
+            raise Error("mojo spec reduce: reduce dim out of range")
+        is_red[MAX_RANK - a.rank + d] = 1
+
+    pshape = IndexList[MAX_RANK](1)
+    pstrides = IndexList[MAX_RANK](0)
+    var w = MAX_RANK - a.rank
+    rows = 1
+    for i in range(MAX_RANK - a.rank, MAX_RANK):
+        if is_red[i] == 0:
+            pshape[w] = a.shape[i]
+            pstrides[w] = a.strides[i]
+            rows *= a.shape[i]
+            w += 1
+    cols = 1
+    for i in range(MAX_RANK - a.rank, MAX_RANK):
+        if is_red[i] == 1:
+            pshape[w] = a.shape[i]
+            pstrides[w] = a.strides[i]
+            cols *= a.shape[i]
+            w += 1
+
+    needs_copy = not a.contig
     for k in range(n):
         if _raw_tuple_int(rdims_t, k) != a.rank - n + k:
-            raise Error("mojo spec reduce: reduce dims not trailing")
-    cols = 1
-    for k in range(n):
-        cols *= a.shape[MAX_RANK - n + k]
-    rows = 1
-    for i in range(MAX_RANK - a.rank, MAX_RANK - n):
-        rows *= a.shape[i]
+            needs_copy = True
+
     oshape = IndexList[MAX_RANK](1)
     if _raw_int(keepdim_o) != 0:
         out_rank = a.rank
-        for i in range(MAX_RANK - a.rank, MAX_RANK - n):
-            oshape[i] = a.shape[i]
+        for i in range(MAX_RANK - a.rank, MAX_RANK):
+            if is_red[i] == 0:
+                oshape[i] = a.shape[i]
     else:
         out_rank = a.rank - n
-        for i in range(out_rank):
-            oshape[MAX_RANK - out_rank + i] = a.shape[MAX_RANK - a.rank + i]
+        var w2 = MAX_RANK - out_rank
+        for i in range(MAX_RANK - a.rank, MAX_RANK):
+            if is_red[i] == 0:
+                oshape[w2] = a.shape[i]
+                w2 += 1

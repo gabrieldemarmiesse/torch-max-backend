@@ -2076,31 +2076,12 @@ def _norm_reduce_dims(dim, rank, empty_is_all):
 
 
 @no_type_check
-def _reduce_to_rows(t, reduce_dims, keepdim):
-    """Materialize `t` with the reduce dims moved to the trailing positions.
-
-    Returns (contiguous row-major tensor, rows, cols, out_shape) where the
-    kernel reduces each of the `rows` contiguous rows of `cols` elements to
-    one output element, and `out_shape` already respects `keepdim`. The
-    kept dims stay in ascending original order, so the `rows` output values
-    are laid out exactly as `out_shape`'s row-major buffer.
-    """
-    rank = len(t._shape)
+def _reduced_shape(shape, reduce_dims, keepdim):
+    """The reduction output shape (keepdim already applied)."""
     rset = set(reduce_dims)
-    kept = [i for i in range(rank) if i not in rset]
     if keepdim:
-        out_shape = tuple(1 if i in rset else t._shape[i] for i in range(rank))
-    else:
-        out_shape = tuple(t._shape[i] for i in kept)
-    cols = 1
-    for i in reduce_dims:
-        cols *= t._shape[i]
-    rows = t._numel // cols if cols else t._numel
-    if reduce_dims:
-        contig = _tc(fast_aten_permute(t, kept + sorted(reduce_dims)))
-    else:
-        contig = _tc(t)
-    return contig, rows, cols, out_shape
+        return tuple(1 if i in rset else s for i, s in enumerate(shape))
+    return tuple(s for i, s in enumerate(shape) if i not in rset)
 
 
 @no_type_check
@@ -2123,17 +2104,7 @@ def fast_aten_mean(input, dim=None, keepdim=False, *, dtype=None):
     if rdims is None:
         return NOT_HANDLED
     result = _try_spec_reduce("MeanSpec", a, rdims, keepdim, module_name="nn_ops")
-    if result is not None:
-        return result
-    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
-    if cols == 0:
-        return NOT_HANDLED  # mean of an empty dim is nan; torch warns/errors
-    out = _alloc(out_shape, a._dtype, a._device)
-    if out._numel > 0:
-        eager_kernels.nn_ops.MeanRows(
-            out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
-        )
-    return out
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
@@ -2164,20 +2135,16 @@ def fast_aten_sum(input, dim=None, keepdim=False, *, dtype=None):
     result = _try_spec_reduce("SumSpec", a, rdims, keepdim)
     if result is not None:
         return result
-    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
-    if rows * cols == 0:
-        # Empty reduction: torch defines sum over 0 elements as 0.
+    if a._numel == 0:
+        # Empty reduction (the spec raises): torch defines it as 0.
+        out_shape = _reduced_shape(a._shape, rdims, keepdim)
         filled = fast_filled(out_shape, 0, a._dtype, a._device)
         return NOT_HANDLED if filled is None else filled
-    out = _alloc(out_shape, a._dtype, a._device)
-    eager_kernels.reduction_ops.SumRows(
-        out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
-    )
-    return out
+    return NOT_HANDLED
 
 
 @no_type_check
-def _amax_amin(input, dim, keepdim, kernel_name):
+def _amax_amin(input, dim, keepdim, spec_name):
     a = _t(input)
     if a is None or a._dtype not in _ROW_REDUCE_DTYPES:
         return NOT_HANDLED
@@ -2185,47 +2152,28 @@ def _amax_amin(input, dim, keepdim, kernel_name):
     rdims = _norm_reduce_dims(dim, rank, empty_is_all=True)
     if rdims is None:
         return NOT_HANDLED
-    spec_name = "AmaxSpec" if kernel_name == "MaxRowsR" else "AminSpec"
     result = _try_spec_reduce(spec_name, a, rdims, keepdim)
-    if result is not None:
-        return result
-    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
-    if cols == 0:
-        return NOT_HANDLED  # torch errors on amax/amin over an empty dim
-    out = _alloc(out_shape, a._dtype, a._device)
-    if out._numel > 0:
-        getattr(eager_kernels.reduction_ops, kernel_name)(
-            out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
-        )
-    return out
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_amax(input, dim=(), keepdim=False):
-    return _amax_amin(input, dim, keepdim, "MaxRowsR")
+    return _amax_amin(input, dim, keepdim, "AmaxSpec")
 
 
 @no_type_check
 def fast_aten_amin(input, dim=(), keepdim=False):
-    return _amax_amin(input, dim, keepdim, "MinRows")
+    return _amax_amin(input, dim, keepdim, "AminSpec")
 
 
 @no_type_check
 def fast_aten_min(input):
     # Values-only full reduction: aten::min(Tensor) -> Tensor.
     t = _t(input)
-    if t is not None and t._numel > 0:
-        result = _try_spec_reduce("AminSpec", t, range(len(t._shape)), False)
-        if result is not None:
-            return result
-    a = _tc(input)
-    if a is None or a._numel == 0 or a._dtype not in _ROW_REDUCE_DTYPES:
+    if t is None:
         return NOT_HANDLED
-    out = _alloc((), a._dtype, a._device)
-    eager_kernels.reduction_ops.MinRows(
-        out._ptr, a._ptr, 1, a._numel, a._dtype.value, _ctx_ptr(a._device)
-    )
-    return out
+    result = _try_spec_reduce("AminSpec", t, range(len(t._shape)), False)
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
@@ -2245,23 +2193,7 @@ def fast_aten_min_dim(input, dim, keepdim=False):
         result = None
     if result is not None:
         return _wrap_spec_pair(result, a._dtype, DType.int64, a._device)
-    contig, rows, cols, out_shape = _reduce_to_rows(a, [dim % rank], keepdim)
-    if cols == 0:
-        return NOT_HANDLED
-    values = _alloc(out_shape, a._dtype, a._device)
-    indices = _alloc(out_shape, DType.int64, a._device)
-    if rows > 0:
-        eager_kernels.reduction_ops.MinMaxIdxRows(
-            values._ptr,
-            indices._ptr,
-            contig._ptr,
-            rows,
-            cols,
-            1,
-            a._dtype.value,
-            _ctx_ptr(a._device),
-        )
-    return values, indices
+    return NOT_HANDLED
 
 
 @no_type_check
@@ -2281,25 +2213,7 @@ def _argreduce(input, dim, keepdim, is_min):
         )
         if result is not None:
             return result
-    if dim is None:
-        contig = _tc(a)
-        rows, cols = 1, a._numel
-        out_shape = tuple([1] * rank) if keepdim else ()
-    else:
-        if not isinstance(dim, int) or rank == 0 or not -rank <= dim < rank:
-            return NOT_HANDLED
-        contig, rows, cols, out_shape = _reduce_to_rows(a, [dim % rank], keepdim)
-        if cols == 0:
-            return NOT_HANDLED
-    out = _alloc(out_shape, DType.int64, a._device)
-    if out._numel > 0:
-        kernel = (
-            eager_kernels.reduction_ops.ArgminRows
-            if is_min
-            else eager_kernels.nn_ops.ArgmaxRows
-        )
-        kernel(out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device))
-    return out
+    return NOT_HANDLED
 
 
 @no_type_check
@@ -2318,20 +2232,12 @@ def fast_aten_max(input, *args, **kwargs):
     if args or kwargs:
         return NOT_HANDLED
     t = _t(input)
-    if t is not None and t._numel > 0:
-        result = _try_spec_reduce(
-            "MaxSpec", t, range(len(t._shape)), False, module_name="nn_ops"
-        )
-        if result is not None:
-            return result
-    a = _tc(input)
-    if a is None or a._numel == 0 or a._dtype not in _ROW_REDUCE_DTYPES:
+    if t is None:
         return NOT_HANDLED
-    out = _alloc((), a._dtype, a._device)
-    eager_kernels.nn_ops.MaxRows(
-        out._ptr, a._ptr, 1, a._numel, a._dtype.value, _ctx_ptr(a._device)
+    result = _try_spec_reduce(
+        "MaxSpec", t, range(len(t._shape)), False, module_name="nn_ops"
     )
-    return out
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
@@ -2348,23 +2254,7 @@ def fast_aten_var(input, dim=None, *, correction=1, keepdim=False):
     if rdims is None:
         return NOT_HANDLED
     result = _try_spec_reduce("VarSpec", a, rdims, keepdim, float(correction))
-    if result is not None:
-        return result
-    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
-    if cols == 0:
-        return NOT_HANDLED
-    out = _alloc(out_shape, a._dtype, a._device)
-    if out._numel > 0:
-        eager_kernels.reduction_ops.VarRows(
-            out._ptr,
-            contig._ptr,
-            rows,
-            cols,
-            float(correction),
-            a._dtype.value,
-            _ctx_ptr(a._device),
-        )
-    return out
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
@@ -2389,19 +2279,7 @@ def _any_all(input, dim, keepdim, is_all):
     result = _try_spec_reduce(
         "AllSpec" if is_all else "AnySpec", a, rdims, keepdim, out_dtype=DType.bool
     )
-    if result is not None:
-        return result
-    contig, rows, cols, out_shape = _reduce_to_rows(a, rdims, keepdim)
-    out = _alloc(out_shape, DType.bool, a._device)
-    if out._numel > 0:
-        # cols == 0 is valid: any -> False, all -> True (kernel handles it).
-        fn = (
-            eager_kernels.reduction_ops.AllRows
-            if is_all
-            else eager_kernels.reduction_ops.AnyRows
-        )
-        fn(out._ptr, contig._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device))
-    return out
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
@@ -2443,21 +2321,12 @@ def fast_aten__log_softmax(input, dim, half_to_float=False):
             return NOT_HANDLED
         return fast_aten_transpose(result, dim, rank - 1)
     result = _try_spec_unary("LogSoftmaxSpec", t, module_name="reduction_ops")
-    if result is not None:
-        return result
-    a = _tc(t)
-    cols = a._shape[-1]
-    rows = a._numel // cols
-    out = _alloc(a._shape, a._dtype, a._device)
-    eager_kernels.reduction_ops.LogSoftmaxRows(
-        out._ptr, a._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
-    )
-    return out
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_cumsum(input, dim, *, dtype=None):
-    a = _tc(input) if dtype is None else None
+    a = _t(input) if dtype is None else None
     if (
         a is None
         or a._numel == 0
@@ -2468,15 +2337,7 @@ def fast_aten_cumsum(input, dim, *, dtype=None):
     if not isinstance(dim, int) or rank == 0 or dim % rank != rank - 1:
         return NOT_HANDLED
     result = _try_spec_unary("CumsumSpec", a, module_name="nn_ops")
-    if result is not None:
-        return result
-    cols = a._shape[-1]
-    rows = a._numel // cols
-    out = _alloc(a._shape, a._dtype, a._device)
-    eager_kernels.nn_ops.CumsumRows(
-        out._ptr, a._ptr, rows, cols, a._dtype.value, _ctx_ptr(a._device)
-    )
-    return out
+    return result if result is not None else NOT_HANDLED
 
 
 # ---------------------------------------------------------------------------
@@ -3315,16 +3176,7 @@ def fast_aten__softmax(input, dim, half_to_float=False):
             return NOT_HANDLED
         return fast_aten_transpose(result, dim, rank - 1)
     result = _try_spec_unary("SoftmaxSpec", t, module_name="nn_ops")
-    if result is not None:
-        return result
-    a = _tc(t)
-    cols = a._shape[-1]
-    rows = a._numel // cols
-    out = _alloc(a._shape, a._dtype, a._device)
-    eager_kernels.nn_ops.SoftmaxRows(
-        out._ptr, a._ptr, rows, cols, 1.0, 0, 1, a._dtype.value, _ctx_ptr(a._device)
-    )
-    return out
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
