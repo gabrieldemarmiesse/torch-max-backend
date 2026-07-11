@@ -31,6 +31,7 @@ from op_utils import (
     TensorSpec,
     _make_ptr,
     _parallel_for,
+    _scratch_contig,
     _raw_ctx,
     _raw_dtype_int,
     _raw_f64,
@@ -731,30 +732,6 @@ def _cast_to[
         )
 
 
-def _cast_go(
-    out_ptr: PyObjectPtr,
-    out_dtype_o: PyObjectPtr,
-    in_ptr: PyObjectPtr,
-    in_dtype_o: PyObjectPtr,
-    numel_o: PyObjectPtr,
-    ctx_ptr: PyObjectPtr,
-) raises:
-    var out_addr = _raw_int(out_ptr)
-    var in_addr = _raw_int(in_ptr)
-    var dst = _raw_dtype_int(out_dtype_o)
-    var src = _raw_dtype_int(in_dtype_o)
-    var size = _raw_int(numel_o)
-    var ctx = _raw_ctx(ctx_ptr)
-
-    var handled = False
-    comptime for src_dt in CAST_DTYPES:
-        if src == src_dt:
-            _cast_to[src_dt](dst, out_addr, in_addr, size, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported source dtype for fast cast: " + String(src))
-
-
 # ---------------------------------------------------------------------------
 # TileCopy: out[coords] = in[coords % in_shape] over a rank-<=8 index space.
 # Materializes aten::repeat: the Python side left-pads the input shape with
@@ -1268,18 +1245,6 @@ def _where_select_dispatcher(
     return _raw_ret_none()
 
 
-def _cast_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _cast_go(args[0], args[1], args[2], args[3], args[4], args[5])
-    except:
-        pass
-    return _raw_ret_none()
-
-
 def _tile_copy_dispatcher(
     py_self: PyObjectPtr,
     args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
@@ -1367,8 +1332,6 @@ def _cast_spec_go(
     Cast). Raises a real NotImplementedError on unsupported inputs."""
     ref a = _spec_ptr(a_o)[]
     var dst = _raw_dtype_int(out_dtype_o)
-    if not a.contig:
-        raise Error("mojo spec cast: input not contiguous")
     var src_ok = False
     comptime for dt in CAST_DTYPES:
         if a.dtype == dt:
@@ -1387,9 +1350,18 @@ def _cast_spec_go(
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if a.numel > 0:
-        comptime for src_dt in CAST_DTYPES:
-            if a.dtype == src_dt:
-                _cast_to[src_dt](dst, addr, a.ptr, a.numel, ctx)
+        if a.contig:
+            comptime for src_dt in CAST_DTYPES:
+                if a.dtype == src_dt:
+                    _cast_to[src_dt](dst, addr, a.ptr, a.numel, ctx)
+        else:
+            # Mojo-side temporary; see _unary_spec_go in elementwise_ops.
+            var tmp = _scratch_contig(a, ctx)
+            var tmp_addr = Int(tmp.unsafe_ptr())
+            comptime for src_dt in CAST_DTYPES:
+                if a.dtype == src_dt:
+                    _cast_to[src_dt](dst, addr, tmp_addr, a.numel, ctx)
+            _ = tmp^
     return _spec_result(
         buf^,
         addr,
@@ -1442,11 +1414,6 @@ def PyInit_data_movement_ops() abi("C") -> PythonObject:
                 "copy `outer` blocks of `copy_len` elements with a source"
                 " stride/offset"
             ),
-        )
-        b.def_py_c_function(
-            _cast_dispatcher,
-            "Cast",
-            docstring="elementwise dtype cast between contiguous buffers",
         )
         b.def_py_c_function(
             _narrow_copy_dst_dispatcher,

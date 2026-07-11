@@ -354,41 +354,6 @@ def _try_bool_and(lhs, rhs):
     return out
 
 
-@no_type_check
-def _try_scalar(mojo_fn, x, scalar):
-    if not isinstance(scalar, int | float) or isinstance(scalar, bool):
-        return None
-    a = _tc(x)
-    if a is None or a._dtype not in _FLOAT_DTYPES:
-        return None
-    out = _alloc(a._shape, a._dtype, a._device)
-    if out._numel > 0:
-        mojo_fn(
-            out._ptr,
-            a._ptr,
-            float(scalar),
-            out._numel,
-            a._dtype.value,
-            _ctx_ptr(a._device),
-        )
-    return out
-
-
-@no_type_check
-def _try_int_scalar(mojo_fn, x, scalar):
-    if not isinstance(scalar, int) or isinstance(scalar, bool):
-        return None
-    a = _tc(x)
-    if a is None or a._dtype not in _INT_SCALAR_DTYPES:
-        return None
-    out = _alloc(a._shape, a._dtype, a._device)
-    if out._numel > 0:
-        mojo_fn(
-            out._ptr, a._ptr, scalar, out._numel, a._dtype.value, _ctx_ptr(a._device)
-        )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Broadcast helpers for the strided kernels (logic_ops / WhereSelect).
 # Operands are described by the output's dims padded to rank 4 plus
@@ -435,44 +400,20 @@ def _bcast_meta(*tensors):
 @no_type_check
 def _scalar_tensor_0d(value, dtype, device) -> TorchMojoTensor:
     """A 0-d tensor holding `value`, for stride-0 broadcast operands."""
-    try:
-        result = eager_kernels.elementwise_ops.FillSpec(
-            _pad8((), 1), 0, 1, float(value), dtype.value, _ctx_ptr(device)
-        )
-    except Exception:
-        result = None
-    if result is not None:
-        return _wrap_spec_result(result, dtype, device)
-    out = _alloc((), dtype, device)
-    eager_kernels.elementwise_ops.Fill(
-        out._ptr, float(value), 1, dtype.value, _ctx_ptr(device)
+    result = eager_kernels.elementwise_ops.FillSpec(
+        _pad8((), 1), 0, 1, float(value), dtype.value, _ctx_ptr(device)
     )
-    return out
+    return _wrap_spec_result(result, dtype, device)
 
 
 @no_type_check
 def _cast_tensor(x: TorchMojoTensor, dtype: DType) -> TorchMojoTensor:
-    """Contiguous dtype cast through the Cast kernel."""
-    t = _t(x)
-    if t is not None:
-        try:
-            result = eager_kernels.data_movement_ops.CastSpec(_spec_of(t), dtype.value)
-        except Exception:
-            result = None
-        if result is not None:
-            return _wrap_spec_result(result, dtype, t._device)
-    a = _tc(x)
-    out = _alloc(a._shape, dtype, a._device)
-    if out._numel > 0:
-        eager_kernels.data_movement_ops.Cast(
-            out._ptr,
-            dtype.value,
-            a._ptr,
-            a._dtype.value,
-            out._numel,
-            _ctx_ptr(a._device),
-        )
-    return out
+    """Dtype cast through CastSpec (strided inputs materialize Mojo-side).
+
+    Callers pre-gate on _CAST_DTYPES; anything else propagates the spec's
+    NotImplementedError (the classic kernel silently wrote garbage there)."""
+    result = eager_kernels.data_movement_ops.CastSpec(_spec_of(_t(x)), dtype.value)
+    return _wrap_spec_result(result, dtype, x._device)
 
 
 @no_type_check
@@ -631,11 +572,7 @@ def _scaled_operand(other, alpha):
         return None
     scaled = _try_spec_scalar("MulScalarSpec", b, alpha)
     if scaled is None:
-        scaled = _try_scalar(eager_kernels.elementwise_ops.MulScalar, b, alpha)
-    if scaled is None:
         scaled = _try_spec_int_scalar("MulScalarIntSpec", b, alpha)
-    if scaled is None:
-        scaled = _try_int_scalar(eager_kernels.elementwise_ops.MulScalarInt, b, alpha)
     return scaled
 
 
@@ -651,13 +588,7 @@ def fast_aten_add(input, other, alpha=1):
     if result is None:
         result = _try_spec_scalar("AddScalarSpec", input, other)
     if result is None:
-        result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, other)
-    if result is None:
         result = _try_spec_int_scalar("AddScalarIntSpec", input, other)
-    if result is None:
-        result = _try_int_scalar(
-            eager_kernels.elementwise_ops.AddScalarInt, input, other
-        )
     if result is None:
         result = _try_binary_bcast("AddBcast", input, other)
     if result is None:
@@ -722,14 +653,8 @@ def fast_aten_sub(input, other, alpha=1):
         and not isinstance(other, bool)
     ):
         result = _try_spec_scalar("AddScalarSpec", input, -other)
-        if result is None:
-            result = _try_scalar(eager_kernels.elementwise_ops.AddScalar, input, -other)
         if result is None and isinstance(other, int):
             result = _try_spec_int_scalar("AddScalarIntSpec", input, -other)
-        if result is None and isinstance(other, int):
-            result = _try_int_scalar(
-                eager_kernels.elementwise_ops.AddScalarInt, input, -other
-            )
     if result is None:
         result = _try_binary_bcast("SubBcast", input, other)
     if result is None:
@@ -749,13 +674,7 @@ def fast_aten_mul(input, other):
     if result is None:
         result = _try_spec_scalar("MulScalarSpec", input, other)
     if result is None:
-        result = _try_scalar(eager_kernels.elementwise_ops.MulScalar, input, other)
-    if result is None:
         result = _try_spec_int_scalar("MulScalarIntSpec", input, other)
-    if result is None:
-        result = _try_int_scalar(
-            eager_kernels.elementwise_ops.MulScalarInt, input, other
-        )
     if result is None:
         result = _try_binary_bcast("MulBcast", input, other)
     if result is None:
@@ -811,12 +730,7 @@ def fast_aten_fill_scalar(input, value):
     a = _t(input)
     if a is None or a._dtype not in _FILL_DTYPES:
         return NOT_HANDLED
-    out = _alloc(a._shape, a._dtype, a._device)
-    if out._numel > 0:
-        eager_kernels.elementwise_ops.Fill(
-            out._ptr, float(value), out._numel, out._dtype.value, _ctx_ptr(out._device)
-        )
-    return out
+    return fast_filled(a._shape, value, a._dtype, a._device)
 
 
 @no_type_check
@@ -881,11 +795,7 @@ def fast_aten_tanh(x):
 @no_type_check
 def fast_aten_pow(x, y):
     result = _try_spec_scalar("PowScalarSpec", x, y)
-    if result is None:
-        result = _try_scalar(eager_kernels.elementwise_ops.PowScalar, x, y)
-    if result is not None:
-        return result
-    return NOT_HANDLED
+    return result if result is not None else NOT_HANDLED
 
 
 # ---------------------------------------------------------------------------
@@ -1158,27 +1068,21 @@ def fast_aten_isin(elements, test_elements, *, assume_unique=False, invert=False
         or el._dtype not in (DType.int64, DType.int32)
     ):
         return NOT_HANDLED
+    if el._numel > 0 and te._numel == 0:
+        # x in {} is always False (True under invert).
+        return fast_filled(el._shape, 1.0 if invert else 0.0, DType.bool, el._device)
     out = _alloc(el._shape, DType.bool, el._device)
     if el._numel > 0:
-        if te._numel == 0:
-            eager_kernels.elementwise_ops.Fill(
-                out._ptr,
-                1.0 if invert else 0.0,
-                out._numel,
-                DType.bool.value,
-                _ctx_ptr(el._device),
-            )
-        else:
-            eager_kernels.logic_ops.IsIn(
-                out._ptr,
-                el._ptr,
-                te._ptr,
-                el._numel,
-                te._numel,
-                1 if invert else 0,
-                el._dtype.value,
-                _ctx_ptr(el._device),
-            )
+        eager_kernels.logic_ops.IsIn(
+            out._ptr,
+            el._ptr,
+            te._ptr,
+            el._numel,
+            te._numel,
+            1 if invert else 0,
+            el._dtype.value,
+            _ctx_ptr(el._device),
+        )
     return out
 
 
@@ -3662,25 +3566,15 @@ def fast_filled(shape, value, dtype: DType, device):
     if dtype not in _FILL_DTYPES:
         return None
     shape = tuple(shape)
-    try:
-        result = eager_kernels.elementwise_ops.FillSpec(
-            _pad8(shape, 1),
-            len(shape),
-            math.prod(shape),
-            float(value),
-            dtype.value,
-            _ctx_ptr(device),
-        )
-    except Exception:
-        result = None
-    if result is not None:
-        return _wrap_spec_result(result, dtype, device)
-    out = _alloc(shape, dtype, device)
-    if out._numel > 0:
-        eager_kernels.elementwise_ops.Fill(
-            out._ptr, float(value), out._numel, dtype.value, _ctx_ptr(device)
-        )
-    return out
+    result = eager_kernels.elementwise_ops.FillSpec(
+        _pad8(shape, 1),
+        len(shape),
+        math.prod(shape),
+        float(value),
+        dtype.value,
+        _ctx_ptr(device),
+    )
+    return _wrap_spec_result(result, dtype, device)
 
 
 # What the Arange kernel dispatches on (_FILL_DTYPES minus bool, which

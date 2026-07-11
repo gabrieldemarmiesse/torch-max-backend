@@ -446,43 +446,6 @@ def _scalar_elementwise[
                 raise Error("no GPU accelerator available at compile time")
 
 
-def _scalar_go[
-    op_code: Int
-](
-    out_ptr: PyObjectPtr,
-    in_ptr: PyObjectPtr,
-    scalar: PyObjectPtr,
-    numel: PyObjectPtr,
-    dtype_val: PyObjectPtr,
-    ctx_ptr: PyObjectPtr,
-) raises:
-    var out_addr = _raw_int(out_ptr)
-    var in_addr = _raw_int(in_ptr)
-    var scalar_val = Float32(_raw_f64(scalar))
-    var size = _raw_int(numel)
-    var dtype = _raw_dtype_int(dtype_val)
-    var ctx = _raw_ctx(ctx_ptr)
-
-    var handled = False
-    comptime for dt in FLOAT_DTYPES:
-        if dtype == dt:
-            _scalar_elementwise[dt, op_code](
-                _make_ptr[dt](out_addr),
-                _make_ptr[dt](in_addr),
-                scalar_val,
-                size,
-                ctx,
-            )
-            handled = True
-    if not handled:
-        abort(
-            String("unsupported dtype for fast scalar elementwise op: ", dtype)
-        )
-
-
-# Integer variant: out = op(x, scalar) over integer dtypes (int semantics,
-# no float round-trip).
-
 comptime IOP_ADD = 0
 comptime IOP_MUL = 1
 
@@ -517,46 +480,6 @@ def _int_scalar_elementwise[
             raise Error("no GPU accelerator available at compile time")
 
 
-def _int_scalar_go[
-    op_code: Int
-](
-    out_ptr: PyObjectPtr,
-    in_ptr: PyObjectPtr,
-    scalar: PyObjectPtr,
-    numel: PyObjectPtr,
-    dtype_val: PyObjectPtr,
-    ctx_ptr: PyObjectPtr,
-) raises:
-    var out_addr = _raw_int(out_ptr)
-    var in_addr = _raw_int(in_ptr)
-    var scalar_val = _raw_int(scalar)
-    var size = _raw_int(numel)
-    var dtype = _raw_dtype_int(dtype_val)
-    var ctx = _raw_ctx(ctx_ptr)
-
-    var handled = False
-    comptime for dt in [DType.int64, DType.int32]:
-        if dtype == dt:
-            _int_scalar_elementwise[dt, op_code](
-                _make_ptr[dt](out_addr),
-                _make_ptr[dt](in_addr),
-                scalar_val,
-                size,
-                ctx,
-            )
-            handled = True
-    if not handled:
-        raise Error(
-            "unsupported dtype for fast int scalar op: " + String(dtype)
-        )
-
-
-# ---------------------------------------------------------------------------
-# Fill: out[i] = value, over any dtype. The value comes in as a Float64 and
-# is cast to the buffer dtype (exact for the small ints masks/one-hots use).
-# ---------------------------------------------------------------------------
-
-
 @always_inline
 def _fill[
     dtype: DType
@@ -582,52 +505,6 @@ def _fill[
             elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
         else:
             raise Error("no GPU accelerator available at compile time")
-
-
-def _fill_go(
-    out_ptr: PyObjectPtr,
-    value: PyObjectPtr,
-    numel: PyObjectPtr,
-    dtype_val: PyObjectPtr,
-    ctx_ptr: PyObjectPtr,
-) raises:
-    var out_addr = _raw_int(out_ptr)
-    var value_val = _raw_f64(value)
-    var size = _raw_int(numel)
-    var dtype = _raw_dtype_int(dtype_val)
-    var ctx = _raw_ctx(ctx_ptr)
-
-    # bool fill must store exactly 0/1 (a raw nonzero float doesn't reliably
-    # cast to True); normalize once so every dtype's call site is identical.
-    if dtype == DType.bool:
-        value_val = Float64(1) if value_val != 0 else Float64(0)
-
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.float64,
-        DType.int64,
-        DType.int32,
-        DType.int16,
-        DType.int8,
-        DType.uint8,
-        DType.bool,
-    ]:
-        if dtype == dt:
-            _fill[dt](_make_ptr[dt](out_addr), value_val, size, ctx)
-            handled = True
-    if not handled:
-        abort(String("unsupported dtype for fast fill: ", dtype))
-
-
-# ---------------------------------------------------------------------------
-# Arange: out[i] = start + i * step, computed in float64 (exact for the
-# integer ranges torch produces up to 2^53; the Python caller guards the
-# rest) then cast to the buffer dtype. Runs on device so torch.arange on
-# max_device never round-trips through a host tensor + blocking H2D copy.
-# ---------------------------------------------------------------------------
 
 
 @always_inline
@@ -707,50 +584,6 @@ def _bin_dispatcher[
 ) abi("C") -> PyObjectPtr:
     try:
         _bin_go[op_code](args[0], args[1], args[2], args[3], args[4], args[5])
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _scalar_dispatcher[
-    op_code: Int
-](
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _scalar_go[op_code](
-            args[0], args[1], args[2], args[3], args[4], args[5]
-        )
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _int_scalar_dispatcher[
-    op_code: Int
-](
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _int_scalar_go[op_code](
-            args[0], args[1], args[2], args[3], args[4], args[5]
-        )
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _fill_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _fill_go(args[0], args[1], args[2], args[3], args[4])
     except:
         pass
     return _raw_ret_none()
@@ -927,8 +760,6 @@ def _scalar_spec_go[
     op_code: Int
 ](a_o: PyObjectPtr, scalar_o: PyObjectPtr) raises -> PyObjectPtr:
     ref a = _spec_ptr(a_o)[]
-    if not a.contig:
-        raise Error("mojo spec scalar: input not contiguous")
     var supported = False
     comptime for dt in FLOAT_DTYPES:
         if a.dtype == dt:
@@ -942,15 +773,30 @@ def _scalar_spec_go[
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if a.numel > 0:
-        comptime for dt in FLOAT_DTYPES:
-            if a.dtype == dt:
-                _scalar_elementwise[dt, op_code](
-                    _make_ptr[dt](addr),
-                    _make_ptr[dt](a.ptr),
-                    scalar,
-                    a.numel,
-                    ctx,
-                )
+        if a.contig:
+            comptime for dt in FLOAT_DTYPES:
+                if a.dtype == dt:
+                    _scalar_elementwise[dt, op_code](
+                        _make_ptr[dt](addr),
+                        _make_ptr[dt](a.ptr),
+                        scalar,
+                        a.numel,
+                        ctx,
+                    )
+        else:
+            # Mojo-side temporary; see _unary_spec_go.
+            var tmp = _scratch_contig(a, ctx)
+            var tmp_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in FLOAT_DTYPES:
+                if a.dtype == dt:
+                    _scalar_elementwise[dt, op_code](
+                        _make_ptr[dt](addr),
+                        _make_ptr[dt](tmp_addr),
+                        scalar,
+                        a.numel,
+                        ctx,
+                    )
+            _ = tmp^
     return _spec_result(
         buf^,
         addr,
@@ -981,8 +827,6 @@ def _int_scalar_spec_go[
     op_code: Int
 ](a_o: PyObjectPtr, scalar_o: PyObjectPtr) raises -> PyObjectPtr:
     ref a = _spec_ptr(a_o)[]
-    if not a.contig:
-        raise Error("mojo spec int scalar: input not contiguous")
     var supported = False
     comptime for dt in [DType.int32, DType.int64]:
         if a.dtype == dt:
@@ -996,15 +840,30 @@ def _int_scalar_spec_go[
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if a.numel > 0:
-        comptime for dt in [DType.int32, DType.int64]:
-            if a.dtype == dt:
-                _int_scalar_elementwise[dt, op_code](
-                    _make_ptr[dt](addr),
-                    _make_ptr[dt](a.ptr),
-                    scalar,
-                    a.numel,
-                    ctx,
-                )
+        if a.contig:
+            comptime for dt in [DType.int32, DType.int64]:
+                if a.dtype == dt:
+                    _int_scalar_elementwise[dt, op_code](
+                        _make_ptr[dt](addr),
+                        _make_ptr[dt](a.ptr),
+                        scalar,
+                        a.numel,
+                        ctx,
+                    )
+        else:
+            # Mojo-side temporary; see _unary_spec_go.
+            var tmp = _scratch_contig(a, ctx)
+            var tmp_addr = Int(tmp.unsafe_ptr())
+            comptime for dt in [DType.int32, DType.int64]:
+                if a.dtype == dt:
+                    _int_scalar_elementwise[dt, op_code](
+                        _make_ptr[dt](addr),
+                        _make_ptr[dt](tmp_addr),
+                        scalar,
+                        a.numel,
+                        ctx,
+                    )
+            _ = tmp^
     return _spec_result(
         buf^,
         addr,
@@ -1313,36 +1172,6 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
             _bin_dispatcher[OP_MIN],
             "Min",
             docstring="out = min(lhs, rhs) (contiguous, dtype dispatch)",
-        )
-        b.def_py_c_function(
-            _scalar_dispatcher[SOP_ADD],
-            "AddScalar",
-            docstring="out = x + scalar (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _scalar_dispatcher[SOP_MUL],
-            "MulScalar",
-            docstring="out = x * scalar (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _scalar_dispatcher[SOP_POW],
-            "PowScalar",
-            docstring="out = x ** scalar (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _int_scalar_dispatcher[IOP_ADD],
-            "AddScalarInt",
-            docstring="out = x + scalar (contiguous, int dtypes)",
-        )
-        b.def_py_c_function(
-            _int_scalar_dispatcher[IOP_MUL],
-            "MulScalarInt",
-            docstring="out = x * scalar (contiguous, int dtypes)",
-        )
-        b.def_py_c_function(
-            _fill_dispatcher,
-            "Fill",
-            docstring="out[i] = value (contiguous, any dtype)",
         )
         b.def_py_c_function(
             _arange_dispatcher,
