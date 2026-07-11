@@ -30,6 +30,7 @@ from op_utils import (
     MAX_RANK,
     TensorSpec,
     _make_ptr,
+    _parallel_for,
     _raw_ctx,
     _raw_dtype_int,
     _raw_f64,
@@ -59,19 +60,6 @@ comptime SCATTER_DTYPES = [
     DType.uint8,
     DType.bool,
 ]
-
-
-@always_inline
-def _parallel_for[
-    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None
-](count: Int, ctx: DeviceContext) raises:
-    if ctx.api() == "cpu":
-        elementwise[func, simd_width=1](Coord(count), ctx)
-    else:
-        comptime if has_accelerator():
-            elementwise[func, simd_width=1, target="gpu"](Coord(count), ctx)
-        else:
-            raise Error("no GPU accelerator available at compile time")
 
 
 # ---------------------------------------------------------------------------

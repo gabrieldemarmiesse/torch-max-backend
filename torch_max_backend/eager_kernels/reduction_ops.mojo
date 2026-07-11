@@ -50,6 +50,7 @@ from op_utils import (
     MAX_RANK,
     _enqueue_cached,
     _make_ptr,
+    _parallel_for,
     _raw_ctx,
     _raw_dtype_int,
     _raw_f64,
@@ -61,20 +62,6 @@ from op_utils import (
     _spec_result2,
     _spec_unsupported,
 )
-
-
-@always_inline
-def _parallel_for[
-    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None
-](count: Int, ctx: DeviceContext) raises:
-    """Run `func` once per index in [0, count) on the device queue."""
-    if ctx.api() == "cpu":
-        elementwise[func, simd_width=1](Coord(count), ctx)
-    else:
-        comptime if has_accelerator():
-            elementwise[func, simd_width=1, target="gpu"](Coord(count), ctx)
-        else:
-            raise Error("no GPU accelerator available at compile time")
 
 
 comptime ROWRED_THREADS = 256

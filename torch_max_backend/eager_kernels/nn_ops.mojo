@@ -51,6 +51,7 @@ from op_utils import (
     MAX_RANK,
     _enqueue_cached,
     _make_ptr,
+    _parallel_for,
     _raw_ctx,
     _raw_dtype_int,
     _raw_f64,
@@ -64,20 +65,6 @@ from op_utils import (
     _spec_result,
     _spec_unsupported,
 )
-
-
-@always_inline
-def _parallel_for[
-    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None
-](count: Int, ctx: DeviceContext) raises:
-    """Run `func` once per index in [0, count) on the device queue."""
-    if ctx.api() == "cpu":
-        elementwise[func, simd_width=1](Coord(count), ctx)
-    else:
-        comptime if has_accelerator():
-            elementwise[func, simd_width=1, target="gpu"](Coord(count), ctx)
-        else:
-            raise Error("no GPU accelerator available at compile time")
 
 
 @always_inline
@@ -2660,6 +2647,101 @@ def _cumsum_spec_dispatcher(
         return _spec_unsupported(e)
 
 
+def _batch_norm_spec_go(
+    in_o: PyObjectPtr,
+    mean_o: PyObjectPtr,
+    var_o: PyObjectPtr,
+    gamma_o: PyObjectPtr,
+    beta_o: PyObjectPtr,
+    eps_o: PyObjectPtr,
+) raises -> PyObjectPtr:
+    """Inference batch norm: geometry (channels/inner) derived from the
+    input spec, output alloc and launch in one boundary call, reusing the
+    `_batch_norm` kernel above."""
+    ref inp = _spec_ptr(in_o)[]
+    ref meanp = _spec_ptr(mean_o)[]
+    ref varp = _spec_ptr(var_o)[]
+    ref gammap = _spec_ptr(gamma_o)[]
+    ref betap = _spec_ptr(beta_o)[]
+    var eps = Float32(_raw_f64(eps_o))
+
+    if inp.rank < 2:
+        raise Error("mojo spec batch_norm: input rank must be >= 2")
+    if inp.numel == 0:
+        raise Error("mojo spec batch_norm: empty input")
+    if not (
+        inp.contig
+        and meanp.contig
+        and varp.contig
+        and gammap.contig
+        and betap.contig
+    ):
+        raise Error("mojo spec batch_norm: all inputs must be contiguous")
+    if (
+        meanp.dtype != inp.dtype
+        or varp.dtype != inp.dtype
+        or gammap.dtype != inp.dtype
+        or betap.dtype != inp.dtype
+    ):
+        raise Error("mojo spec batch_norm: stat/affine dtypes must match input")
+    var supported = False
+    comptime for dt in FLOAT_DTYPES:
+        if inp.dtype == dt:
+            supported = True
+    if not supported:
+        raise Error("mojo spec batch_norm: unsupported dtype ", inp.dtype)
+
+    var channels = inp.dim(1)
+    var inner = 1
+    for i in range(MAX_RANK - inp.rank + 2, MAX_RANK):
+        inner *= inp.shape[i]
+
+    var ctx = inp.ctx()
+    var nbytes = inp.numel * inp.itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    comptime for dt in FLOAT_DTYPES:
+        if inp.dtype == dt:
+            _batch_norm[dt](
+                addr,
+                inp.ptr,
+                meanp.ptr,
+                varp.ptr,
+                gammap.ptr,
+                betap.ptr,
+                eps,
+                channels,
+                inner,
+                inp.numel,
+                ctx,
+            )
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        inp.rank,
+        inp.shape,
+        inp.dtype,
+        inp.itemsize,
+        inp.numel,
+        inp.ctx_ptr,
+    )
+
+
+def _batch_norm_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _batch_norm_spec_go(
+            args[0], args[1], args[2], args[3], args[4], args[5]
+        )
+    except e:
+        return _spec_unsupported(e)
+
+
+
 def _softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
     """Plain softmax over the trailing dim (scale=1, no causal mask);
     full-shape output. The non-trailing dim transpose recursion and the
@@ -2832,6 +2914,14 @@ def PyInit_nn_ops() abi("C") -> PythonObject:
             _cumsum_spec_dispatcher,
             "CumsumSpec",
             docstring="(a_spec) -> (holder, spec, shape, ptr); trailing dim",
+        )
+        b.def_py_c_function(
+            _batch_norm_spec_dispatcher,
+            "BatchNormSpec",
+            docstring=(
+                "(in, mean, var, gamma, beta specs, eps) -> (holder, spec,"
+                " shape, ptr); inference batch norm, geometry from specs"
+            ),
         )
         b.def_py_c_function(
             _softmax_spec_dispatcher,

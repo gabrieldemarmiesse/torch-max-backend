@@ -21,6 +21,7 @@ from std.algorithm.functional import elementwise
 from op_utils import (
     FLOAT_DTYPES,
     _make_ptr,
+    _parallel_for,
     _raw_ctx,
     _raw_dtype_int,
     _raw_int,
@@ -28,19 +29,6 @@ from op_utils import (
     _raw_tuple_int,
     _raw_tuple_len,
 )
-
-
-@always_inline
-def _parallel_for[
-    func: def[width: Int, alignment: Int = 1](StdCoord) capturing[_] -> None
-](count: Int, ctx: DeviceContext) raises:
-    if ctx.api() == "cpu":
-        elementwise[func, simd_width=1](StdCoord(count), ctx)
-    else:
-        comptime if has_accelerator():
-            elementwise[func, simd_width=1, target="gpu"](StdCoord(count), ctx)
-        else:
-            raise Error("no GPU accelerator available at compile time")
 
 
 # ---------------------------------------------------------------------------

@@ -22,7 +22,6 @@
 
 from std.os import abort
 from std.gpu.host import DeviceContext, DeviceBuffer
-from std.math import sqrt
 from std.memory import OpaquePointer
 from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
@@ -38,7 +37,9 @@ from op_utils import (
     TensorHolder,
     TensorSpec,
     _copy_strided,
+    _get_ctx,
     _make_ptr,
+    _parallel_for,
     _raw_ctx,
     _raw_dtype_int,
     _raw_f64,
@@ -71,15 +72,6 @@ comptime ALL_DTYPES = [
 
 
 @always_inline
-def _ctx_from(ctx_ptr: PythonObject) raises -> DeviceContext:
-    from std.memory import OpaquePointer
-
-    return DeviceContext(
-        OpaquePointer[MutUntrackedOrigin](unsafe_from_address=Int(py=ctx_ptr))
-    )
-
-
-@always_inline
 def _u8_ptr(
     addr: Int,
 ) -> UnsafePointer[Scalar[DType.uint8], MutUntrackedOrigin]:
@@ -102,7 +94,7 @@ def _wrap_raw(
 
 def alloc(ctx_ptr: PythonObject, nbytes: PythonObject) raises -> PythonObject:
     """Allocate owning device memory. Returns (holder, data_ptr)."""
-    var ctx = _ctx_from(ctx_ptr)
+    var ctx = _get_ctx(ctx_ptr)
     var n = Int(py=nbytes)
     # Zero-sized tensors still get a real 1-byte allocation so every tensor
     # carries a valid pointer (empty driver.Buffers had sentinel pointers
@@ -121,7 +113,7 @@ def alloc_from_host(
     Synchronizes before returning: the host memory (typically a CPU torch
     tensor's storage) is only guaranteed alive for the duration of the call.
     """
-    var ctx = _ctx_from(ctx_ptr)
+    var ctx = _get_ctx(ctx_ptr)
     var n = Int(py=nbytes)
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(n, 1))
     if n > 0:
@@ -142,7 +134,7 @@ def copy_from_host(
     var n = Int(py=nbytes)
     if n == 0:
         return
-    var ctx = _ctx_from(ctx_ptr)
+    var ctx = _get_ctx(ctx_ptr)
     var dst = _wrap_raw(ctx, Int(py=dev_ptr), n)
     dst.enqueue_copy_from(_u8_ptr(Int(py=host_ptr)))
     ctx.synchronize()
@@ -158,7 +150,7 @@ def copy_to_host(
     var n = Int(py=nbytes)
     if n == 0:
         return
-    var ctx = _ctx_from(ctx_ptr)
+    var ctx = _get_ctx(ctx_ptr)
     var src = _wrap_raw(ctx, Int(py=dev_ptr), n)
     src.enqueue_copy_to(_u8_ptr(Int(py=host_ptr)))
     ctx.synchronize()
@@ -180,7 +172,7 @@ def copy_d2d(
     var n = Int(py=nbytes)
     if n == 0:
         return
-    var ctx = _ctx_from(ctx_ptr)
+    var ctx = _get_ctx(ctx_ptr)
     var dst = _wrap_raw(ctx, Int(py=dst_ptr), n)
     var src = _wrap_raw(ctx, Int(py=src_ptr), n)
     dst.enqueue_copy_from(src)
@@ -189,14 +181,14 @@ def copy_d2d(
 
 
 def synchronize(ctx_ptr: PythonObject) raises:
-    _ctx_from(ctx_ptr).synchronize()
+    _get_ctx(ctx_ptr).synchronize()
 
 
 def read_scalar(
     ctx_ptr: PythonObject, dev_ptr: PythonObject, dtype_value: PythonObject
 ) raises -> PythonObject:
     """Read one element at dev_ptr as a Python bool/int/float (syncs)."""
-    var ctx = _ctx_from(ctx_ptr)
+    var ctx = _get_ctx(ctx_ptr)
     var dtype = DType._from_ui8(UInt8(Int(py=dtype_value))._mlir_value)
     var staging = InlineArray[UInt8, 16](fill=0)
 
@@ -230,19 +222,6 @@ def read_scalar(
 # leading entries (size 1 / stride 0). Pointers are element-aligned ints
 # with any storage offset already applied.
 # ---------------------------------------------------------------------------
-
-
-@always_inline
-def _parallel_for[
-    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None
-](count: Int, ctx: DeviceContext) raises:
-    if ctx.api() == "cpu":
-        elementwise[func, simd_width=1](Coord(count), ctx)
-    else:
-        comptime if has_accelerator():
-            elementwise[func, simd_width=1, target="gpu"](Coord(count), ctx)
-        else:
-            raise Error("no GPU accelerator available at compile time")
 
 
 def _copy_strided_go(
@@ -386,10 +365,10 @@ def _strided_fill_dispatcher(
 
 
 # ===========================================================================
-# TensorSpec constructor + the POC spec ops (add / mul / relu / batch_norm).
-# The shared infrastructure (TensorSpec/TensorHolder structs, _spec_ptr,
-# _spec_result, _spec_unsupported) lives in `op_utils`; per-family spec ops
-# migrate next to their kernels (see docs/tensor_spec_design.md §3).
+# TensorSpec constructor (`make_spec`, the one Python-facing spec
+# constructor). The shared infrastructure (TensorSpec/TensorHolder structs,
+# _spec_ptr, _spec_result, _spec_unsupported) lives in `op_utils`; spec ops
+# live next to their kernels (see docs/tensor_spec_design.md §3).
 # ===========================================================================
 
 
@@ -450,145 +429,6 @@ def _make_spec_dispatcher(
 
 
 # ---------------------------------------------------------------------------
-# Batch norm (inference) spec op: geometry (channels/inner) derived from the
-# input spec instead of being computed in Python and smuggled in a tuple.
-# ---------------------------------------------------------------------------
-
-comptime SPEC_FLOAT_DTYPES = [DType.float32, DType.float16, DType.bfloat16]
-
-
-@always_inline
-def _batch_norm_spec_kernel[
-    dtype: DType
-](
-    out_addr: Int,
-    in_addr: Int,
-    mean_addr: Int,
-    var_addr: Int,
-    gamma_addr: Int,
-    beta_addr: Int,
-    eps: Float32,
-    channels: Int,
-    inner: Int,
-    total: Int,
-    ctx: DeviceContext,
-) raises:
-    var out_ptr = _make_ptr[dtype](out_addr)
-    var in_ptr = _make_ptr[dtype](in_addr)
-    var mean_ptr = _make_ptr[dtype](mean_addr)
-    var var_ptr = _make_ptr[dtype](var_addr)
-    var gamma_ptr = _make_ptr[dtype](gamma_addr)
-    var beta_ptr = _make_ptr[dtype](beta_addr)
-
-    @always_inline
-    @parameter
-    @__copy_capture(out_ptr, in_ptr, mean_ptr, var_ptr, gamma_ptr, beta_ptr)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var i = Int(idx[0].value())
-        var c = (i // inner) % channels
-        var m = mean_ptr[c].cast[DType.float32]()
-        var v = var_ptr[c].cast[DType.float32]()
-        var g = gamma_ptr[c].cast[DType.float32]()
-        var b = beta_ptr[c].cast[DType.float32]()
-        var scale = g / sqrt(v + eps)
-        var a = in_ptr[i].cast[DType.float32]()
-        out_ptr[i] = ((a - m) * scale + b).cast[dtype]()
-
-    _parallel_for[func](total, ctx)
-
-
-def _batch_norm_spec_go(
-    in_o: PyObjectPtr,
-    mean_o: PyObjectPtr,
-    var_o: PyObjectPtr,
-    gamma_o: PyObjectPtr,
-    beta_o: PyObjectPtr,
-    eps_o: PyObjectPtr,
-) raises -> PyObjectPtr:
-    ref inp = _spec_ptr(in_o)[]
-    ref meanp = _spec_ptr(mean_o)[]
-    ref varp = _spec_ptr(var_o)[]
-    ref gammap = _spec_ptr(gamma_o)[]
-    ref betap = _spec_ptr(beta_o)[]
-    var eps = Float32(_raw_f64(eps_o))
-
-    if inp.rank < 2:
-        raise Error("mojo spec batch_norm: input rank must be >= 2")
-    if inp.numel == 0:
-        raise Error("mojo spec batch_norm: empty input")
-    if not (
-        inp.contig
-        and meanp.contig
-        and varp.contig
-        and gammap.contig
-        and betap.contig
-    ):
-        raise Error("mojo spec batch_norm: all inputs must be contiguous")
-    if (
-        meanp.dtype != inp.dtype
-        or varp.dtype != inp.dtype
-        or gammap.dtype != inp.dtype
-        or betap.dtype != inp.dtype
-    ):
-        raise Error("mojo spec batch_norm: stat/affine dtypes must match input")
-    var supported = False
-    comptime for dt in SPEC_FLOAT_DTYPES:
-        if inp.dtype == dt:
-            supported = True
-    if not supported:
-        raise Error("mojo spec batch_norm: unsupported dtype ", inp.dtype)
-
-    var channels = inp.dim(1)
-    var inner = 1
-    for i in range(MAX_RANK - inp.rank + 2, MAX_RANK):
-        inner *= inp.shape[i]
-
-    var ctx = inp.ctx()
-    var nbytes = inp.numel * inp.itemsize
-    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
-    var addr = Int(buf.unsafe_ptr())
-    comptime for dt in SPEC_FLOAT_DTYPES:
-        if inp.dtype == dt:
-            _batch_norm_spec_kernel[dt](
-                addr,
-                inp.ptr,
-                meanp.ptr,
-                varp.ptr,
-                gammap.ptr,
-                betap.ptr,
-                eps,
-                channels,
-                inner,
-                inp.numel,
-                ctx,
-            )
-    return _spec_result(
-        buf^,
-        addr,
-        nbytes,
-        inp.rank,
-        inp.shape,
-        inp.dtype,
-        inp.itemsize,
-        inp.numel,
-        inp.ctx_ptr,
-    )
-
-
-def _batch_norm_spec_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        return _batch_norm_spec_go(
-            args[0], args[1], args[2], args[3], args[4], args[5]
-        )
-    except e:
-        return _spec_unsupported(e)
-
-
-# ---------------------------------------------------------------------------
 # Python module definition
 # ---------------------------------------------------------------------------
 
@@ -609,14 +449,6 @@ def PyInit_tensor_holder() abi("C") -> PythonObject:
             docstring=(
                 "(ptr, rank, shape8, strides8, offset, dtype, itemsize,"
                 " numel, contig, ctx_ptr) -> TensorSpec"
-            ),
-        )
-        m.def_py_c_function(
-            _batch_norm_spec_dispatcher,
-            "BatchNormSpec",
-            docstring=(
-                "(in, mean, var, gamma, beta specs, eps) -> (holder, spec,"
-                " shape, ptr); inference batch norm, geometry from specs"
             ),
         )
         m.def_function[alloc]("alloc")

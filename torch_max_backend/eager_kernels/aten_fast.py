@@ -2240,7 +2240,7 @@ def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, e
     stats = [_t(x) for x in (running_mean, running_var, weight, bias)]
     if a is not None and all(s is not None for s in stats):
         try:
-            result = eager_kernels.tensor_holder.BatchNormSpec(
+            result = eager_kernels.nn_ops.BatchNormSpec(
                 _spec_of(a),
                 _spec_of(stats[0]),
                 _spec_of(stats[1]),
