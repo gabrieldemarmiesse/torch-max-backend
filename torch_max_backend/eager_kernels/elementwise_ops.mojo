@@ -363,53 +363,6 @@ def _unary_elementwise[
                 raise Error("no GPU accelerator available at compile time")
 
 
-def _unary_go[
-    op_code: Int
-](
-    out_ptr: PyObjectPtr,
-    in_ptr: PyObjectPtr,
-    numel: PyObjectPtr,
-    dtype_val: PyObjectPtr,
-    ctx_ptr: PyObjectPtr,
-) raises:
-    var out_addr = _raw_int(out_ptr)
-    var in_addr = _raw_int(in_ptr)
-    var size = _raw_int(numel)
-    var dtype = _raw_dtype_int(dtype_val)
-    var ctx = _raw_ctx(ctx_ptr)
-
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.float64,
-        DType.int8,
-        DType.int16,
-        DType.int32,
-        DType.int64,
-        DType.uint8,
-    ]:
-        if dtype == dt:
-            _unary_elementwise[dt, op_code](
-                _make_ptr[dt](out_addr),
-                _make_ptr[dt](in_addr),
-                size,
-                ctx,
-            )
-            handled = True
-    if not handled:
-        abort(
-            String("unsupported dtype for fast unary elementwise op: ", dtype)
-        )
-
-
-# ---------------------------------------------------------------------------
-# Unary-to-bool kernels: isnan and logical_not. Input dtype dispatches over
-# ints and floats (bool tensors are passed as their uint8 storage); output is
-# always bool bytes.
-# ---------------------------------------------------------------------------
-
 comptime BUOP_ISNAN = 0
 comptime BUOP_LOGICAL_NOT = 1
 
@@ -448,52 +401,6 @@ def _unary_bool[
         else:
             raise Error("no GPU accelerator available at compile time")
 
-
-def _unary_bool_go[
-    op_code: Int
-](
-    out_ptr: PyObjectPtr,
-    in_ptr: PyObjectPtr,
-    numel: PyObjectPtr,
-    dtype_val: PyObjectPtr,
-    ctx_ptr: PyObjectPtr,
-) raises:
-    var out_addr = _raw_int(out_ptr)
-    var in_addr = _raw_int(in_ptr)
-    var size = _raw_int(numel)
-    var dtype = _raw_dtype_int(dtype_val)
-    var ctx = _raw_ctx(ctx_ptr)
-
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.float64,
-        DType.int8,
-        DType.int16,
-        DType.int32,
-        DType.int64,
-        DType.uint8,
-    ]:
-        if dtype == dt:
-            _unary_bool[dt, op_code](
-                _make_ptr[DType.bool](out_addr),
-                _make_ptr[dt](in_addr),
-                size,
-                ctx,
-            )
-            handled = True
-    if not handled:
-        abort(String("unsupported dtype for fast unary-to-bool op: ", dtype))
-
-
-# ---------------------------------------------------------------------------
-# Scalar-operand elementwise kernels: out = op(x, scalar). The scalar comes
-# in as a Python float and is applied in float32 (cast back to the tensor
-# dtype), matching torch's promotion for float tensors. Float dtypes only —
-# the Python side gates on that.
-# ---------------------------------------------------------------------------
 
 comptime SOP_ADD = 0
 comptime SOP_MUL = 1
@@ -805,34 +712,6 @@ def _bin_dispatcher[
     return _raw_ret_none()
 
 
-def _unary_dispatcher[
-    op_code: Int
-](
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _unary_go[op_code](args[0], args[1], args[2], args[3], args[4])
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _unary_bool_dispatcher[
-    op_code: Int
-](
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _unary_bool_go[op_code](args[0], args[1], args[2], args[3], args[4])
-    except:
-        pass
-    return _raw_ret_none()
-
-
 def _scalar_dispatcher[
     op_code: Int
 ](
@@ -897,13 +776,14 @@ def _arange_dispatcher(
 # nothing is swallowed on spec paths.
 # ---------------------------------------------------------------------------
 
-# Dtypes the unary spec entries dispatch on for the "direct" (in-dtype) ops;
-# the transcendental ops gate down to FLOAT_DTYPES. No float64 (falls back
-# to the classic path, which handles it on the CPU device), no bool.
+# Dtypes the unary spec entries dispatch on for the "direct" (in-dtype) ops
+# and the bool-output ops; the transcendental ops gate down to FLOAT_DTYPES.
+# float64 works on the CPU device (the kernels comptime-refuse it on GPU).
 comptime SPEC_UNARY_DTYPES = [
     DType.float32,
     DType.float16,
     DType.bfloat16,
+    DType.float64,
     DType.int8,
     DType.int16,
     DType.int32,
@@ -1433,36 +1313,6 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
             _bin_dispatcher[OP_MIN],
             "Min",
             docstring="out = min(lhs, rhs) (contiguous, dtype dispatch)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_RELU],
-            "Relu",
-            docstring="out = max(x, 0) (contiguous, dtype dispatch)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_ABS],
-            "Abs",
-            docstring="out = abs(x) (contiguous, int/float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_NEG],
-            "Neg",
-            docstring="out = -x (contiguous, int/float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_SIGN],
-            "Sign",
-            docstring="out = sign(x) (contiguous, int/float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_bool_dispatcher[BUOP_ISNAN],
-            "IsNan",
-            docstring="out = (x != x) -> bool (contiguous, int/float)",
-        )
-        b.def_py_c_function(
-            _unary_bool_dispatcher[BUOP_LOGICAL_NOT],
-            "LogicalNot",
-            docstring="out = (x == 0) -> bool (contiguous, any dtype)",
         )
         b.def_py_c_function(
             _scalar_dispatcher[SOP_ADD],

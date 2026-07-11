@@ -333,17 +333,6 @@ def _try_binary(mojo_fn, lhs, rhs):
 
 
 @no_type_check
-def _try_unary(mojo_fn, x, dtypes=_COPYABLE_DTYPES):
-    a = _tc(x)
-    if a is None or a._dtype not in dtypes:
-        return None
-    out = _alloc(a._shape, a._dtype, a._device)
-    if out._numel > 0:
-        mojo_fn(out._ptr, a._ptr, out._numel, a._dtype.value, _ctx_ptr(a._device))
-    return out
-
-
-@no_type_check
 def _try_bool_and(lhs, rhs):
     """bool * bool (= logical AND) via the uint8 Mul kernel."""
     a = _tc(lhs)
@@ -876,12 +865,7 @@ def fast_aten_minimum(x, y):
 
 @no_type_check
 def fast_aten_relu(tensor):
-    result = _try_spec_unary("ReluSpec", tensor)
-    if result is None:
-        result = _try_unary(eager_kernels.elementwise_ops.Relu, tensor)
-    if result is not None:
-        return result
-    return NOT_HANDLED
+    return _unary_spec_op("ReluSpec", tensor)
 
 
 @no_type_check
@@ -907,56 +891,11 @@ def fast_aten_pow(x, y):
 # ---------------------------------------------------------------------------
 # Unary elementwise suite
 #
-# One generic `_try_unary` call per op. The float-only transcendentals (and
-# ceil/floor/gelu/sigmoid/silu) gate on `_FLOAT_DTYPES`; abs/neg/sign also
-# dispatch on the integer dtypes the kernel handles. isnan / logical_not go
-# through the unary-to-bool kernels and always produce a bool tensor.
+# Spec-only (no classic fallback, design doc §2.4): the spec entries cover
+# the full classic gates — float64 included (CPU device; the kernels
+# comptime-refuse f64 on GPU), strided inputs via Mojo-side temporaries,
+# int dtypes for the direct ops, bool via uint8 for the bool-output ops.
 # ---------------------------------------------------------------------------
-
-# abs/neg/sign accept the signed ints + uint8 the Neg/Abs/Sign kernels
-# dispatch on, plus the float dtypes (float64 works on the CPU device).
-_SIGNED_UNARY_DTYPES = _FLOAT_DTYPES + (
-    DType.float64,
-    DType.int8,
-    DType.int16,
-    DType.int32,
-    DType.int64,
-    DType.uint8,
-)
-
-# Dtypes the unary-to-bool kernels (IsNan / LogicalNot) dispatch on. bool
-# tensors are routed through their uint8 storage below.
-_BOOL_UNARY_DTYPES = _FLOAT_DTYPES + (
-    DType.float64,
-    DType.int8,
-    DType.int16,
-    DType.int32,
-    DType.int64,
-    DType.uint8,
-)
-
-
-@no_type_check
-def _try_unary_bool(mojo_fn, x):
-    """Unary op producing a bool tensor (isnan / logical_not)."""
-    a = _tc(x)
-    if a is None:
-        return None
-    kernel_dtype = DType.uint8 if a._dtype == DType.bool else a._dtype
-    if kernel_dtype not in _BOOL_UNARY_DTYPES:
-        return None
-    out = _alloc(a._shape, DType.bool, a._device)
-    if out._numel > 0:
-        mojo_fn(out._ptr, a._ptr, out._numel, kernel_dtype.value, _ctx_ptr(a._device))
-    return out
-
-
-@no_type_check
-def _unary_op(mojo_fn, x, dtypes=_FLOAT_DTYPES, spec=None):
-    result = _try_spec_unary(spec, x) if spec is not None else None
-    if result is None:
-        result = _try_unary(mojo_fn, x, dtypes)
-    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
@@ -970,23 +909,17 @@ def _unary_spec_op(spec, x):
 
 @no_type_check
 def fast_aten_abs(x):
-    return _unary_op(
-        eager_kernels.elementwise_ops.Abs, x, _SIGNED_UNARY_DTYPES, spec="AbsSpec"
-    )
+    return _unary_spec_op("AbsSpec", x)
 
 
 @no_type_check
 def fast_aten_neg(x):
-    return _unary_op(
-        eager_kernels.elementwise_ops.Neg, x, _SIGNED_UNARY_DTYPES, spec="NegSpec"
-    )
+    return _unary_spec_op("NegSpec", x)
 
 
 @no_type_check
 def fast_aten_sign(x):
-    return _unary_op(
-        eager_kernels.elementwise_ops.Sign, x, _SIGNED_UNARY_DTYPES, spec="SignSpec"
-    )
+    return _unary_spec_op("SignSpec", x)
 
 
 @no_type_check
@@ -1108,16 +1041,12 @@ def fast_aten_gelu(input, approximate="none"):
 @no_type_check
 def fast_aten_isnan(x):
     result = _try_spec_unary("IsNanSpec", x, DType.bool)
-    if result is None:
-        result = _try_unary_bool(eager_kernels.elementwise_ops.IsNan, x)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_logical_not(x):
     result = _try_spec_unary("LogicalNotSpec", x, DType.bool)
-    if result is None:
-        result = _try_unary_bool(eager_kernels.elementwise_ops.LogicalNot, x)
     return result if result is not None else NOT_HANDLED
 
 
