@@ -64,6 +64,7 @@ from op_utils import (
     _raw_ret_none,
     _raw_tuple_int,
     _raw_tuple_len,
+    _scratch_contig,
     _spec_ptr,
     _spec_result,
     _spec_unsupported,
@@ -2706,8 +2707,6 @@ def _matmul_spec_checks(
             supported = True
     if not supported:
         raise Error("mojo spec matmul: unsupported dtype ", a.dtype)
-    if not (a.contig and b.contig):
-        raise Error("mojo spec matmul: operands must be contiguous")
     if a.rank < 2 or b.rank != 2:
         raise Error("mojo spec matmul: bad ranks")
     var k = a.shape[MAX_RANK - 1]
@@ -2727,6 +2726,92 @@ def _matmul_spec_checks(
     return (m, n, k)
 
 
+@always_inline
+def _matmul_spec_launch(
+    dtype: DType,
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    bias_addr: Int,
+    has_bias: Bool,
+    batch: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    transpose_b: Int,
+    ctx: DeviceContext,
+) raises:
+    """The spec ops' tier launch over raw operand addresses. batch > 1 is
+    the bmm shape (no bias, no GEMV tier — mirrors the classic entries)."""
+    if has_bias:
+        _matmul_bias_run(
+            dtype, c_addr, a_addr, b_addr, bias_addr, m, n, k, transpose_b, ctx
+        )
+        return
+    if ctx.api() == "cpu":
+        _cpu_gemm_dtype_dispatch(
+            dtype, c_addr, a_addr, b_addr, batch, m, n, k, m * k,
+            transpose_b != 0, 0, 0, 0, 0, ctx,
+        )
+        return
+    if batch == 1 and m == 1:
+        _gemv_dtype_dispatch(dtype, c_addr, a_addr, b_addr, m, n, k, transpose_b, ctx)
+        return
+    _gemm_dtype_dispatch(
+        dtype, c_addr, a_addr, b_addr, batch, m, n, k, m * k,
+        transpose_b, 0, 0, 0, ctx,
+    )
+
+
+@always_inline
+def _matmul_spec_operands_launch(
+    a: TensorSpec,
+    b: TensorSpec,
+    bias_addr: Int,
+    has_bias: Bool,
+    c_addr: Int,
+    batch: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    transpose_b: Int,
+    ctx: DeviceContext,
+) raises:
+    """Launch with Mojo-side temporaries for strided operands: the hot
+    (contiguous) path is branch-only; a strided a/b materializes into a
+    scratch buffer that lives until its launch is enqueued."""
+    if a.contig and b.contig:
+        _matmul_spec_launch(
+            a.dtype, c_addr, a.ptr, b.ptr, bias_addr, has_bias,
+            batch, m, n, k, transpose_b, ctx,
+        )
+    elif a.contig:
+        var tmp_b = _scratch_contig(b, ctx)
+        _matmul_spec_launch(
+            a.dtype, c_addr, a.ptr, Int(tmp_b.unsafe_ptr()), bias_addr,
+            has_bias, batch, m, n, k, transpose_b, ctx,
+        )
+        _ = tmp_b^
+    elif b.contig:
+        var tmp_a = _scratch_contig(a, ctx)
+        _matmul_spec_launch(
+            a.dtype, c_addr, Int(tmp_a.unsafe_ptr()), b.ptr, bias_addr,
+            has_bias, batch, m, n, k, transpose_b, ctx,
+        )
+        _ = tmp_a^
+    else:
+        var tmp_a = _scratch_contig(a, ctx)
+        var tmp_b = _scratch_contig(b, ctx)
+        _matmul_spec_launch(
+            a.dtype, c_addr, Int(tmp_a.unsafe_ptr()),
+            Int(tmp_b.unsafe_ptr()), bias_addr, has_bias,
+            batch, m, n, k, transpose_b, ctx,
+        )
+        _ = tmp_a^
+        _ = tmp_b^
+
+
+
 def _matmul_spec_go(
     a_o: PyObjectPtr, b_o: PyObjectPtr, tb_o: PyObjectPtr
 ) raises -> PyObjectPtr:
@@ -2744,45 +2829,9 @@ def _matmul_spec_go(
     var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
     var addr = Int(buf.unsafe_ptr())
 
-    if ctx.api() == "cpu":
-        _cpu_gemm_dtype_dispatch(
-            a.dtype,
-            addr,
-            a.ptr,
-            b.ptr,
-            1,
-            m,
-            n,
-            k,
-            m * k,
-            transpose_b != 0,
-            0,
-            0,
-            0,
-            0,
-            ctx,
-        )
-    elif m == 1:
-        _gemv_dtype_dispatch(
-            a.dtype, addr, a.ptr, b.ptr, m, n, k, transpose_b, ctx
-        )
-    else:
-        _gemm_dtype_dispatch(
-            a.dtype,
-            addr,
-            a.ptr,
-            b.ptr,
-            1,
-            m,
-            n,
-            k,
-            m * k,
-            transpose_b,
-            0,
-            0,
-            0,
-            ctx,
-        )
+    _matmul_spec_operands_launch(
+        a, b, 0, False, addr, 1, m, n, k, transpose_b, ctx
+    )
 
     # out shape: a's leading dims with the last dim replaced by n.
     var oshape = a.shape
@@ -2825,8 +2874,6 @@ def _matmul_bias_spec_go(
     var m = geom[0]
     var n = geom[1]
     var k = geom[2]
-    if not bias.contig:
-        raise Error("mojo spec matmul: bias must be contiguous")
     if bias.dtype != a.dtype:
         raise Error("mojo spec matmul: bias dtype differs")
     if bias.rank != 1 or bias.numel != n:
@@ -2837,9 +2884,17 @@ def _matmul_bias_spec_go(
     var nbytes = numel * a.itemsize
     var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
     var addr = Int(buf.unsafe_ptr())
-    _matmul_bias_run(
-        a.dtype, addr, a.ptr, b.ptr, bias.ptr, m, n, k, transpose_b, ctx
-    )
+    if bias.contig:
+        _matmul_spec_operands_launch(
+            a, b, bias.ptr, True, addr, 1, m, n, k, transpose_b, ctx
+        )
+    else:
+        var tmp_bias = _scratch_contig(bias, ctx)
+        _matmul_spec_operands_launch(
+            a, b, Int(tmp_bias.unsafe_ptr()), True, addr, 1, m, n, k,
+            transpose_b, ctx,
+        )
+        _ = tmp_bias^
 
     var oshape = a.shape
     oshape[MAX_RANK - 1] = n
@@ -2884,8 +2939,6 @@ def _bmm_spec_go(
             supported = True
     if not supported:
         raise Error("mojo spec bmm: unsupported dtype ", a.dtype)
-    if not (a.contig and b.contig):
-        raise Error("mojo spec bmm: operands must be contiguous")
     if a.rank != 3 or b.rank != 3:
         raise Error("mojo spec bmm: rank != 3")
     var batch = a.shape[MAX_RANK - 3]
@@ -2911,41 +2964,9 @@ def _bmm_spec_go(
     var nbytes = numel * a.itemsize
     var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
     var addr = Int(buf.unsafe_ptr())
-    if ctx.api() == "cpu":
-        _cpu_gemm_dtype_dispatch(
-            a.dtype,
-            addr,
-            a.ptr,
-            b.ptr,
-            batch,
-            m,
-            n,
-            k,
-            m * k,
-            transpose_b != 0,
-            0,
-            0,
-            0,
-            0,
-            ctx,
-        )
-    else:
-        _gemm_dtype_dispatch(
-            a.dtype,
-            addr,
-            a.ptr,
-            b.ptr,
-            batch,
-            m,
-            n,
-            k,
-            m * k,
-            transpose_b,
-            0,
-            0,
-            0,
-            ctx,
-        )
+    _matmul_spec_operands_launch(
+        a, b, 0, False, addr, batch, m, n, k, transpose_b, ctx
+    )
 
     var oshape = IndexList[MAX_RANK](1)
     oshape[MAX_RANK - 3] = batch

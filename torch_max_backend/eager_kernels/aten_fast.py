@@ -2751,75 +2751,17 @@ def fast_aten__scaled_dot_product_efficient_attention(
 
 
 @no_type_check
-def _fast_matmul(a, b) -> TorchMojoTensor | None:
-    """C = A @ B for 2D contiguous same-dtype float tensors."""
-    if a is None or b is None:
-        return None
-    if a._device != b._device:
-        return None
-    if a._dtype != b._dtype or a._dtype not in _FLOAT_DTYPES:
-        return None
-    if len(a._shape) != 2 or len(b._shape) != 2:
-        return None
-    m, k = a._shape
-    k2, n = b._shape
-    if k != k2 or 0 in (m, n, k):
-        return None
-    out = _alloc((m, n), a._dtype, a._device)
-    eager_kernels.matmul_ops.Matmul(
-        out._ptr, a._ptr, b._ptr, (m, n, k, 0), a._dtype.value, _ctx_ptr(a._device)
-    )
-    return out
-
-
-@no_type_check
 def fast_aten_mm(x, y):
     out = _try_spec_matmul("MatmulSpec", (x, y), 0)
-    if out is not None:
-        return out
-    out = _fast_matmul(_tc(x), _tc(y))
-    if out is not None:
-        return out
-    return NOT_HANDLED
+    return out if out is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_addmm(input, mat1, mat2, *, beta=1.0, alpha=1.0):
+    # beta/alpha scaling isn't implemented by the fast path (falls through).
     if beta == 1 and alpha == 1:
         out = _try_spec_matmul("MatmulBiasSpec", (mat1, mat2, input), 0)
         if out is not None:
-            return out
-        bias = _tc(input)
-        a = _tc(mat1)
-        b = _tc(mat2)
-        if (
-            bias is not None
-            and a is not None
-            and b is not None
-            and len(bias._shape) == 1
-            and len(b._shape) == 2
-            and bias._shape[0] == b._shape[1]
-            and bias._dtype == a._dtype
-            and a._device == b._device
-            and a._dtype == b._dtype
-            and a._dtype in _FLOAT_DTYPES
-            and len(a._shape) == 2
-            and a._shape[1] == b._shape[0]
-            and 0 not in a._shape
-            and 0 not in b._shape
-        ):
-            m, k = a._shape
-            n = b._shape[1]
-            out = _alloc((m, n), a._dtype, a._device)
-            eager_kernels.matmul_ops.MatmulBias(
-                out._ptr,
-                a._ptr,
-                b._ptr,
-                bias._ptr,
-                (m, n, k, 0),
-                a._dtype.value,
-                _ctx_ptr(a._device),
-            )
             return out
     return NOT_HANDLED
 
@@ -2834,81 +2776,13 @@ def fast_aten_linear(input, weight, bias=None):
         out = _try_spec_matmul("MatmulSpec", (input, weight), 1)
     else:
         out = _try_spec_matmul("MatmulBiasSpec", (input, weight, bias), 1)
-    if out is not None:
-        return out
-    a = _tc(input)
-    w = _tc(weight)
-    if (
-        a is not None
-        and w is not None
-        and a._device == w._device
-        and a._dtype == w._dtype
-        and a._dtype in _FLOAT_DTYPES
-        and len(a._shape) >= 2
-        and len(w._shape) == 2
-        and a._shape[-1] == w._shape[1]
-        and 0 not in a._shape
-        and 0 not in w._shape
-    ):
-        n, k = w._shape
-        bias_t = None
-        if bias is not None:
-            bias_t = _tc(bias)
-            if (
-                bias_t is None
-                or bias_t._dtype != a._dtype
-                or tuple(bias_t._shape) != (n,)
-            ):
-                return NOT_HANDLED
-        m = a._numel // k
-        out_shape = tuple(a._shape[:-1]) + (n,)
-        out = _alloc(out_shape, a._dtype, a._device)
-        ctx = _ctx_ptr(a._device)
-        if bias_t is not None:
-            eager_kernels.matmul_ops.MatmulBias(
-                out._ptr, a._ptr, w._ptr, bias_t._ptr, (m, n, k, 1), a._dtype.value, ctx
-            )
-        else:
-            eager_kernels.matmul_ops.Matmul(
-                out._ptr, a._ptr, w._ptr, (m, n, k, 1), a._dtype.value, ctx
-            )
-        return out
-    return NOT_HANDLED
+    return out if out is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_bmm(input, mat2):
     out = _try_spec_matmul("BmmSpec", (input, mat2), 0)
-    if out is not None:
-        return out
-    a = _tc(input)
-    b = _tc(mat2)
-    if (
-        a is not None
-        and b is not None
-        and a._device == b._device
-        and a._dtype == b._dtype
-        and a._dtype in _FLOAT_DTYPES
-        and len(a._shape) == 3
-        and len(b._shape) == 3
-        and a._shape[0] == b._shape[0]
-        and a._shape[2] == b._shape[1]
-        and 0 not in a._shape
-        and 0 not in b._shape
-    ):
-        batch, m, k = a._shape
-        n = b._shape[2]
-        out = _alloc((batch, m, n), a._dtype, a._device)
-        eager_kernels.matmul_ops.Bmm(
-            out._ptr,
-            a._ptr,
-            b._ptr,
-            (batch, m, n, k, 0),
-            a._dtype.value,
-            _ctx_ptr(a._device),
-        )
-        return out
-    return NOT_HANDLED
+    return out if out is not None else NOT_HANDLED
 
 
 # ---------------------------------------------------------------------------
