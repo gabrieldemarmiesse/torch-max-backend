@@ -177,14 +177,38 @@ def _wrap_spec_result(result, dtype, device):
 
 @no_type_check
 def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
-    """Tensor-tensor broadcast binary through a logic_ops spec op, or None.
+    """Broadcast binary through a logic_ops spec op, or None.
 
-    `out_dtype` overrides the wrapper dtype for ops whose output dtype
-    differs from the operands' (comparisons/logical -> bool)."""
+    Python keeps what Python must do: either operand may be a scalar
+    (resolved to a 0-d stride-0 tensor of the other's dtype) and mixed
+    dtypes follow torch's promotion (`_promoted_pair`); the spec entry does
+    the rest of the prologue. rank>4 operands are pre-materialized (the
+    spec's flat path needs contiguity there). `out_dtype` overrides the
+    wrapper dtype for ops whose output differs (comparisons -> bool)."""
     a = _t(lhs)
     b = _t(rhs)
-    if a is None or b is None or a._dtype != b._dtype or a._device != b._device:
+    if a is not None and b is not None:
+        if a._device != b._device:
+            return None
+        if a._dtype != b._dtype:
+            pair = _promoted_pair(a, b)
+            if pair is None:
+                return None
+            a, b = pair
+    elif a is not None:
+        b = _resolve_scalar(rhs, a._dtype, a._device)
+        if b is None:
+            return None
+    elif b is not None:
+        # Scalar-first calls, e.g. rsub-style `1 - tensor`.
+        a = _resolve_scalar(lhs, b._dtype, b._device)
+        if a is None:
+            return None
+    else:
         return None
+    if len(a._shape) > 4 or len(b._shape) > 4:
+        a = _tc(a)
+        b = _tc(b)
     try:
         result = getattr(eager_kernels.logic_ops, spec_fn_name)(
             _spec_of(a), _spec_of(b)
@@ -308,52 +332,6 @@ def _copy_into(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
-def _try_binary(mojo_fn, lhs, rhs):
-    """Elementwise binary kernel on two contiguous same-shape tensors."""
-    a = _t(lhs)
-    b = _t(rhs)
-    if (
-        a is None
-        or b is None
-        or not a._is_contiguous
-        or not b._is_contiguous
-        or a._dtype not in _BINARY_DTYPES
-        or a._dtype != b._dtype
-        or a._shape != b._shape
-        or a._device != b._device
-    ):
-        return None
-    out = _alloc(a._shape, a._dtype, a._device)
-    if out._numel > 0:
-        mojo_fn(
-            out._ptr, a._ptr, b._ptr, out._numel, a._dtype.value, _ctx_ptr(a._device)
-        )
-    return out
-
-
-@no_type_check
-def _try_bool_and(lhs, rhs):
-    """bool * bool (= logical AND) via the uint8 Mul kernel."""
-    a = _tc(lhs)
-    b = _tc(rhs)
-    if (
-        a is None
-        or b is None
-        or a._dtype != DType.bool
-        or b._dtype != DType.bool
-        or a._shape != b._shape
-        or a._device != b._device
-    ):
-        return None
-    out = _alloc(a._shape, DType.bool, a._device)
-    if out._numel > 0:
-        eager_kernels.elementwise_ops.Mul(
-            out._ptr, a._ptr, b._ptr, out._numel, DType.uint8.value, _ctx_ptr(a._device)
-        )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Broadcast helpers for the strided kernels (logic_ops / WhereSelect).
 # Operands are described by the output's dims padded to rank 4 plus
@@ -458,29 +436,6 @@ def _resolve_scalar(value, dtype: DType, device) -> TorchMojoTensor | None:
 
 
 @no_type_check
-def _binary_operands(input, other):
-    """Resolve (lhs, rhs) TorchMojoTensors with equal dtypes for a broadcast
-    binary/comparison kernel. Either operand may be a Python scalar (which
-    becomes a 0-d stride-0 tensor of the tensor operand's dtype), or None
-    if unresolvable.
-    """
-    a = _t(input)
-    b = _t(other)
-    if a is not None and b is not None:
-        if a._device != b._device:
-            return None
-        return _promoted_pair(a, b)
-    if a is not None:
-        scalar = _resolve_scalar(other, a._dtype, a._device)
-        return None if scalar is None else (a, scalar)
-    if b is not None:
-        # Scalar-first calls, e.g. rsub-style `1 - tensor`.
-        scalar = _resolve_scalar(input, b._dtype, b._device)
-        return None if scalar is None else (scalar, b)
-    return None
-
-
-@no_type_check
 def _launch_bcast(kernel, out, operands, meta, dtype):
     out_shape, dims, strides = meta
     params = tuple(dims) + tuple(s for st in strides for s in st)
@@ -491,70 +446,6 @@ def _launch_bcast(kernel, out, operands, meta, dtype):
         dtype.value,
         _ctx_ptr(out._device),
     )
-
-
-@no_type_check
-def _try_binary_bcast(kernel_name, lhs, rhs):
-    """Broadcast-strided arithmetic on two operands (tensor or scalar)."""
-    pair = _binary_operands(lhs, rhs)
-    if pair is None:
-        return None
-    a, b = pair
-    if a._dtype not in _BCAST_DTYPES:
-        return None
-    if kernel_name == "DivBcast" and a._dtype not in _FLOAT_DTYPES:
-        return None
-    meta = _bcast_meta(a, b)
-    if meta is None:
-        return None
-    out = _alloc(meta[0], a._dtype, a._device)
-    if out._numel > 0:
-        _launch_bcast(
-            getattr(eager_kernels.logic_ops, kernel_name), out, (a, b), meta, a._dtype
-        )
-    return out
-
-
-@no_type_check
-def _try_cmp(kernel_name, input, other):
-    """Broadcast-strided comparison -> bool tensor, or None."""
-    pair = _binary_operands(input, other)
-    if pair is None:
-        return None
-    a, b = pair
-    dtype = DType.uint8 if a._dtype == DType.bool else a._dtype
-    if dtype not in _BCAST_DTYPES:
-        return None
-    meta = _bcast_meta(a, b)
-    if meta is None:
-        return None
-    out = _alloc(meta[0], DType.bool, a._device)
-    if out._numel > 0:
-        _launch_bcast(
-            getattr(eager_kernels.logic_ops, kernel_name), out, (a, b), meta, dtype
-        )
-    return out
-
-
-@no_type_check
-def _try_bitwise(kernel_name, input, other):
-    """Broadcast-strided bitwise op (bool via the uint8 dispatch), or None."""
-    pair = _binary_operands(input, other)
-    if pair is None:
-        return None
-    a, b = pair
-    if a._dtype not in _BITWISE_DTYPES:
-        return None
-    meta = _bcast_meta(a, b)
-    if meta is None:
-        return None
-    out = _alloc(meta[0], a._dtype, a._device)
-    dtype = DType.uint8 if a._dtype == DType.bool else a._dtype
-    if out._numel > 0:
-        _launch_bcast(
-            getattr(eager_kernels.logic_ops, kernel_name), out, (a, b), meta, dtype
-        )
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -582,17 +473,11 @@ def fast_aten_add(input, other, alpha=1):
         other = _scaled_operand(other, alpha)
         if other is None:
             return NOT_HANDLED
-    result = _try_spec_binary("AddSpec", input, other)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Add, input, other)
-    if result is None:
-        result = _try_spec_scalar("AddScalarSpec", input, other)
+    result = _try_spec_scalar("AddScalarSpec", input, other)
     if result is None:
         result = _try_spec_int_scalar("AddScalarIntSpec", input, other)
     if result is None:
-        result = _try_binary_bcast("AddBcast", input, other)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Add, _tc(input), _tc(other))
+        result = _try_spec_binary("AddSpec", input, other)
     if result is not None:
         return result
     return NOT_HANDLED
@@ -644,21 +529,14 @@ def fast_aten_sub(input, other, alpha=1):
         other = _scaled_operand(other, alpha)
         if other is None:
             return NOT_HANDLED
-    result = _try_spec_binary("SubSpec", input, other)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Sub, input, other)
-    if (
-        result is None
-        and isinstance(other, int | float)
-        and not isinstance(other, bool)
-    ):
+    result = None
+    if isinstance(other, int | float) and not isinstance(other, bool):
+        # sub-by-scalar reuses the AddScalar spec with a negated scalar.
         result = _try_spec_scalar("AddScalarSpec", input, -other)
         if result is None and isinstance(other, int):
             result = _try_spec_int_scalar("AddScalarIntSpec", input, -other)
     if result is None:
-        result = _try_binary_bcast("SubBcast", input, other)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Sub, _tc(input), _tc(other))
+        result = _try_spec_binary("SubSpec", input, other)
     if result is not None:
         return result
     return NOT_HANDLED
@@ -666,19 +544,11 @@ def fast_aten_sub(input, other, alpha=1):
 
 @no_type_check
 def fast_aten_mul(input, other):
-    result = _try_spec_binary("MulSpec", input, other)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Mul, input, other)
-    if result is None:
-        result = _try_bool_and(input, other)
-    if result is None:
-        result = _try_spec_scalar("MulScalarSpec", input, other)
+    result = _try_spec_scalar("MulScalarSpec", input, other)
     if result is None:
         result = _try_spec_int_scalar("MulScalarIntSpec", input, other)
     if result is None:
-        result = _try_binary_bcast("MulBcast", input, other)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Mul, _tc(input), _tc(other))
+        result = _try_spec_binary("MulSpec", input, other)
     if result is not None:
         return result
     return NOT_HANDLED
@@ -691,14 +561,6 @@ def fast_aten_div(input, other, *, rounding_mode=None):
     a = _t(input)
     if a is not None and a._dtype in _FLOAT_DTYPES:
         result = _try_spec_binary("DivSpec", input, other)
-        if result is None:
-            result = _try_binary(eager_kernels.elementwise_ops.Div, input, other)
-        if result is None:
-            result = _try_binary_bcast("DivBcast", input, other)
-        if result is None:
-            result = _try_binary(
-                eager_kernels.elementwise_ops.Div, _tc(input), _tc(other)
-            )
         if result is not None:
             return result
         return NOT_HANDLED
@@ -756,25 +618,13 @@ def fast_aten_fill__scalar(input, value):
 @no_type_check
 def fast_aten_maximum(x, y):
     result = _try_spec_binary("MaximumSpec", x, y)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Max, x, y)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Max, _tc(x), _tc(y))
-    if result is not None:
-        return result
-    return NOT_HANDLED
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_minimum(x, y):
     result = _try_spec_binary("MinimumSpec", x, y)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Min, x, y)
-    if result is None:
-        result = _try_binary(eager_kernels.elementwise_ops.Min, _tc(x), _tc(y))
-    if result is not None:
-        return result
-    return NOT_HANDLED
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
@@ -970,72 +820,54 @@ def fast_aten_logical_not(x):
 @no_type_check
 def fast_aten_eq(input, other):
     result = _try_spec_binary("EqSpec", input, other, DType.bool)
-    if result is None:
-        result = _try_cmp("EqBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_ne(input, other):
     result = _try_spec_binary("NeSpec", input, other, DType.bool)
-    if result is None:
-        result = _try_cmp("NeBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_lt(input, other):
     result = _try_spec_binary("LtSpec", input, other, DType.bool)
-    if result is None:
-        result = _try_cmp("LtBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_le(input, other):
     result = _try_spec_binary("LeSpec", input, other, DType.bool)
-    if result is None:
-        result = _try_cmp("LeBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_gt(input, other):
     result = _try_spec_binary("GtSpec", input, other, DType.bool)
-    if result is None:
-        result = _try_cmp("GtBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_ge(input, other):
     result = _try_spec_binary("GeSpec", input, other, DType.bool)
-    if result is None:
-        result = _try_cmp("GeBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_bitwise_and(input, other):
     result = _try_spec_binary("BitwiseAndSpec", input, other)
-    if result is None:
-        result = _try_bitwise("AndBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_bitwise_or(input, other):
     result = _try_spec_binary("BitwiseOrSpec", input, other)
-    if result is None:
-        result = _try_bitwise("OrBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
 def fast_aten_bitwise_xor(input, other):
     result = _try_spec_binary("BitwiseXorSpec", input, other)
-    if result is None:
-        result = _try_bitwise("XorBcast", input, other)
     return result if result is not None else NOT_HANDLED
 
 
@@ -1098,10 +930,6 @@ def fast_aten_isin(elements, test_elements, *, assume_unique=False, invert=False
 def fast_aten_remainder(input, other):
     # Divisor-signed remainder (Python/torch `%`), float and int dtypes.
     result = _try_spec_binary("RemainderSpec", input, other)
-    if result is None:
-        result = _try_binary_bcast("RemainderBcast", input, other)
-    if result is None:
-        result = _try_binary_bcast("RemainderBcast", _tc(input), _tc(other))
     return result if result is not None else NOT_HANDLED
 
 
@@ -1109,10 +937,6 @@ def fast_aten_remainder(input, other):
 def fast_aten_floor_divide(input, other):
     # floor(input / other), float and int dtypes.
     result = _try_spec_binary("FloorDivSpec", input, other)
-    if result is None:
-        result = _try_binary_bcast("FloorDivBcast", input, other)
-    if result is None:
-        result = _try_binary_bcast("FloorDivBcast", _tc(input), _tc(other))
     return result if result is not None else NOT_HANDLED
 
 
@@ -1124,52 +948,30 @@ def fast_aten_pow_tensor_tensor(input, exponent):
     if a is None or a._dtype not in _FLOAT_DTYPES:
         return NOT_HANDLED
     result = _try_spec_binary("PowSpec", input, exponent)
-    if result is None:
-        result = _try_binary_bcast("PowBcast", input, exponent)
-    if result is None:
-        result = _try_binary_bcast("PowBcast", _tc(input), _tc(exponent))
     return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
-def _try_logical(kernel_name, input, other):
-    """logical_and / logical_xor: bool output from any input dtype pair.
-
-    Same-dtype operands (in the bcast set) test nonzero-ness inline with no
-    materialization; mixed dtypes are cast to bool first (which also does the
-    nonzero test) and combined through the uint8 dispatch.
-    """
+def _try_logical(spec_fn_name, input, other):
+    """Mixed-dtype logical_and / logical_xor: reduce each operand to bool
+    (the nonzero test) via CastSpec, then the bool spec path (uint8
+    dispatch). Same-dtype pairs already went through the spec directly."""
     a = _t(input)
     b = _t(other)
     if a is None or b is None or a._device != b._device:
         return None
-    if a._dtype == b._dtype and a._dtype in _BCAST_DTYPES:
-        da, db, dtype = a, b, a._dtype
-    elif a._dtype == DType.bool and b._dtype == DType.bool:
-        da, db, dtype = a, b, DType.uint8
-    else:
-        # Mixed dtypes: reduce each to bool (nonzero test) via Cast.
-        if a._dtype not in _CAST_DTYPES or b._dtype not in _CAST_DTYPES:
-            return None
-        da = a if a._dtype == DType.bool else _cast_tensor(a, DType.bool)
-        db = b if b._dtype == DType.bool else _cast_tensor(b, DType.bool)
-        dtype = DType.uint8
-    meta = _bcast_meta(da, db)
-    if meta is None:
+    if a._dtype not in _CAST_DTYPES or b._dtype not in _CAST_DTYPES:
         return None
-    out = _alloc(meta[0], DType.bool, a._device)
-    if out._numel > 0:
-        _launch_bcast(
-            getattr(eager_kernels.logic_ops, kernel_name), out, (da, db), meta, dtype
-        )
-    return out
+    da = a if a._dtype == DType.bool else _cast_tensor(a, DType.bool)
+    db = b if b._dtype == DType.bool else _cast_tensor(b, DType.bool)
+    return _try_spec_binary(spec_fn_name, da, db, DType.bool)
 
 
 @no_type_check
 def fast_aten_logical_and(input, other):
     result = _try_spec_binary("LogicalAndSpec", input, other, DType.bool)
     if result is None:
-        result = _try_logical("LogicalAndBcast", input, other)
+        result = _try_logical("LogicalAndSpec", input, other)
     return result if result is not None else NOT_HANDLED
 
 
@@ -1177,7 +979,7 @@ def fast_aten_logical_and(input, other):
 def fast_aten_logical_xor(input, other):
     result = _try_spec_binary("LogicalXorSpec", input, other, DType.bool)
     if result is None:
-        result = _try_logical("LogicalXorBcast", input, other)
+        result = _try_logical("LogicalXorSpec", input, other)
     return result if result is not None else NOT_HANDLED
 
 
@@ -1265,6 +1067,27 @@ def fast_aten_addcmul(self, tensor1, tensor2, value=1):
 @no_type_check
 def fast_aten_addcdiv(self, tensor1, tensor2, value=1):
     return _try_addc("AddcdivBcast", self, tensor1, tensor2, value, False)
+
+
+@no_type_check
+def _binary_operands(input, other):
+    """Resolve (lhs, rhs) TorchMojoTensors with equal dtypes for the ternary
+    broadcast kernels (where / masked_fill). Either operand may be a Python
+    scalar (which becomes a 0-d stride-0 tensor of the tensor operand's
+    dtype), or None if unresolvable."""
+    a = _t(input)
+    b = _t(other)
+    if a is not None and b is not None:
+        if a._device != b._device:
+            return None
+        return _promoted_pair(a, b)
+    if a is not None:
+        scalar = _resolve_scalar(other, a._dtype, a._device)
+        return None if scalar is None else (a, scalar)
+    if b is not None:
+        scalar = _resolve_scalar(input, b._dtype, b._device)
+        return None if scalar is None else (scalar, b)
+    return None
 
 
 @no_type_check

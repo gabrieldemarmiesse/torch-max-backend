@@ -478,6 +478,22 @@ def _parallel_for[
 
 
 @always_inline
+def _parallel_for_dt[
+    dtype: DType,
+    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None,
+](count: Int, ctx: DeviceContext) raises:
+    """`_parallel_for` with the float64-on-GPU comptime guard: the f64 GPU
+    instantiation is never compiled (mirrors the elementwise kernels' own
+    guard), so dtype lists may include float64 for the CPU device."""
+    comptime if dtype == DType.float64:
+        if ctx.api() != "cpu":
+            raise Error("float64 is not supported on GPU")
+        elementwise[func, simd_width=1](Coord(count), ctx)
+    else:
+        _parallel_for[func](count, ctx)
+
+
+@always_inline
 def _copy_strided[
     dtype: DType
 ](

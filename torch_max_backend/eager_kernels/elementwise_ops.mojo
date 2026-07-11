@@ -1149,31 +1149,6 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
             docstring="out = lhs + rhs (contiguous, dtype dispatch)",
         )
         b.def_py_c_function(
-            _bin_dispatcher[OP_SUB],
-            "Sub",
-            docstring="out = lhs - rhs (contiguous, dtype dispatch)",
-        )
-        b.def_py_c_function(
-            _bin_dispatcher[OP_MUL],
-            "Mul",
-            docstring="out = lhs * rhs (contiguous, dtype dispatch)",
-        )
-        b.def_py_c_function(
-            _bin_dispatcher[OP_DIV],
-            "Div",
-            docstring="out = lhs / rhs (contiguous, dtype dispatch)",
-        )
-        b.def_py_c_function(
-            _bin_dispatcher[OP_MAX],
-            "Max",
-            docstring="out = max(lhs, rhs) (contiguous, dtype dispatch)",
-        )
-        b.def_py_c_function(
-            _bin_dispatcher[OP_MIN],
-            "Min",
-            docstring="out = min(lhs, rhs) (contiguous, dtype dispatch)",
-        )
-        b.def_py_c_function(
             _arange_dispatcher,
             "Arange",
             docstring="out[i] = start + i * step (contiguous, int/float)",
