@@ -886,22 +886,12 @@ def fast_aten_relu(tensor):
 
 @no_type_check
 def fast_aten_exp(input):
-    result = _try_spec_unary("ExpSpec", input)
-    if result is None:
-        result = _try_unary(eager_kernels.elementwise_ops.Exp, input, _FLOAT_DTYPES)
-    if result is not None:
-        return result
-    return NOT_HANDLED
+    return _unary_spec_op("ExpSpec", input)
 
 
 @no_type_check
 def fast_aten_tanh(x):
-    result = _try_spec_unary("TanhSpec", x)
-    if result is None:
-        result = _try_unary(eager_kernels.elementwise_ops.Tanh, x, _FLOAT_DTYPES)
-    if result is not None:
-        return result
-    return NOT_HANDLED
+    return _unary_spec_op("TanhSpec", x)
 
 
 @no_type_check
@@ -970,6 +960,15 @@ def _unary_op(mojo_fn, x, dtypes=_FLOAT_DTYPES, spec=None):
 
 
 @no_type_check
+def _unary_spec_op(spec, x):
+    """Float-only unary with no classic fallback: the spec entry provably
+    covers the classic gate (_FLOAT_DTYPES, strided via Mojo-side
+    temporaries), so the classic chain was deleted (design doc §2.4)."""
+    result = _try_spec_unary(spec, x)
+    return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
 def fast_aten_abs(x):
     return _unary_op(
         eager_kernels.elementwise_ops.Abs, x, _SIGNED_UNARY_DTYPES, spec="AbsSpec"
@@ -1004,7 +1003,7 @@ def fast_aten_ceil(x):
     result = _int_unary_identity(x)
     if result is not None:
         return result
-    return _unary_op(eager_kernels.elementwise_ops.Ceil, x, spec="CeilSpec")
+    return _unary_spec_op("CeilSpec", x)
 
 
 @no_type_check
@@ -1012,98 +1011,98 @@ def fast_aten_floor(x):
     result = _int_unary_identity(x)
     if result is not None:
         return result
-    return _unary_op(eager_kernels.elementwise_ops.Floor, x, spec="FloorSpec")
+    return _unary_spec_op("FloorSpec", x)
 
 
 @no_type_check
 def fast_aten_acos(x):
-    return _unary_op(eager_kernels.elementwise_ops.Acos, x, spec="AcosSpec")
+    return _unary_spec_op("AcosSpec", x)
 
 
 @no_type_check
 def fast_aten_asinh(x):
-    return _unary_op(eager_kernels.elementwise_ops.Asinh, x, spec="AsinhSpec")
+    return _unary_spec_op("AsinhSpec", x)
 
 
 @no_type_check
 def fast_aten_atanh(x):
-    return _unary_op(eager_kernels.elementwise_ops.Atanh, x, spec="AtanhSpec")
+    return _unary_spec_op("AtanhSpec", x)
 
 
 @no_type_check
 def fast_aten_cos(x):
-    return _unary_op(eager_kernels.elementwise_ops.Cos, x, spec="CosSpec")
+    return _unary_spec_op("CosSpec", x)
 
 
 @no_type_check
 def fast_aten_cosh(x):
-    return _unary_op(eager_kernels.elementwise_ops.Cosh, x, spec="CoshSpec")
+    return _unary_spec_op("CoshSpec", x)
 
 
 @no_type_check
 def fast_aten_erf(x):
-    return _unary_op(eager_kernels.elementwise_ops.Erf, x, spec="ErfSpec")
+    return _unary_spec_op("ErfSpec", x)
 
 
 @no_type_check
 def fast_aten_log(x):
-    return _unary_op(eager_kernels.elementwise_ops.Log, x, spec="LogSpec")
+    return _unary_spec_op("LogSpec", x)
 
 
 @no_type_check
 def fast_aten_log1p(x):
-    return _unary_op(eager_kernels.elementwise_ops.Log1p, x, spec="Log1pSpec")
+    return _unary_spec_op("Log1pSpec", x)
 
 
 @no_type_check
 def fast_aten_reciprocal(x):
-    return _unary_op(eager_kernels.elementwise_ops.Reciprocal, x, spec="ReciprocalSpec")
+    return _unary_spec_op("ReciprocalSpec", x)
 
 
 @no_type_check
 def fast_aten_rsqrt(x):
-    return _unary_op(eager_kernels.elementwise_ops.Rsqrt, x, spec="RsqrtSpec")
+    return _unary_spec_op("RsqrtSpec", x)
 
 
 @no_type_check
 def fast_aten_sigmoid(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sigmoid, x, spec="SigmoidSpec")
+    return _unary_spec_op("SigmoidSpec", x)
 
 
 @no_type_check
 def fast_aten_silu(x):
-    return _unary_op(eager_kernels.elementwise_ops.Silu, x, spec="SiluSpec")
+    return _unary_spec_op("SiluSpec", x)
 
 
 @no_type_check
 def fast_aten_sin(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sin, x, spec="SinSpec")
+    return _unary_spec_op("SinSpec", x)
 
 
 @no_type_check
 def fast_aten_sinh(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sinh, x, spec="SinhSpec")
+    return _unary_spec_op("SinhSpec", x)
 
 
 @no_type_check
 def fast_aten_sqrt(x):
-    return _unary_op(eager_kernels.elementwise_ops.Sqrt, x, spec="SqrtSpec")
+    return _unary_spec_op("SqrtSpec", x)
 
 
 @no_type_check
 def fast_aten_tan(x):
-    return _unary_op(eager_kernels.elementwise_ops.Tan, x, spec="TanSpec")
+    return _unary_spec_op("TanSpec", x)
 
 
 @no_type_check
 def fast_aten_gelu(input, approximate="none"):
     if approximate == "none":
-        fn, spec = eager_kernels.elementwise_ops.GeluNone, "GeluNoneSpec"
+        spec = "GeluNoneSpec"
     elif approximate == "tanh":
-        fn, spec = eager_kernels.elementwise_ops.GeluTanh, "GeluTanhSpec"
+        spec = "GeluTanhSpec"
     else:
         return NOT_HANDLED
-    return _unary_op(fn, input, spec=spec)
+    return _unary_spec_op(spec, input)
 
 
 @no_type_check

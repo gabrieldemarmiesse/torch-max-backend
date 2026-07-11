@@ -1440,16 +1440,6 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
             docstring="out = max(x, 0) (contiguous, dtype dispatch)",
         )
         b.def_py_c_function(
-            _unary_dispatcher[UOP_EXP],
-            "Exp",
-            docstring="out = exp(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_TANH],
-            "Tanh",
-            docstring="out = tanh(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
             _unary_dispatcher[UOP_ABS],
             "Abs",
             docstring="out = abs(x) (contiguous, int/float dtypes)",
@@ -1463,106 +1453,6 @@ def PyInit_elementwise_ops() abi("C") -> PythonObject:
             _unary_dispatcher[UOP_SIGN],
             "Sign",
             docstring="out = sign(x) (contiguous, int/float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_CEIL],
-            "Ceil",
-            docstring="out = ceil(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_FLOOR],
-            "Floor",
-            docstring="out = floor(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_ACOS],
-            "Acos",
-            docstring="out = acos(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_ASINH],
-            "Asinh",
-            docstring="out = asinh(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_ATANH],
-            "Atanh",
-            docstring="out = atanh(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_COS],
-            "Cos",
-            docstring="out = cos(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_COSH],
-            "Cosh",
-            docstring="out = cosh(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_ERF],
-            "Erf",
-            docstring="out = erf(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_LOG],
-            "Log",
-            docstring="out = log(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_LOG1P],
-            "Log1p",
-            docstring="out = log1p(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_RECIPROCAL],
-            "Reciprocal",
-            docstring="out = 1/x (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_RSQRT],
-            "Rsqrt",
-            docstring="out = 1/sqrt(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_SIGMOID],
-            "Sigmoid",
-            docstring="out = sigmoid(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_SILU],
-            "Silu",
-            docstring="out = x*sigmoid(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_SIN],
-            "Sin",
-            docstring="out = sin(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_SINH],
-            "Sinh",
-            docstring="out = sinh(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_SQRT],
-            "Sqrt",
-            docstring="out = sqrt(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_TAN],
-            "Tan",
-            docstring="out = tan(x) (contiguous, float dtypes)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_GELU_NONE],
-            "GeluNone",
-            docstring="out = gelu(x) exact erf form (contiguous, float)",
-        )
-        b.def_py_c_function(
-            _unary_dispatcher[UOP_GELU_TANH],
-            "GeluTanh",
-            docstring="out = gelu(x) tanh approximation (contiguous, float)",
         )
         b.def_py_c_function(
             _unary_bool_dispatcher[BUOP_ISNAN],
