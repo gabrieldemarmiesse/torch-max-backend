@@ -925,8 +925,16 @@ def _rowred_spec_go[
     var pstrides = IndexList[MAX_RANK](0)
     var needs_copy = False
     _reduce_spec_geom(
-        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
-        pstrides, needs_copy,
+        a,
+        rdims_t,
+        keepdim_o,
+        rows,
+        cols,
+        out_rank,
+        oshape,
+        pshape,
+        pstrides,
+        needs_copy,
     )
 
     var ctx = a.ctx()
@@ -995,8 +1003,16 @@ def _argmin_spec_go(
     var pstrides = IndexList[MAX_RANK](0)
     var needs_copy = False
     _reduce_spec_geom(
-        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
-        pstrides, needs_copy,
+        a,
+        rdims_t,
+        keepdim_o,
+        rows,
+        cols,
+        out_rank,
+        oshape,
+        pshape,
+        pstrides,
+        needs_copy,
     )
 
     var ctx = a.ctx()
@@ -1057,8 +1073,16 @@ def _min_dim_spec_go(
     var pstrides = IndexList[MAX_RANK](0)
     var needs_copy = False
     _reduce_spec_geom(
-        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
-        pstrides, needs_copy,
+        a,
+        rdims_t,
+        keepdim_o,
+        rows,
+        cols,
+        out_rank,
+        oshape,
+        pshape,
+        pstrides,
+        needs_copy,
     )
 
     var ctx = a.ctx()
@@ -1144,8 +1168,16 @@ def _var_spec_go(
     var pstrides = IndexList[MAX_RANK](0)
     var needs_copy = False
     _reduce_spec_geom(
-        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
-        pstrides, needs_copy,
+        a,
+        rdims_t,
+        keepdim_o,
+        rows,
+        cols,
+        out_rank,
+        oshape,
+        pshape,
+        pstrides,
+        needs_copy,
     )
 
     var ctx = a.ctx()
@@ -1212,8 +1244,16 @@ def _anyall_spec_go[
     var pstrides = IndexList[MAX_RANK](0)
     var needs_copy = False
     _reduce_spec_geom(
-        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
-        pstrides, needs_copy,
+        a,
+        rdims_t,
+        keepdim_o,
+        rows,
+        cols,
+        out_rank,
+        oshape,
+        pshape,
+        pstrides,
+        needs_copy,
     )
     var ctx = a.ctx()
     var nbytes = rows  # bool output

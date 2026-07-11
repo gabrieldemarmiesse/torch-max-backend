@@ -585,6 +585,7 @@ def _scratch_contig(
         a.ptr, a.shape, a.strides, a.rank, a.numel, a.itemsize, ctx
     )
 
+
 @always_inline
 def _reduce_spec_geom(
     a: TensorSpec,

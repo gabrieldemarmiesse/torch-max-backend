@@ -2750,16 +2750,43 @@ def _matmul_spec_launch(
         return
     if ctx.api() == "cpu":
         _cpu_gemm_dtype_dispatch(
-            dtype, c_addr, a_addr, b_addr, batch, m, n, k, m * k,
-            transpose_b != 0, 0, 0, 0, 0, ctx,
+            dtype,
+            c_addr,
+            a_addr,
+            b_addr,
+            batch,
+            m,
+            n,
+            k,
+            m * k,
+            transpose_b != 0,
+            0,
+            0,
+            0,
+            0,
+            ctx,
         )
         return
     if batch == 1 and m == 1:
-        _gemv_dtype_dispatch(dtype, c_addr, a_addr, b_addr, m, n, k, transpose_b, ctx)
+        _gemv_dtype_dispatch(
+            dtype, c_addr, a_addr, b_addr, m, n, k, transpose_b, ctx
+        )
         return
     _gemm_dtype_dispatch(
-        dtype, c_addr, a_addr, b_addr, batch, m, n, k, m * k,
-        transpose_b, 0, 0, 0, ctx,
+        dtype,
+        c_addr,
+        a_addr,
+        b_addr,
+        batch,
+        m,
+        n,
+        k,
+        m * k,
+        transpose_b,
+        0,
+        0,
+        0,
+        ctx,
     )
 
 
@@ -2782,34 +2809,72 @@ def _matmul_spec_operands_launch(
     scratch buffer that lives until its launch is enqueued."""
     if a.contig and b.contig:
         _matmul_spec_launch(
-            a.dtype, c_addr, a.ptr, b.ptr, bias_addr, has_bias,
-            batch, m, n, k, transpose_b, ctx,
+            a.dtype,
+            c_addr,
+            a.ptr,
+            b.ptr,
+            bias_addr,
+            has_bias,
+            batch,
+            m,
+            n,
+            k,
+            transpose_b,
+            ctx,
         )
     elif a.contig:
         var tmp_b = _scratch_contig(b, ctx)
         _matmul_spec_launch(
-            a.dtype, c_addr, a.ptr, Int(tmp_b.unsafe_ptr()), bias_addr,
-            has_bias, batch, m, n, k, transpose_b, ctx,
+            a.dtype,
+            c_addr,
+            a.ptr,
+            Int(tmp_b.unsafe_ptr()),
+            bias_addr,
+            has_bias,
+            batch,
+            m,
+            n,
+            k,
+            transpose_b,
+            ctx,
         )
         _ = tmp_b^
     elif b.contig:
         var tmp_a = _scratch_contig(a, ctx)
         _matmul_spec_launch(
-            a.dtype, c_addr, Int(tmp_a.unsafe_ptr()), b.ptr, bias_addr,
-            has_bias, batch, m, n, k, transpose_b, ctx,
+            a.dtype,
+            c_addr,
+            Int(tmp_a.unsafe_ptr()),
+            b.ptr,
+            bias_addr,
+            has_bias,
+            batch,
+            m,
+            n,
+            k,
+            transpose_b,
+            ctx,
         )
         _ = tmp_a^
     else:
         var tmp_a = _scratch_contig(a, ctx)
         var tmp_b = _scratch_contig(b, ctx)
         _matmul_spec_launch(
-            a.dtype, c_addr, Int(tmp_a.unsafe_ptr()),
-            Int(tmp_b.unsafe_ptr()), bias_addr, has_bias,
-            batch, m, n, k, transpose_b, ctx,
+            a.dtype,
+            c_addr,
+            Int(tmp_a.unsafe_ptr()),
+            Int(tmp_b.unsafe_ptr()),
+            bias_addr,
+            has_bias,
+            batch,
+            m,
+            n,
+            k,
+            transpose_b,
+            ctx,
         )
         _ = tmp_a^
         _ = tmp_b^
-
 
 
 def _matmul_spec_go(
@@ -2891,8 +2956,17 @@ def _matmul_bias_spec_go(
     else:
         var tmp_bias = _scratch_contig(bias, ctx)
         _matmul_spec_operands_launch(
-            a, b, Int(tmp_bias.unsafe_ptr()), True, addr, 1, m, n, k,
-            transpose_b, ctx,
+            a,
+            b,
+            Int(tmp_bias.unsafe_ptr()),
+            True,
+            addr,
+            1,
+            m,
+            n,
+            k,
+            transpose_b,
+            ctx,
         )
         _ = tmp_bias^
 

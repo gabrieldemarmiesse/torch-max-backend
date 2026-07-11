@@ -2315,8 +2315,16 @@ def _mean_spec_go(
     var pstrides = IndexList[MAX_RANK](0)
     var needs_copy = False
     _reduce_spec_geom(
-        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
-        pstrides, needs_copy,
+        a,
+        rdims_t,
+        keepdim_o,
+        rows,
+        cols,
+        out_rank,
+        oshape,
+        pshape,
+        pstrides,
+        needs_copy,
     )
     if cols == 0:
         raise Error("mojo spec mean: empty reduce dim")
@@ -2385,8 +2393,16 @@ def _max_spec_go(
     var pstrides = IndexList[MAX_RANK](0)
     var needs_copy = False
     _reduce_spec_geom(
-        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
-        pstrides, needs_copy,
+        a,
+        rdims_t,
+        keepdim_o,
+        rows,
+        cols,
+        out_rank,
+        oshape,
+        pshape,
+        pstrides,
+        needs_copy,
     )
 
     var ctx = a.ctx()
@@ -2453,8 +2469,16 @@ def _argmax_spec_go(
     var pstrides = IndexList[MAX_RANK](0)
     var needs_copy = False
     _reduce_spec_geom(
-        a, rdims_t, keepdim_o, rows, cols, out_rank, oshape, pshape,
-        pstrides, needs_copy,
+        a,
+        rdims_t,
+        keepdim_o,
+        rows,
+        cols,
+        out_rank,
+        oshape,
+        pshape,
+        pstrides,
+        needs_copy,
     )
 
     var ctx = a.ctx()

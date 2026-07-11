@@ -739,7 +739,6 @@ def _binary_spec_go[
     if a.ctx_ptr != b.ctx_ptr:
         raise Error("mojo spec binary: operands on different devices")
 
-
     # Kernel dispatch dtype: bool operands are read through uint8
     # (bit-compatible; torch bool is one byte holding 0/1). Only comparisons,
     # logical combinators and bitwise ops accept bool operands.
