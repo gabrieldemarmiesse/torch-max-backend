@@ -179,43 +179,86 @@ def _wrap_spec_result(result, dtype, device):
 def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
     """Broadcast binary through a logic_ops spec op, or None.
 
-    Python keeps what Python must do: either operand may be a scalar
-    (resolved to a 0-d stride-0 tensor of the other's dtype) and mixed
-    dtypes follow torch's promotion (`_promoted_pair`); the spec entry does
-    the rest of the prologue. rank>4 operands are pre-materialized (the
-    spec's flat path needs contiguity there). `out_dtype` overrides the
-    wrapper dtype for ops whose output differs (comparisons -> bool)."""
+    Python keeps what Python must do — scalar embedding, torch's promotion
+    rules, dim-spec sanity — but the intermediates stay spec-to-spec: a
+    scalar operand becomes a 0-d FillSpec result and a promoted operand a
+    CastSpec result whose SPECS feed the binary entry directly. No wrapper
+    is minted for them; their holders live in locals until the launch is
+    enqueued (the stream-ordered free then lands after the kernel).
+    rank>4 operands are pre-materialized (the spec's flat path needs
+    contiguity there). `out_dtype` overrides the wrapper dtype for ops
+    whose output differs (comparisons -> bool)."""
     a = _t(lhs)
     b = _t(rhs)
+    spec_a = spec_b = None
+    keep_a = keep_b = None
     if a is not None and b is not None:
         if a._device != b._device:
             return None
+        device = a._device
+        dtype = a._dtype
+        if len(a._shape) > 4 or len(b._shape) > 4:
+            a = _tc(a)
+            b = _tc(b)
         if a._dtype != b._dtype:
-            pair = _promoted_pair(a, b)
-            if pair is None:
+            # torch's promotion rules (the only pairs the loops hit).
+            if a._dtype == DType.bool and b._dtype in _CAST_DTYPES:
+                cast_a, dtype = True, b._dtype
+            elif b._dtype == DType.bool and a._dtype in _CAST_DTYPES:
+                cast_a, dtype = False, a._dtype
+            elif a._dtype == DType.int32 and b._dtype == DType.int64:
+                cast_a, dtype = True, DType.int64
+            elif a._dtype == DType.int64 and b._dtype == DType.int32:
+                cast_a, dtype = False, DType.int64
+            else:
                 return None
-            a, b = pair
+            try:
+                if cast_a:
+                    keep_a, spec_a, _, _ = eager_kernels.data_movement_ops.CastSpec(
+                        _spec_of(a), dtype.value
+                    )
+                else:
+                    keep_b, spec_b, _, _ = eager_kernels.data_movement_ops.CastSpec(
+                        _spec_of(b), dtype.value
+                    )
+            except Exception:
+                return None
     elif a is not None:
-        b = _resolve_scalar(rhs, a._dtype, a._device)
-        if b is None:
+        device = a._device
+        dtype = a._dtype
+        value = _scalar_embed(rhs, dtype)
+        if value is None:
+            return None
+        try:
+            keep_b, spec_b, _, _ = eager_kernels.elementwise_ops.FillSpec(
+                _pad8((), 1), 0, 1, value, dtype.value, _ctx_ptr(device)
+            )
+        except Exception:
             return None
     elif b is not None:
         # Scalar-first calls, e.g. rsub-style `1 - tensor`.
-        a = _resolve_scalar(lhs, b._dtype, b._device)
-        if a is None:
+        device = b._device
+        dtype = b._dtype
+        value = _scalar_embed(lhs, dtype)
+        if value is None:
+            return None
+        try:
+            keep_a, spec_a, _, _ = eager_kernels.elementwise_ops.FillSpec(
+                _pad8((), 1), 0, 1, value, dtype.value, _ctx_ptr(device)
+            )
+        except Exception:
             return None
     else:
         return None
-    if len(a._shape) > 4 or len(b._shape) > 4:
-        a = _tc(a)
-        b = _tc(b)
     try:
         result = getattr(eager_kernels.logic_ops, spec_fn_name)(
-            _spec_of(a), _spec_of(b)
+            spec_a if spec_a is not None else _spec_of(a),
+            spec_b if spec_b is not None else _spec_of(b),
         )
     except Exception:
         return None
-    return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
+    _ = keep_a, keep_b  # intermediates must outlive the enqueued launch
+    return _wrap_spec_result(result, out_dtype or dtype, device)
 
 
 @no_type_check
@@ -415,9 +458,9 @@ def _promoted_pair(a: TorchMojoTensor, b: TorchMojoTensor):
 
 
 @no_type_check
-def _resolve_scalar(value, dtype: DType, device) -> TorchMojoTensor | None:
-    """A 0-d stride-0 tensor holding a Python scalar in `dtype`, or None
-    when the value doesn't embed losslessly."""
+def _scalar_embed(value, dtype: DType) -> float | None:
+    """`value` validated for lossless embedding into `dtype`, as a float,
+    or None."""
     if not isinstance(value, int | float):
         return None
     if dtype not in _FILL_DTYPES:
@@ -432,7 +475,17 @@ def _resolve_scalar(value, dtype: DType, device) -> TorchMojoTensor | None:
     elif dtype not in _FLOAT_DTYPES + (DType.float64,):
         # float scalar against an int tensor promotes in torch; not handled.
         return None
-    return _scalar_tensor_0d(value, dtype, device)
+    return float(value)
+
+
+@no_type_check
+def _resolve_scalar(value, dtype: DType, device) -> TorchMojoTensor | None:
+    """A 0-d stride-0 tensor holding a Python scalar in `dtype`, or None
+    when the value doesn't embed losslessly."""
+    v = _scalar_embed(value, dtype)
+    if v is None:
+        return None
+    return _scalar_tensor_0d(v, dtype, device)
 
 
 @no_type_check
@@ -954,17 +1007,34 @@ def fast_aten_pow_tensor_tensor(input, exponent):
 @no_type_check
 def _try_logical(spec_fn_name, input, other):
     """Mixed-dtype logical_and / logical_xor: reduce each operand to bool
-    (the nonzero test) via CastSpec, then the bool spec path (uint8
-    dispatch). Same-dtype pairs already went through the spec directly."""
+    (the nonzero test) spec-to-spec via CastSpec, then the bool spec path
+    (uint8 dispatch). Same-dtype pairs already went through the spec
+    directly; no wrappers are minted for the bool intermediates."""
     a = _t(input)
     b = _t(other)
     if a is None or b is None or a._device != b._device:
         return None
     if a._dtype not in _CAST_DTYPES or b._dtype not in _CAST_DTYPES:
         return None
-    da = a if a._dtype == DType.bool else _cast_tensor(a, DType.bool)
-    db = b if b._dtype == DType.bool else _cast_tensor(b, DType.bool)
-    return _try_spec_binary(spec_fn_name, da, db, DType.bool)
+    keep_a = keep_b = None
+    try:
+        if a._dtype == DType.bool:
+            spec_a = _spec_of(a)
+        else:
+            keep_a, spec_a, _, _ = eager_kernels.data_movement_ops.CastSpec(
+                _spec_of(a), DType.bool.value
+            )
+        if b._dtype == DType.bool:
+            spec_b = _spec_of(b)
+        else:
+            keep_b, spec_b, _, _ = eager_kernels.data_movement_ops.CastSpec(
+                _spec_of(b), DType.bool.value
+            )
+        result = getattr(eager_kernels.logic_ops, spec_fn_name)(spec_a, spec_b)
+    except Exception:
+        return None
+    _ = keep_a, keep_b  # intermediates must outlive the enqueued launch
+    return _wrap_spec_result(result, DType.bool, a._device)
 
 
 @no_type_check
