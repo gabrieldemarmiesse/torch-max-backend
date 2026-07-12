@@ -5,6 +5,7 @@ The only ressources I could find on the subject are:
 - https://docs.pytorch.org/docs/stable/torch.compiler_ir.html
 """
 
+import contextvars
 import functools
 import itertools
 import math
@@ -88,6 +89,24 @@ def torch_device_to_max_device(x: torch.device) -> DeviceRef:
             return DeviceRef.GPU(device.id)  # Use the actual GPU ID
     else:
         return max_device_ref(x)
+
+
+# The fx node currently being converted to MAX ops, set by the compiler's
+# handle_call_function. Lets multi-output mappings check which outputs are
+# actually consumed (e.g. native_layer_norm's mean/rstd are dead in
+# inference graphs, enabling the fused kernel).
+CURRENT_FX_NODE: contextvars.ContextVar = contextvars.ContextVar(
+    "CURRENT_FX_NODE", default=None
+)
+
+
+def _only_first_output_used() -> bool:
+    node = CURRENT_FX_NODE.get()
+    if node is None:
+        return False
+    return all(
+        user.target is operator.getitem and user.args[1] == 0 for user in node.users
+    )
 
 
 # Ops that need to be decomposed.
@@ -2794,7 +2813,21 @@ def aten_native_layer_norm(
     weight: MaxTensor | None,
     bias: MaxTensor | None,
     eps: float,
-) -> tuple[MaxTensor, MaxTensor, MaxTensor]:
+) -> tuple[MaxTensor, MaxTensor | None, MaxTensor | None]:
+    # Fused MAX kernel for the common last-dim case. The two aten_mean
+    # reductions below lower to a generic reduction kernel that costs
+    # ~150us per launch on GPU (7.5ms/step on gpt2 decode, 73% of GPU
+    # time). Only usable when the mean/rstd outputs are dead (inference
+    # graphs after DCE), since the fused kernel doesn't expose the
+    # statistics.
+    if (
+        len(normalized_shape) == 1
+        and weight is not None
+        and bias is not None
+        and _only_first_output_used()
+    ):
+        return max_ops.layer_norm(input, weight, bias, eps), None, None
+
     # Layer norm normalizes over the last len(normalized_shape) dimensions
     axis_to_reduce = list(
         range(len(input.shape) - len(normalized_shape), len(input.shape))

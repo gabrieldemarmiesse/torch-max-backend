@@ -632,6 +632,35 @@ def test_lifted_tensor_constant(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_compiled_input_buffer_cache(device: str):
+    """Compiled graph inputs are converted to MAX buffers once and cached
+    by tensor identity. In-place updates alias the same memory and must be
+    visible; swapping the storage (`t.data = ...`) must invalidate."""
+
+    def fn(x, w):
+        return x @ w
+
+    compiled = torch.compile(fn, backend=max_backend, fullgraph=True)
+    x = torch.randn(2, 3, device=device)
+    w = torch.randn(3, 4, device=device)
+    torch.testing.assert_close(
+        compiled(x, w).cpu(), x.cpu() @ w.cpu(), rtol=1e-2, atol=1e-3
+    )
+
+    # Same tensor objects, mutated in place: the cached buffer aliases them.
+    with torch.no_grad():
+        w += 1.0
+    torch.testing.assert_close(
+        compiled(x, w).cpu(), x.cpu() @ w.cpu(), rtol=1e-2, atol=1e-3
+    )
+
+    # Storage swap: the data pointer guard must drop the cached buffer.
+    w.data = torch.randn(3, 4, device=device)
+    torch.testing.assert_close(
+        compiled(x, w).cpu(), x.cpu() @ w.cpu(), rtol=1e-2, atol=1e-3
+    )
+
+
 def test_bitwise_and_0d_operand(device: str):
     def fn(a, b):
         return a & b

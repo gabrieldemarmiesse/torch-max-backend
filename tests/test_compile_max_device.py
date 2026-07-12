@@ -135,6 +135,26 @@ def test_compile_shape_int_output(max_device):
     assert_close_cpu(out, x.cpu() + 1.0)
 
 
+def test_compile_input_mutated_between_calls(max_device):
+    """The cross-call buffer cache aliases input memory: in-place updates
+    between calls (optimizer-step pattern) must be visible to the graph."""
+
+    def fn(x, w):
+        return x @ w
+
+    compiled = torch.compile(fn, backend=max_backend, fullgraph=True)
+    x = torch.randn(2, 3, device=max_device)
+    w = torch.randn(3, 4, device=max_device)
+    torch.testing.assert_close(
+        compiled(x, w).cpu(), x.cpu() @ w.cpu(), rtol=1e-2, atol=1e-3
+    )
+    with torch.no_grad():
+        w += 1.0
+    torch.testing.assert_close(
+        compiled(x, w).cpu(), x.cpu() @ w.cpu(), rtol=1e-2, atol=1e-3
+    )
+
+
 def test_compile_lifted_constant(max_device):
     """A tensor constant created inside the compiled function: dynamo lifts
     the real mojo tensor via aten::lift_fresh, which FakeTensorMode must

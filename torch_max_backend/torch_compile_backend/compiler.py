@@ -1,5 +1,6 @@
 import time
 import traceback
+import weakref
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -16,6 +17,7 @@ from max.graph import ops as max_ops
 from torch._dynamo.backends.common import aot_autograd
 
 from torch_max_backend.aten_functions import (
+    CURRENT_FX_NODE,
     DECOMPOSITION_TABLE,
     torch_device_to_max_device,
 )
@@ -75,19 +77,6 @@ def gather_stats_on_graph(gm: torch.fx.GraphModule):
     print("Function call counts:")
     for name, count in sorted_counts:
         print(f"{name}: {count}")
-
-
-def keep_only_tensors(
-    inputs: list[int | float | torch.Tensor] | tuple[int | float | torch.Tensor, ...],
-    detach: bool = False,
-) -> list[torch.Tensor]:
-    result = []
-    for x in inputs:
-        if isinstance(x, torch.Tensor):
-            if detach:
-                x = x.detach()
-            result.append(x)
-    return result
 
 
 class TensorsBook:
@@ -303,7 +292,11 @@ class _GraphFactory:
             )
         try:
             mapping_func = MAPPING_TORCH_ATEN_TO_MAX[key]
-            func_output = mapping_func(*func_args, **func_kwargs)
+            token = CURRENT_FX_NODE.set(node)
+            try:
+                func_output = mapping_func(*func_args, **func_kwargs)
+            finally:
+                CURRENT_FX_NODE.reset(token)
         except Exception as e:
             raise MaxCompilerError(
                 get_error_message(node, node_idx, func_args, func_kwargs)
@@ -504,9 +497,9 @@ class BaseMaxCompiler:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
             start_inference_time = time.time_ns()
-        input_tensors = keep_only_tensors(args, detach=True)
-        # convert to max tensors
-        input_tensors = [fast_from_dlpack(x) for x in input_tensors]
+        input_tensors = [
+            _cached_buffer_for(x) for x in args if isinstance(x, torch.Tensor)
+        ]
         outputs = self.model.execute(*input_tensors)
         if self.mojo_outputs:
             # The graph computes on the mojo device: adopt the MAX output
@@ -537,6 +530,40 @@ class BaseMaxCompiler:
             )
             print(f"Running the Max graph in {inference_duration}")
         return result
+
+
+# Cross-call Buffer cache. Graph inputs are dominated by parameters, which
+# are the SAME tensor objects on every call of a compiled graph; converting
+# each of them through DLPack every call costs ~10-20us per tensor. Cache
+# the imported Buffer keyed by tensor identity, guarded by the data pointer
+# (catches storage reallocation, e.g. `param.data = ...`), evicted when the
+# tensor dies. Buffers alias the tensor memory, so in-place updates
+# (optimizer steps) are seen without invalidation.
+_buffer_cache: dict[int, tuple] = {}
+
+
+def _evict_buffer(tensor_id: int) -> None:
+    _buffer_cache.pop(tensor_id, None)
+
+
+def _data_ptr_of(t: torch.Tensor) -> int:
+    ptr = getattr(t, "_ptr", None)  # TorchMojoTensor
+    if ptr is not None:
+        return ptr
+    return t.data_ptr()
+
+
+def _cached_buffer_for(t: torch.Tensor):
+    key = id(t)
+    entry = _buffer_cache.get(key)
+    if entry is not None:
+        buffer, ptr, _finalizer = entry
+        if ptr == _data_ptr_of(t):
+            return buffer
+    buffer = fast_from_dlpack(t.detach())
+    finalizer = weakref.finalize(t, _evict_buffer, key)
+    _buffer_cache[key] = (buffer, _data_ptr_of(t), finalizer)
+    return buffer
 
 
 def boxed_func(*args, **kwargs):
