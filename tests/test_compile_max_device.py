@@ -1,0 +1,227 @@
+"""torch.compile with tensors on the mojo (max_device) eager device.
+
+The max_backend path compiles the traced graph to a single MAX graph and
+feeds/adopts mojo tensor memory zero-copy via DLPack. The stock dynamo
+backends ("eager", "aot_eager") execute the traced graph through the
+eager mojo kernels instead.
+"""
+
+import gc
+
+import max.driver
+import pytest
+import torch
+
+from torch_max_backend import TorchMojoTensor, max_backend, register_max_devices
+
+pytestmark = pytest.mark.xdist_group(name="group1")
+
+
+@pytest.fixture(autouse=True)
+def setup_max_device():
+    register_max_devices()
+
+
+def assert_close_cpu(out, ref, rtol=1e-4, atol=1e-4):
+    assert isinstance(out, TorchMojoTensor)
+    assert out.device.type == "mojo"
+    assert out.dtype == ref.dtype
+    torch.testing.assert_close(out.cpu(), ref, rtol=rtol, atol=atol)
+
+
+def test_compile_elementwise(max_device):
+    def fn(x, y):
+        return torch.relu(x * y + 1.0) - x
+
+    x = torch.randn(4, 8, device=max_device)
+    y = torch.randn(4, 8, device=max_device)
+    out = torch.compile(fn, backend=max_backend, fullgraph=True)(x, y)
+    assert_close_cpu(out, fn(x.cpu(), y.cpu()))
+
+
+def test_compile_matmul(max_device):
+    def fn(x, y):
+        return torch.relu(x @ y + 1.0)
+
+    x = torch.randn(4, 8, device=max_device)
+    y = torch.randn(8, 16, device=max_device)
+    out = torch.compile(fn, backend=max_backend, fullgraph=True)(x, y)
+    # Loose tolerance: MAX uses tf32-style matmul on GPU.
+    assert_close_cpu(out, fn(x.cpu(), y.cpu()), rtol=1e-2, atol=1e-2)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.int32])
+def test_compile_dtypes(max_device, dtype):
+    def fn(x, y):
+        return x + y * 2
+
+    if dtype.is_floating_point:
+        x = torch.randn(4, 8, device=max_device, dtype=dtype)
+        y = torch.randn(4, 8, device=max_device, dtype=dtype)
+    else:
+        x = torch.arange(32, device=max_device, dtype=dtype).reshape(4, 8)
+        y = torch.arange(32, device=max_device, dtype=dtype).reshape(4, 8)
+    out = torch.compile(fn, backend=max_backend, fullgraph=True)(x, y)
+    assert_close_cpu(out, fn(x.cpu(), y.cpu()), rtol=1e-2, atol=1e-2)
+
+
+def test_compile_non_contiguous_input(max_device):
+    def fn(x):
+        return x + 1.0
+
+    x = torch.randn(4, 8, device=max_device)
+    out = torch.compile(fn, backend=max_backend, fullgraph=True)(x.t())
+    assert_close_cpu(out, fn(x.cpu().t()))
+
+
+def test_compile_multiple_outputs(max_device):
+    def fn(x):
+        a = x + 1.0
+        return a, None, a.t(), x.sum()
+
+    x = torch.randn(4, 8, device=max_device)
+    outs = torch.compile(fn, backend=max_backend, fullgraph=True)(x)
+    refs = fn(x.cpu())
+    assert outs[1] is None
+    for out, ref in zip([outs[0], outs[2], outs[3]], [refs[0], refs[2], refs[3]]):
+        assert_close_cpu(out, ref)
+
+
+def test_compile_output_feeds_eager_ops(max_device):
+    """Compiled outputs adopt MAX buffers zero-copy; eager kernels must be
+    able to consume them directly."""
+
+    def fn(x):
+        return x * 2.0
+
+    x = torch.randn(4, 8, device=max_device)
+    out = torch.compile(fn, backend=max_backend, fullgraph=True)(x)
+    eager_result = (out + 1.0).sum()
+    assert_close_cpu(eager_result, (x.cpu() * 2.0 + 1.0).sum())
+
+
+def test_compile_nn_module(max_device):
+    torch.manual_seed(0)
+    model = torch.nn.Sequential(
+        torch.nn.Linear(8, 16), torch.nn.ReLU(), torch.nn.Linear(16, 4)
+    )
+    x = torch.randn(3, 8)
+    ref = model(x)
+    model_dev = model.to(max_device)
+    compiled = torch.compile(model_dev, backend=max_backend, fullgraph=True)
+    out = compiled(x.to(max_device))
+    assert_close_cpu(out, ref.detach(), rtol=1e-2, atol=1e-2)
+
+
+def test_compile_dynamic_shapes(max_device):
+    def fn(x):
+        return torch.relu(x) * 2.0
+
+    compiled = torch.compile(fn, backend=max_backend, fullgraph=True)
+    # The second call (new shape) triggers a recompile with dynamic dims.
+    for n in (4, 5, 6):
+        x = torch.randn(n, 3, device=max_device)
+        assert_close_cpu(compiled(x), fn(x.cpu()))
+
+
+def test_compile_shape_int_output(max_device):
+    def fn(x):
+        return x + 1.0, x.shape[0] * 2
+
+    compiled = torch.compile(fn, backend=max_backend, fullgraph=True, dynamic=True)
+    x = torch.randn(7, 3, device=max_device)
+    out, dim = compiled(x)
+    assert dim == 14
+    assert_close_cpu(out, x.cpu() + 1.0)
+
+
+def test_compile_factory_function(max_device):
+    def fn(x, device):
+        return x + torch.ones(4, 8, device=device)
+
+    x = torch.randn(4, 8, device=max_device)
+    out = torch.compile(fn, backend=max_backend, fullgraph=True)(x, max_device)
+    assert_close_cpu(out, x.cpu() + torch.ones(4, 8))
+
+
+def test_compile_device_attribute_graph_breaks(max_device):
+    """Reading `x.device` in compiled code hits TorchMojoTensor's custom
+    `device` property, which dynamo cannot trace (fullgraph=True would
+    raise). With graph breaks allowed the function still runs correctly."""
+
+    def fn(x):
+        return x + torch.ones(4, 8, device=x.device)
+
+    x = torch.randn(4, 8, device=max_device)
+    out = torch.compile(fn, backend=max_backend)(x)
+    assert_close_cpu(out, x.cpu() + torch.ones(4, 8))
+
+
+def test_compile_backward(max_device):
+    def fn(x, w):
+        return ((x @ w).relu() ** 2).sum()
+
+    x = torch.randn(4, 8, device=max_device)
+    w = torch.randn(8, 3, device=max_device, requires_grad=True)
+    loss = torch.compile(fn, backend=max_backend, fullgraph=True)(x, w)
+    loss.backward()
+    assert isinstance(w.grad, TorchMojoTensor)
+    assert w.grad.device.type == "mojo"
+
+    x_cpu = x.cpu().detach()
+    w_cpu = w.cpu().detach().requires_grad_(True)
+    fn(x_cpu, w_cpu).backward()
+    torch.testing.assert_close(w.grad.cpu(), w_cpu.grad, rtol=2e-2, atol=2e-3)
+
+
+def test_compile_recompiles_for_cpu_inputs(max_device):
+    """The same compiled function serves mojo and cpu inputs (device guard)."""
+
+    def fn(x):
+        return x * 3.0
+
+    compiled = torch.compile(fn, backend=max_backend, fullgraph=True)
+    x = torch.randn(4, 8)
+    out_mojo = compiled(x.to(max_device))
+    out_cpu = compiled(x)
+    assert isinstance(out_mojo, TorchMojoTensor)
+    assert not isinstance(out_cpu, TorchMojoTensor)
+    assert out_cpu.device.type == "cpu"
+    torch.testing.assert_close(out_mojo.cpu(), out_cpu)
+
+
+def test_compile_eager_backend(max_device):
+    """Dynamo-only backend: the traced graph runs through the eager kernels."""
+
+    def fn(x):
+        return x * 3.0 - 1.0
+
+    x = torch.randn(4, 8, device=max_device)
+    out = torch.compile(fn, backend="eager", fullgraph=True)(x)
+    assert_close_cpu(out, fn(x.cpu()))
+
+
+def test_compile_aot_eager_backend(max_device):
+    """aot_eager runs the functionalized aten graph through the eager kernels."""
+
+    def fn(x, y):
+        return torch.relu(x @ y + 1.0)
+
+    x = torch.randn(4, 8, device=max_device)
+    y = torch.randn(8, 16, device=max_device)
+    out = torch.compile(fn, backend="aot_eager", fullgraph=True)(x, y)
+    assert_close_cpu(out, fn(x.cpu(), y.cpu()), rtol=1e-2, atol=1e-2)
+
+
+def test_dlpack_export_keeps_memory_alive(max_device):
+    """The DLPack capsule must pin the mojo allocation for the consumer."""
+    x = torch.arange(100, device=max_device, dtype=torch.float32)
+    expected = x.cpu()
+    buffer = max.driver.Buffer.from_dlpack(x)
+    del x
+    gc.collect()
+    # Churn some allocations to surface use-after-free if the pin is broken.
+    for _ in range(4):
+        _ = torch.randn(100, device=max_device)
+    roundtrip = torch.from_dlpack(buffer.to(max.driver.CPU()))
+    torch.testing.assert_close(roundtrip, expected)

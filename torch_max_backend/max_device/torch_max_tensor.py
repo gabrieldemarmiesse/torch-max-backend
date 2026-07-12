@@ -261,6 +261,43 @@ class TorchMojoTensor(torch.Tensor):
         """self if already contiguous, else a materialized copy."""
         return self if self._is_contiguous else self._materialize_contiguous()
 
+    @no_type_check
+    def __dlpack__(self, *, stream=None, **_unused):
+        """Export the device allocation as a "dltensor" capsule.
+
+        torch's inherited `__dlpack__` would export the zero-byte meta
+        storage; this override exports the real allocation described by the
+        Python-side metadata. Non-contiguous tensors are materialized first,
+        and the capsule pins the (materialized) tensor's holder. `stream` is
+        ignored: producers and consumers share the device's default stream
+        (the same assumption the eager kernels make).
+        """
+        from torch_max_backend.max_device import dlpack
+
+        src = self._contig()
+        return dlpack.make_capsule(
+            src._holder, src._ptr, src._shape, src._dtype, src._device
+        )
+
+    @no_type_check
+    def __dlpack_device__(self):
+        from torch_max_backend.max_device import dlpack
+
+        return dlpack.dlpack_device(self._device)
+
+    @no_type_check
+    def __coerce_same_metadata_as_tangent__(self, expected_meta, expected_type=None):
+        """Accept mojo tensors as backward tangents under torch.compile.
+
+        AOTAutograd guesses tangent types from fake tensors, which are plain
+        `torch.Tensor`s, and rejects runtime tangents of unexpected types
+        unless this hook coerces them. A mojo tensor behaves exactly like a
+        plain tensor for dispatch purposes, so no conversion is needed.
+        """
+        if expected_type not in (None, torch.Tensor):
+            return None
+        return self
+
     def __repr__(self):
         if hasattr(self, "_holder"):
             return f"TorchMojoTensor({self._to_cpu_tensor()!r}, device='{self.device}')"

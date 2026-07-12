@@ -10,7 +10,7 @@ import max.graph.value
 import torch
 from functorch.compile import make_boxed_func
 from max import engine
-from max.experimental.torch.torch import max_device_ref, torch_dtype_to_max
+from max.experimental.torch.torch import torch_dtype_to_max
 from max.graph import DeviceRef, Graph, KernelLibrary
 from max.graph import ops as max_ops
 from torch._dynamo.backends.common import aot_autograd
@@ -223,7 +223,8 @@ class _GraphFactory:
     def get_max_device(self, tensor: torch.Tensor) -> DeviceRef:
         if self.force_device is not None:
             return self.force_device
-        return max_device_ref(tensor.device)
+        # torch_device_to_max_device also handles the eager "mojo" device.
+        return torch_device_to_max_device(tensor.device)
 
     def handle_placeholder(self, node: torch.fx.Node):
         if node.name in self.replace_inputs:
@@ -395,9 +396,59 @@ class _GraphFactory:
         return self.graph, output_blueprint
 
 
+def _graph_uses_mojo_device(gm: torch.fx.GraphModule, example_inputs: list) -> bool:
+    """Whether this graph computes on the eager "mojo" device.
+
+    Checked at compile time (inputs may be fake tensors; factory-only graphs
+    have no tensor inputs, so node metas are scanned too) to decide how the
+    MAX output buffers must be wrapped at runtime.
+    """
+    for t in example_inputs:
+        if isinstance(t, torch.Tensor) and t.device.type == "mojo":
+            return True
+    for node in gm.graph.nodes:
+        val = node.meta.get("val", node.meta.get("example_value"))
+        if isinstance(val, torch.Tensor) and val.device.type == "mojo":
+            return True
+    return False
+
+
+def _mojo_tensor_from_buffer(buffer: max.driver.Buffer) -> torch.Tensor:
+    """Zero-copy wrap of a MAX output buffer as an eager mojo tensor.
+
+    The buffer itself becomes the wrapper's ownership token (`_holder`):
+    MAX buffers release their device memory when the last Python reference
+    drops, exactly like the eager TensorHolder.
+    """
+    from torch_max_backend.max_device.torch_max_tensor import (
+        TorchMojoTensor,
+        _row_major_strides,
+    )
+
+    shape = tuple(buffer.shape)
+    return TorchMojoTensor._make(
+        buffer,
+        buffer._data_ptr(),
+        shape,
+        _row_major_strides(shape),
+        0,
+        buffer.dtype,
+        buffer.device,
+        contiguous=True,
+    )
+
+
+def _dim_buffer_to_cpu_tensor(buffer: max.driver.Buffer) -> torch.Tensor:
+    """A DIM output as a CPU torch tensor (works without a CUDA-enabled torch)."""
+    if buffer.device.label != "cpu":
+        buffer = buffer.to(max.driver.CPU())
+    return torch.from_dlpack(buffer)
+
+
 class BaseMaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         self.gm = gm
+        self.mojo_outputs = _graph_uses_mojo_device(gm, example_inputs)
         if profiling_enabled():
             compiler_start = time.time_ns()
         if verbose_enabled():
@@ -443,7 +494,23 @@ class BaseMaxCompiler:
         # convert to max tensors
         input_tensors = [fast_from_dlpack(x) for x in input_tensors]
         outputs = self.model.execute(*input_tensors)
-        tensor_outputs = [torch.from_dlpack(x) for x in outputs]
+        if self.mojo_outputs:
+            # The graph computes on the mojo device: adopt the MAX output
+            # buffers zero-copy as eager mojo tensors (DIM outputs become
+            # CPU tensors, `.item()`-ed in reconstruct_from_blueprint).
+            dim_indices = {
+                index
+                for kind, index in self.output_blueprint
+                if kind is OutputBlueprintKind.DIM
+            }
+            tensor_outputs = [
+                _dim_buffer_to_cpu_tensor(x)
+                if i in dim_indices
+                else _mojo_tensor_from_buffer(x)
+                for i, x in enumerate(outputs)
+            ]
+        else:
+            tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
         debug.debug_graph_if_required(self.gm, args)
 

@@ -351,7 +351,6 @@ def test_custom_module_with_seqential(max_device):
     function_equivalent_on_both_devices(run_module, max_device, rtol=1e-3, atol=1e-3)
 
 
-@pytest.mark.xfail(reason="Fixme")
 def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)
     def do_sqrt(device):
