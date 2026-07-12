@@ -87,6 +87,25 @@ def _torch_dtype_of(dtype):
     return td
 
 
+# max.driver.Device -> torch.device, cached like _TORCH_DTYPE_OF. Computed
+# once per wrapper created so the `device` property is a plain attribute
+# read — which also lets dynamo trace `x.device` inside compiled functions
+# (the property body must not construct max.driver objects).
+_TORCH_DEVICE_OF: dict = {}
+
+
+@no_type_check
+def _torch_device_of(device):
+    td = _TORCH_DEVICE_OF.get(device)
+    if td is None:
+        if device == CPU():
+            td = torch_max_device_module.cpu()
+        else:
+            td = torch.device(f"mojo:{device.id}")
+        _TORCH_DEVICE_OF[device] = td
+    return td
+
+
 # Strided kernels take shapes/strides padded to rank 8 with LEADING entries.
 MAX_RANK = 8
 
@@ -139,6 +158,7 @@ class TorchMojoTensor(torch.Tensor):
         res._itemsize = dtype.size_in_bytes
         res._numel = math.prod(shape)
         res._device = device
+        res._torch_device = _torch_device_of(device)
         res._is_contiguous = (
             _compute_contiguous(shape, strides) if contiguous is None else contiguous
         )
@@ -305,10 +325,10 @@ class TorchMojoTensor(torch.Tensor):
 
     @property
     def device(self):
-        if hasattr(self, "_device"):
-            if self._device == CPU():
-                return torch_max_device_module.cpu()
-            return torch.device(f"mojo:{self._device.id}")
+        # A plain attribute read so dynamo can trace `x.device` in compiled
+        # functions (e.g. `torch.arange(T, device=idx.device)`).
+        if hasattr(self, "_torch_device"):
+            return self._torch_device
         return super().device
 
     __torch_function__ = torch._C._disabled_torch_function_impl

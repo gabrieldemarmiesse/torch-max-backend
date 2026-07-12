@@ -144,16 +144,16 @@ def test_compile_factory_function(max_device):
     assert_close_cpu(out, x.cpu() + torch.ones(4, 8))
 
 
-def test_compile_device_attribute_graph_breaks(max_device):
-    """Reading `x.device` in compiled code hits TorchMojoTensor's custom
-    `device` property, which dynamo cannot trace (fullgraph=True would
-    raise). With graph breaks allowed the function still runs correctly."""
+def test_compile_device_attribute(max_device):
+    """Reading `x.device` in compiled code (the ubiquitous
+    `torch.arange(T, device=idx.device)` pattern) traces through
+    TorchMojoTensor's `device` property without a graph break."""
 
     def fn(x):
         return x + torch.ones(4, 8, device=x.device)
 
     x = torch.randn(4, 8, device=max_device)
-    out = torch.compile(fn, backend=max_backend)(x)
+    out = torch.compile(fn, backend=max_backend, fullgraph=True)(x)
     assert_close_cpu(out, x.cpu() + torch.ones(4, 8))
 
 
@@ -211,6 +211,53 @@ def test_compile_aot_eager_backend(max_device):
     y = torch.randn(8, 16, device=max_device)
     out = torch.compile(fn, backend="aot_eager", fullgraph=True)(x, y)
     assert_close_cpu(out, fn(x.cpu(), y.cpu()), rtol=1e-2, atol=1e-2)
+
+
+class _MiniAttentionBlock(torch.nn.Module):
+    """Attention + MLP block exercising embeddings, layernorm, views,
+    transposes, masked softmax and matmuls in one compiled graph."""
+
+    def __init__(self, vocab=64, n_embd=32, n_head=4, block_size=16):
+        super().__init__()
+        self.tok = torch.nn.Embedding(vocab, n_embd)
+        self.pos = torch.nn.Embedding(block_size, n_embd)
+        self.ln = torch.nn.LayerNorm(n_embd)
+        self.c_attn = torch.nn.Linear(n_embd, 3 * n_embd)
+        self.head = torch.nn.Linear(n_embd, vocab, bias=False)
+        self.n_head = n_head
+        self.n_embd = n_embd
+        mask = torch.tril(torch.ones(block_size, block_size))
+        self.register_buffer("mask", mask.view(1, 1, block_size, block_size))
+
+    def forward(self, idx):
+        B, T = idx.size()
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
+        x = self.tok(idx) + self.pos(pos.unsqueeze(0))
+        h = self.ln(x)
+        q, k, v = self.c_attn(h).split(self.n_embd, dim=2)
+        C = self.n_embd
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / (C // self.n_head) ** 0.5)
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        att = torch.softmax(att, dim=-1)
+        y = (att @ v).transpose(1, 2).contiguous().view(B, T, C)
+        return self.head(x + y)
+
+
+def test_compile_attention_block(max_device):
+    torch.manual_seed(0)
+    model = _MiniAttentionBlock()
+    model.eval()
+    idx = torch.randint(0, 64, (2, 12))
+    with torch.no_grad():
+        ref = model(idx)
+    model_dev = model.to(max_device)
+    compiled = torch.compile(model_dev, backend=max_backend, fullgraph=True)
+    with torch.no_grad():
+        out = compiled(idx.to(max_device))
+    assert_close_cpu(out, ref, rtol=2e-2, atol=2e-3)
 
 
 def test_dlpack_export_keeps_memory_alive(max_device):
