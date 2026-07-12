@@ -135,6 +135,31 @@ def test_compile_shape_int_output(max_device):
     assert_close_cpu(out, x.cpu() + 1.0)
 
 
+def test_compile_lifted_constant(max_device):
+    """A tensor constant created inside the compiled function: dynamo lifts
+    the real mojo tensor via aten::lift_fresh, which FakeTensorMode must
+    accept and the graph factory must bake in as a MAX constant."""
+
+    def fn(x):
+        return x + torch.tensor([1.0, 2.0, 3.0], device=x.device)
+
+    x = torch.randn(2, 3, device=max_device)
+    out = torch.compile(fn, backend=max_backend, fullgraph=True)(x)
+    assert_close_cpu(out, x.cpu() + torch.tensor([1.0, 2.0, 3.0]))
+
+
+def test_compile_symint_arithmetic(max_device):
+    """Symbolic dims used as scalars in tensor arithmetic (dynamic shapes)."""
+
+    def fn(x):
+        return torch.relu(x) + x.shape[0]
+
+    compiled = torch.compile(fn, backend=max_backend, fullgraph=True)
+    for n in (4, 5, 6):
+        x = torch.randn(n, 3, device=max_device)
+        assert_close_cpu(compiled(x), fn(x.cpu()))
+
+
 def test_compile_factory_function(max_device):
     def fn(x, device):
         return x + torch.ones(4, 8, device=device)

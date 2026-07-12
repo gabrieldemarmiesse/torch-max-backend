@@ -316,7 +316,21 @@ class _GraphFactory:
         self.tensor_book[node.name] = func_output
 
     def handle_get_attr(self, node: torch.fx.Node):
-        attr_value = fetch_attr(self.graph, node.target)
+        attr_value = fetch_attr(node.graph.owning_module, node.target)
+        if isinstance(attr_value, torch.Tensor):
+            # A tensor constant embedded in the graph (e.g. dynamo's
+            # lift_fresh of a torch.tensor(...) created inside the traced
+            # function). Bake it into the MAX graph as a constant. The
+            # compiler runs under AOTAutograd's fake mode, which must not
+            # intercept the reads of the real constant.
+            from torch._subclasses.fake_tensor import unset_fake_temporarily
+
+            device = self.get_max_device(attr_value)
+            with unset_fake_temporarily():
+                host = attr_value.detach().cpu()
+                attr_value = max_ops.constant(
+                    host, dtype=torch_dtype_to_max(host.dtype), device=device
+                )
         self.tensor_book[node.name] = attr_value
 
     def handle_output(

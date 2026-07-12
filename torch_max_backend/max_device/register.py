@@ -11,13 +11,22 @@ def _declare_mojo_tensor_as_plain_tensor():
     torch.compile treats TorchMojoTensor as a plain tensor everywhere
     (it has no __torch_dispatch__/__torch_function__ behavior; all backend
     logic lives behind the PrivateUse1 dispatch key), but a couple of
-    exact-type allowlists don't know that: aot_autograd's first-invocation
-    `_AnalyzeCustomOpInputOutputMode` returns NotImplemented for unknown
-    tensor types, which makes every dispatched op fail on mojo tensors
-    under eager-executing compile backends (e.g. "aot_eager").
-    runtime_wrappers imported the tuple by value, so patch both bindings.
+    exact-type allowlists don't know that:
+
+    - aot_autograd's first-invocation `_AnalyzeCustomOpInputOutputMode`
+      returns NotImplemented for unknown tensor types, which makes every
+      dispatched op fail on mojo tensors under eager-executing compile
+      backends (e.g. "aot_eager"). runtime_wrappers imported the tuple by
+      value, so patch both bindings.
+    - FakeTensorMode returns NotImplemented for ops whose args include an
+      unrecognized tensor subclass, to give that subclass's
+      __torch_dispatch__ a chance to run. TorchMojoTensor has none, so
+      nothing handles the op and tracing fails with "Multiple dispatch
+      failed" — hit when dynamo lifts a mojo tensor constant created
+      mid-trace (e.g. `torch.tensor([], device="mojo")` in HF generate).
     """
     import torch._functorch._aot_autograd.runtime_wrappers as runtime_wrappers
+    import torch._subclasses.fake_tensor as fake_tensor_module
     import torch.fx.experimental.proxy_tensor as proxy_tensor
 
     from .torch_max_tensor import TorchMojoTensor
@@ -25,6 +34,30 @@ def _declare_mojo_tensor_as_plain_tensor():
     if TorchMojoTensor not in proxy_tensor.HANDLED_TYPES:
         proxy_tensor.HANDLED_TYPES = (*proxy_tensor.HANDLED_TYPES, TorchMojoTensor)
     runtime_wrappers.HANDLED_TYPES = proxy_tensor.HANDLED_TYPES
+
+    original_check = fake_tensor_module._check_for_subclass_arg
+
+    def check_for_subclass_arg_except_mojo(x):
+        return original_check(x) and not isinstance(x, TorchMojoTensor)
+
+    fake_tensor_module._check_for_subclass_arg = check_for_subclass_arg_except_mojo
+
+    # Once past the subclass check, lifting a real mojo tensor constant
+    # still fails: the const-propagation path is gated on `type(out) is
+    # Tensor` (its no_dispatch clone is unsafe for subclasses), and the
+    # fallback validation rejects non-fake inputs. Fakeify lifted mojo
+    # constants directly instead; at runtime AOTAutograd passes the real
+    # constant as a graph input like any other mojo tensor.
+    original_dispatch_impl = fake_tensor_module.FakeTensorMode._dispatch_impl
+
+    def dispatch_impl_lifting_mojo_constants(self, func, types, args, kwargs):
+        if func in self.lift_fns and args and isinstance(args[0], TorchMojoTensor):
+            return self.fake_tensor_converter.from_real_tensor(self, args[0])
+        return original_dispatch_impl(self, func, types, args, kwargs)
+
+    fake_tensor_module.FakeTensorMode._dispatch_impl = (
+        dispatch_impl_lifting_mojo_constants
+    )
 
 
 def _keep_mojo_kernels_out_of_fake_tensor_construction():

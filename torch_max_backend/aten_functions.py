@@ -53,10 +53,8 @@ _transfer_to = F.functional(max_ops.transfer_to)
 
 
 def find_broadcast_shape(shape_a: list[Dim], shape_b: list[Dim]) -> list[Dim]:
-    if len(shape_a) == 0:
-        raise ValueError("Broadcast is not possible because one of the shapes is empty")
-    if len(shape_b) == 0:
-        raise ValueError("Broadcast is not possible because one of the shapes is empty")
+    # A rank-0 shape broadcasts like a scalar: zip_longest fills its
+    # missing dims with None, which resolve to the other shape's dims.
     result = []
     for dim_a, dim_b in itertools.zip_longest(reversed(shape_a), reversed(shape_b)):
         if dim_a == dim_b:
@@ -198,7 +196,30 @@ def get_int_dtype(x, y):
             return t.dtype
 
 
+def _materialize_dim(dim: Dim, like=None):
+    """A symbolic Dim as a scalar tensor, usable in tensor arithmetic.
+
+    torch treats SymInt operands like python scalars: the result keeps the
+    tensor operand's dtype, so cast to `like`'s dtype (and move to its
+    device) when a companion tensor is given.
+    """
+    t = max_ops.shape_to_tensor([dim])
+    t = F.reshape(t, [])
+    if like is not None:
+        t = F.cast(t, dtype=like.dtype)
+        if t.device != like.device:
+            t = _transfer_to(t, like.device)
+    return t
+
+
 def type_promotion(x, y):
+    if isinstance(x, Dim) and isinstance(y, Dim):
+        x = _materialize_dim(x)
+        y = _materialize_dim(y, x)
+    elif isinstance(x, Dim):
+        x = _materialize_dim(x, y)
+    elif isinstance(y, Dim):
+        y = _materialize_dim(y, x)
     if isinstance(x, int | float) or isinstance(y, int | float):
         # case not handled yet
         return x, y
@@ -466,6 +487,38 @@ def aten__scaled_dot_product_attention_math(
     attention = aten_softmax(scores, dim=-1)
     output = F.matmul(attention, value)
     return output, attention
+
+
+# _scaled_dot_product_efficient_attention(Tensor query, Tensor key, Tensor value, Tensor? attn_bias, bool compute_log_sumexp, float dropout_p=0.0, bool is_causal=False, *, float? scale=None) -> (Tensor output, Tensor log_sumexp, Tensor philox_seed, Tensor philox_offset)
+@map_to(aten._scaled_dot_product_efficient_attention)
+def aten__scaled_dot_product_efficient_attention(
+    query: MaxTensor,
+    key: MaxTensor,
+    value: MaxTensor,
+    attn_bias: MaxTensor | None,
+    compute_log_sumexp: bool,
+    dropout_p: float = 0.0,
+    is_causal: bool = False,
+    *,
+    scale: float | None = None,
+):
+    # The overload cuda picks for fp32 sdpa. Only `output` is consumed at
+    # inference (the philox seed/offset outputs exist for dropout replay in
+    # training).
+    if attn_bias is None and not is_causal:
+        # Plain attention: compute manually with matmuls instead of the
+        # flash kernel, whose numerics are noticeably looser.
+        head_dim = query.shape[-1]
+        head_dim_val = int(head_dim) if isinstance(head_dim, Dim) else head_dim
+        if scale is None:
+            scale = 1.0 / math.sqrt(float(head_dim_val))
+        scores = F.matmul(query, F.transpose(key, -2, -1)) * scale
+        attention = aten_softmax(scores, dim=-1)
+        return F.matmul(attention, value), attention, None, None
+    output, weights_or_logsumexp = aten__scaled_dot_product_attention_math(
+        query, key, value, attn_bias, dropout_p, is_causal, scale=scale
+    )
+    return output, weights_or_logsumexp, None, None
 
 
 # _scaled_dot_product_flash_attention(Tensor query, Tensor key, Tensor value, float dropout_p=0.0, bool is_causal=False, bool return_debug_mask=False, *, float? scale=None) -> (Tensor, Tensor, Tensor, Tensor, SymInt, SymInt, Tensor, Tensor, Tensor)
@@ -1441,6 +1494,24 @@ def aten_clone(
 
 # col2im(Tensor self, SymInt[2] output_size, int[2] kernel_size, int[2] dilation, int[2] padding, int[2] stride) -> Tensor
 # constant_pad_nd(Tensor self, SymInt[] pad, Scalar value=0) -> Tensor
+@map_to(aten.constant_pad_nd)
+def aten_constant_pad_nd(
+    input: MaxTensor, pad: list[int | Dim], value: Scalar = 0
+) -> MaxTensor:
+    if any(isinstance(p, int) and p < 0 for p in pad):
+        raise NotImplementedError(
+            "constant_pad_nd with negative padding (cropping) is not supported yet"
+        )
+    # torch's pad list covers the trailing len(pad)//2 dims, LAST dim first:
+    # [last_before, last_after, second_to_last_before, ...]. MAX wants all
+    # dims in forward order: [before_dim0, after_dim0, before_dim1, ...].
+    rank = len(input.shape)
+    paddings = [0] * (2 * rank)
+    for i in range(len(pad) // 2):
+        dim = rank - 1 - i
+        paddings[2 * dim] = pad[2 * i]
+        paddings[2 * dim + 1] = pad[2 * i + 1]
+    return max_ops.pad(input, paddings, mode="constant", value=value)
 
 
 def _add_bias_transposed(
@@ -2241,6 +2312,14 @@ def aten_linear(
     if bias is not None:
         result = result + bias
     return result
+
+
+# lift_fresh_copy(Tensor self) -> Tensor
+@map_to(aten.lift_fresh_copy)
+def aten_lift_fresh_copy(input: MaxTensor) -> MaxTensor:
+    # Graph constants (dynamo-lifted tensors created inside the traced
+    # function) are already fresh values in the MAX graph.
+    return input
 
 
 # log(Tensor self) -> Tensor
@@ -3824,138 +3903,6 @@ def aten_masked_fill(
     input: MaxTensor, mask: MaxTensor, value: Scalar | MaxTensor
 ) -> MaxTensor:
     return F.where(mask, value, input)
-
-
-# _scaled_dot_product_efficient_attention(
-#     Tensor query,
-#     Tensor key,
-#     Tensor value,
-#     float dropout_p=0.0,
-#     bool is_causal=False,
-#     bool return_debug_mask=False,
-#     *,
-#     float? scale=None
-# ) -> (Tensor output, Tensor logsumexp, Tensor cum_seq_q, Tensor cum_seq_k,
-#     SymInt max_q, SymInt max_k, Tensor rng_state, Tensor unused, Tensor debug_attn_mask)
-@map_to(aten._scaled_dot_product_efficient_attention)
-def aten__scaled_dot_product_efficient_attention(
-    query: MaxTensor,
-    key: MaxTensor,
-    value: MaxTensor,
-    dropout_p: float | None = 0.0,
-    is_causal: bool = False,
-    return_debug_mask: bool = False,
-    *,
-    scale: float | None = None,
-) -> tuple[
-    MaxTensor,
-    MaxTensor,
-    MaxTensor,
-    MaxTensor,
-    SymIntType,
-    SymIntType,
-    MaxTensor,
-    MaxTensor,
-    MaxTensor,
-]:
-    """
-    This function implements the scaled dot-product attention mechanism using MAX's flash_attention_gpu.
-    It returns a tuple of 9 elements to match PyTorch's interface.
-    """
-    # Fallback to manual attention computation
-    # Get dimensions for attention computation
-    batch_size = query.shape[0]
-    num_heads = query.shape[1]
-    seq_len_q = query.shape[2]
-    head_dim = query.shape[3]
-    seq_len_k = key.shape[2]
-
-    # Compute attention scores: Q @ K^T
-    # Transpose key to [batch_size, num_heads, head_dim, seq_len_k] for matmul
-    key_transposed = F.transpose(key, 2, 3)
-    scores = F.matmul(query, key_transposed)
-
-    # Scale by sqrt(head_dim)
-    # StaticDim objects need special handling for conversion to float
-    if hasattr(head_dim, "value"):
-        head_dim_val = float(head_dim.value)
-    else:
-        # For StaticDim, we can use int() to get the numeric value
-        head_dim_val = float(int(head_dim))
-
-    scale_factor = 1.0 / math.sqrt(head_dim_val)
-    scores = F.mul(scores, scale_factor)
-
-    # Apply causal mask if requested
-    if is_causal:
-        # For now, we'll skip the causal mask implementation as it's complex
-        # The basic attention will work for most cases without causal masking
-        pass
-
-    # Apply softmax to get attention weights
-    attention_weights = aten_softmax(scores, dim=-1)
-
-    # Apply attention weights to values: attention_weights @ V
-    output = F.matmul(attention_weights, value)
-
-    # Create dummy outputs for the remaining return values
-    # PyTorch's flash attention returns 9 values, we need to match this interface
-
-    # For the dummy outputs, we'll create simple zero tensors using the pattern from aten_full_like
-    # Use output tensor properties for device and dtype consistency
-
-    # Create a zero scalar and broadcast to different shapes
-    zero_scalar = F.constant(0, dtype=output.dtype, device=output.device)
-    zero_int_scalar = F.constant(0, dtype=DType.int32, device=output.device)
-    zero_int64_scalar = F.constant(0, dtype=DType.int64, device=output.device)
-
-    # Create appropriately shaped tensors
-    # Convert all dimensions to int for indexing
-    batch_size_int = (
-        int(batch_size.value) if hasattr(batch_size, "value") else int(batch_size)
-    )
-    num_heads_int = (
-        int(num_heads.value) if hasattr(num_heads, "value") else int(num_heads)
-    )
-    seq_len_q_int = (
-        int(seq_len_q.value) if hasattr(seq_len_q, "value") else int(seq_len_q)
-    )
-
-    logsumexp_shape = [batch_size_int, num_heads_int, seq_len_q_int]
-    logsumexp = F.broadcast_to(zero_scalar, logsumexp_shape)
-
-    cum_seq_shape = [batch_size_int]
-    cum_seq_q = F.broadcast_to(zero_int_scalar, cum_seq_shape)
-    cum_seq_k = F.broadcast_to(zero_int_scalar, cum_seq_shape)
-
-    # Max sequence lengths (return the actual dimensions)
-    max_q = seq_len_q
-    max_k = seq_len_k
-
-    # RNG state and unused tensors
-    rng_state_shape = [8]  # Common RNG state size
-    rng_state = F.broadcast_to(zero_int64_scalar, rng_state_shape)
-
-    unused_shape = [1]
-    unused = F.broadcast_to(zero_scalar, unused_shape)
-
-    # Convert scores.shape to int list
-    scores_shape_int = [
-        int(d.value) if hasattr(d, "value") else int(d) for d in scores.shape
-    ]
-    debug_attn_mask = F.broadcast_to(zero_scalar, scores_shape_int)
-
-    return (
-        output,
-        logsumexp,
-        cum_seq_q,
-        cum_seq_k,
-        max_q,
-        max_k,
-        rng_state,
-        unused,
-        debug_attn_mask,
-    )
 
 
 # transpose.int(Tensor(a) self, int dim0, int dim1) -> Tensor(a)

@@ -585,6 +585,62 @@ def test_bug_keyerror_input(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_symint_scalar_arithmetic(device: str):
+    """A symbolic dim used as a scalar in tensor arithmetic (dynamic shapes)."""
+
+    def fn(x):
+        return torch.relu(x) + x.shape[0]
+
+    fn_compiled = torch.compile(backend=max_backend)(fn)
+    for n in (4, 5, 6):
+        x = torch.randn(n, 3)
+        check_functions_are_equivalent(fn, device, [x], fn_compiled=fn_compiled)
+
+
+def test_sdpa_with_attention_mask(device: str):
+    """An explicit float mask makes cuda pick the mem-efficient sdpa overload."""
+
+    def fn(q, k, v, mask):
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+
+    q = torch.randn(1, 4, 8, 16)
+    k = torch.randn(1, 4, 8, 16)
+    v = torch.randn(1, 4, 8, 16)
+    mask = torch.zeros(1, 4, 8, 8).masked_fill(
+        torch.rand(1, 4, 8, 8) > 0.7, float("-inf")
+    )
+
+    check_functions_are_equivalent(fn, device, [q, k, v, mask], rtol=1e-2, atol=1e-3)
+
+
+def test_constant_pad_nd(device: str):
+    def fn(x):
+        return F.pad(x, (1, 2, 0, 3), mode="constant", value=1.5)
+
+    x = torch.randn(2, 3, 4)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_lifted_tensor_constant(device: str):
+    """A tensor constant created inside the compiled function (dynamo lifts
+    it as a graph get_attr + lift_fresh_copy)."""
+
+    def fn(x):
+        return x + torch.tensor([1.0, 2.0, 3.0], device=x.device)
+
+    x = torch.randn(2, 3)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_bitwise_and_0d_operand(device: str):
+    def fn(a, b):
+        return a & b
+
+    a = torch.tensor(True)
+    b = torch.tensor([True, False, True])
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
 def test_scalar_as_input():
     def fn(x):
         y = torch.arange(0, x[0], 1, dtype=x.dtype, device=x.device)
