@@ -1,9 +1,9 @@
-"""GPT-2 batch-1 greedy decode: eager vs torch.compile, mojo vs cuda.
+"""GPT-2 greedy decode: eager vs torch.compile, mojo vs cuda, any batch size.
 
 Each configuration should run in its own process (dynamo caches, the MAX
 engine, and cuda contexts interact across configs).
 
-Usage: uv run python bench_gpt2_compile.py <device> <mode> [n_new_tokens]
+Usage: uv run python bench_gpt2_compile.py <device> <mode> [n_new_tokens] [batch]
   device: mojo | cuda
   mode:
     eager            no compilation
@@ -30,6 +30,7 @@ register_max_devices()
 DEVICE = sys.argv[1]
 MODE = sys.argv[2]
 N_NEW_TOKENS = int(sys.argv[3]) if len(sys.argv) > 3 else 200
+BATCH = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 PROMPT = "Here is how quantum computing works: "
 WARMUP = 2  # first warmup pays compilation, second settles dynamic shapes
 ITERS = 3
@@ -45,7 +46,7 @@ def main():
     model = (
         AutoModelForCausalLM.from_pretrained("gpt2", **model_kwargs).eval().to(DEVICE)
     )
-    x = tok(PROMPT, return_tensors="pt").input_ids.to(DEVICE)
+    x = tok(PROMPT, return_tensors="pt").input_ids.repeat(BATCH, 1).to(DEVICE)
 
     if MODE in ("compile-max", "compile-max-eager-attn"):
         model.forward = torch.compile(model.forward, backend=max_backend)
@@ -77,12 +78,12 @@ def main():
         out = step()
         times.append(time.perf_counter() - t0)
     mean_s = statistics.mean(times)
-    n_generated = out.shape[1] - x.shape[1]
+    n_generated = (out.shape[1] - x.shape[1]) * BATCH
     tok_s = n_generated / mean_s
     print(
-        f"RESULT {DEVICE:>5} {MODE:<16} {n_generated} tokens: "
-        f"mean={mean_s:.3f} s  ({tok_s:.1f} tok/s)  "
-        f"first_run={first_s:.1f} s",
+        f"RESULT {DEVICE:>5} {MODE:<16} batch={BATCH:<4} {n_generated} tokens: "
+        f"mean={mean_s:.3f} s  ({tok_s:.1f} tok/s aggregate, "
+        f"{tok_s / BATCH:.1f} tok/s/seq)  first_run={first_s:.1f} s",
         flush=True,
     )
     text = tok.decode(out[0][x.shape[1] :])
