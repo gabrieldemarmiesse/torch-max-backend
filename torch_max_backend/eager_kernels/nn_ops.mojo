@@ -30,7 +30,7 @@ from std.math import sqrt, exp, floor
 from std.memory import alloc, stack_allocation
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator, size_of
+from std.sys.info import has_accelerator, has_apple_gpu_accelerator, size_of
 from std.utils.coord import Coord
 from std.utils.index import IndexList
 from std.utils.numerics import min_or_neg_inf
@@ -543,14 +543,21 @@ def _softmax_rows_go(
 comptime ATTN_THREADS = 256
 comptime ATTN_MAX_KV = 4096
 comptime ATTN_MAX_HD = 256
+comptime APPLE_ATTN_THREADS = 64
+comptime APPLE_ATTN_MAX_KV = 256
+comptime APPLE_ATTN_MAX_HD = 64
 
 
 @__llvm_metadata(
-    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(ATTN_THREADS))
+    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(THREADS))
 )
-@__name(t"attn_decode_{dtype}")
+@__name(t"attn_decode_{dtype}_{THREADS}_{MAX_KV}_{MAX_HD}_{RED_STAGES}")
 def _attn_decode_kernel[
-    dtype: DType
+    dtype: DType,
+    THREADS: Int = ATTN_THREADS,
+    MAX_KV: Int = ATTN_MAX_KV,
+    MAX_HD: Int = ATTN_MAX_HD,
+    RED_STAGES: Int = 8,
 ](
     out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
     q_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
@@ -580,24 +587,24 @@ def _attn_decode_kernel[
     var kv_base = bh * kv_len * head_dim
 
     var q_smem = stack_allocation[
-        ATTN_MAX_HD, DType.float32, address_space=AddressSpace.SHARED
+        MAX_HD, DType.float32, address_space=AddressSpace.SHARED
     ]()
     var s_smem = stack_allocation[
-        ATTN_MAX_KV, DType.float32, address_space=AddressSpace.SHARED
+        MAX_KV, DType.float32, address_space=AddressSpace.SHARED
     ]()
     var red = stack_allocation[
-        ATTN_THREADS, DType.float32, address_space=AddressSpace.SHARED
+        THREADS, DType.float32, address_space=AddressSpace.SHARED
     ]()
     var bcast = stack_allocation[
         2, DType.float32, address_space=AddressSpace.SHARED
     ]()
 
-    for d in range(tid, head_dim, ATTN_THREADS):
+    for d in range(tid, head_dim, THREADS):
         q_smem[d] = q_ptr[q_base + d].cast[DType.float32]()
     barrier()
 
     var m = Float32.MIN
-    for j in range(tid, kv_len, ATTN_THREADS):
+    for j in range(tid, kv_len, THREADS):
         var krow = kv_base + j * head_dim
         var acc = Float32(0)
         for d in range(0, head_dim, 4):
@@ -612,8 +619,8 @@ def _attn_decode_kernel[
             m = s
     red[tid] = m
     barrier()
-    var stride = ATTN_THREADS // 2
-    for _ in range(ROWRED_STAGES):
+    var stride = THREADS // 2
+    for _ in range(RED_STAGES):
         if tid < stride:
             if red[tid + stride] > red[tid]:
                 red[tid] = red[tid + stride]
@@ -625,14 +632,14 @@ def _attn_decode_kernel[
     m = bcast[0]
 
     var s = Float32(0)
-    for j in range(tid, kv_len, ATTN_THREADS):
+    for j in range(tid, kv_len, THREADS):
         var e = exp(s_smem[j] - m)
         s_smem[j] = e
         s += e
     red[tid] = s
     barrier()
-    stride = ATTN_THREADS // 2
-    for _ in range(ROWRED_STAGES):
+    stride = THREADS // 2
+    for _ in range(RED_STAGES):
         if tid < stride:
             red[tid] += red[tid + stride]
         barrier()
@@ -642,7 +649,7 @@ def _attn_decode_kernel[
     barrier()
     var inv_denom = 1.0 / bcast[1]
 
-    for d in range(tid, head_dim, ATTN_THREADS):
+    for d in range(tid, head_dim, THREADS):
         var acc = Float32(0)
         for j in range(kv_len):
             acc += (
@@ -770,6 +777,41 @@ def _attn_decode[
         )
         return
     comptime if has_accelerator():
+        comptime if has_apple_gpu_accelerator():
+            if kv_len <= APPLE_ATTN_MAX_KV and head_dim <= APPLE_ATTN_MAX_HD:
+                _enqueue_cached[
+                    _attn_decode_kernel[
+                        dtype,
+                        APPLE_ATTN_THREADS,
+                        APPLE_ATTN_MAX_KV,
+                        APPLE_ATTN_MAX_HD,
+                        6,
+                    ]
+                ](
+                    ctx,
+                    String(t"attn_decode_apple_short_{dtype}"),
+                    bh,
+                    1,
+                    1,
+                    APPLE_ATTN_THREADS,
+                    _make_ptr[dtype](out_addr).as_unsafe_any_origin(),
+                    _make_ptr[dtype](q_addr)
+                    .as_unsafe_any_origin()
+                    .as_immutable(),
+                    _make_ptr[dtype](k_addr)
+                    .as_unsafe_any_origin()
+                    .as_immutable(),
+                    _make_ptr[dtype](v_addr)
+                    .as_unsafe_any_origin()
+                    .as_immutable(),
+                    kv_len,
+                    head_dim,
+                    scale,
+                    heads,
+                    q_b_stride,
+                    q_h_stride,
+                )
+                return
         _enqueue_cached[_attn_decode_kernel[dtype]](
             ctx,
             String(t"attn_decode_{dtype}"),
