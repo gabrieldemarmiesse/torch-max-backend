@@ -52,26 +52,32 @@ def test_fast_binary_int_dtypes(max_device, dtype):
 def test_fast_path_is_used(max_device):
     """The eligible case must go through the Mojo kernel, not the fallback.
 
-    Tensor-tensor adds route through the spec op (checks + broadcast +
-    alloc + launch in one Mojo call, see logic_ops.mojo)."""
+    Tensor-tensor adds route through the shared spec op, or through the
+    Apple flat kernel selected during Metal device registration."""
     if not fast_eager_enabled():
         pytest.skip("fast eager path disabled")
     from torch_max_backend import eager_kernels
 
     calls = []
-    original = eager_kernels.logic_ops.AddSpec
+    x = torch.randn(8, 8).to(max_device)
+    y = torch.randn(8, 8).to(max_device)
+    if x._device.api == "metal":
+        module = eager_kernels.elementwise_ops
+        name = "Add"
+    else:
+        module = eager_kernels.logic_ops
+        name = "AddSpec"
+    original = getattr(module, name)
 
     def spy(*args):
         calls.append(args)
         return original(*args)
 
-    eager_kernels.logic_ops.AddSpec = spy
+    setattr(module, name, spy)
     try:
-        x = torch.randn(8, 8).to(max_device)
-        y = torch.randn(8, 8).to(max_device)
         _ = x + y
     finally:
-        eager_kernels.logic_ops.AddSpec = original
+        setattr(module, name, original)
     assert len(calls) == 1
 
 

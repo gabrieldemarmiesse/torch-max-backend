@@ -38,7 +38,19 @@ def _patch_transformers_new_gelu() -> bool:
     return True
 
 
+def _enable_apple_fast_add() -> None:
+    """Select the isolated Metal contiguous-add implementation.
+
+    Patching once during device registration keeps CUDA and ROCm on the
+    original Python and Mojo paths with no per-call target check.
+    """
+    from torch_max_backend.eager_kernels import aten_fast
+
+    aten_fast.fast_aten_add = aten_fast.fast_aten_add_apple
+
+
 def register_apple_optimizations() -> None:
     """Install optional integrations that are profitable only on Apple GPUs."""
     if any(device.api == "metal" for device in get_accelerators()):
         _patch_transformers_new_gelu()
+        _enable_apple_fast_add()

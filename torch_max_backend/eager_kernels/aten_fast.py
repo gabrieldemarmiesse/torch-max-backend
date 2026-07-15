@@ -536,6 +536,35 @@ def fast_aten_add(input, other, alpha=1):
     return NOT_HANDLED
 
 
+_fast_aten_add_default = fast_aten_add
+
+
+@no_type_check
+def fast_aten_add_apple(input, other, alpha=1):
+    """Metal specialization for equal-shape contiguous tensor addition."""
+    a = _t(input)
+    b = _t(other)
+    if (
+        alpha == 1
+        and a is not None
+        and b is not None
+        and a._device.api == "metal"
+        and a._device == b._device
+        and a._is_contiguous
+        and b._is_contiguous
+        and a._dtype == b._dtype
+        and a._dtype in _FLOAT_DTYPES
+        and a._shape == b._shape
+    ):
+        out = _alloc(a._shape, a._dtype, a._device)
+        if a._numel > 0:
+            eager_kernels.elementwise_ops.Add(
+                out._ptr, a._ptr, b._ptr, a._numel, a._dtype.value, _ctx_ptr(a._device)
+            )
+        return out
+    return _fast_aten_add_default(input, other, alpha)
+
+
 @no_type_check
 def fast_aten_add_(input, other, alpha=1):
     """In-place add into input. Returns None when unavailable."""

@@ -201,7 +201,12 @@ def test_apple_optimizations_are_only_registered_for_metal(monkeypatch):
 
     calls = []
     monkeypatch.setattr(
-        apple_optimizations, "_patch_transformers_new_gelu", lambda: calls.append(None)
+        apple_optimizations,
+        "_patch_transformers_new_gelu",
+        lambda: calls.append("gelu"),
+    )
+    monkeypatch.setattr(
+        apple_optimizations, "_enable_apple_fast_add", lambda: calls.append("add")
     )
 
     monkeypatch.setattr(
@@ -218,7 +223,7 @@ def test_apple_optimizations_are_only_registered_for_metal(monkeypatch):
         lambda: [SimpleNamespace(api="metal"), SimpleNamespace(api="cpu")],
     )
     apple_optimizations.register_apple_optimizations()
-    assert calls == [None]
+    assert calls == ["gelu", "add"]
 
 
 def test_device_ordering():
