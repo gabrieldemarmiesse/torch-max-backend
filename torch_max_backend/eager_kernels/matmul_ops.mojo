@@ -46,7 +46,7 @@ from std.utils.static_tuple import StaticTuple
 
 from std.algorithm.functional import elementwise, parallelize
 
-from layout import TileTensor, row_major
+from layout import Coord, Idx, TileTensor, row_major
 from layout.tensor_core import get_mma_shape
 
 from linalg.bmm import batched_matmul
@@ -899,15 +899,14 @@ def _gemm_smallm_kernel[
 # were tuned for NVIDIA; on gfx942 they leave the matrix cores idle.  This
 # wrapper instantiates MAX's open-source Mojo multistage GEMM directly with
 # static GPT-2 N/K layouts, which guarantees the pure MFMA path is selected
-# and cannot fall through to vendor BLAS.  M remains specialized at the
-# requested large decode batch (256), while partial N tiles are masked by
-# the multistage epilogue (notably GPT-2's 50,257-column vocabulary head).
+# and cannot fall through to vendor BLAS.  M is a runtime dimension, so one
+# compiled schedule handles changing decode batches.  Partial M/N tiles are
+# masked by the multistage epilogue (notably GPT-2's 50,257-column head).
 # ---------------------------------------------------------------------------
 
 
 @always_inline
 def _amd_mfma_gemm[
-    M: Int,
     N: Int,
     K: Int,
     BM: Int,
@@ -916,22 +915,26 @@ def _amd_mfma_gemm[
     WN: Int,
     transpose_b: Bool,
     fuse_bias: Bool,
+    BLOCK_K: Int = 32,
+    WARP_K_PARTITIONS: Int = 1,
 ](
     c_addr: Int,
     a_addr: Int,
     b_addr: Int,
     bias_addr: Int,
+    m: Int,
     ctx: DeviceContext,
 ) raises:
     comptime F32 = DType.float32
-    # gfx942's production selector expands the FP32 base BK=16 to 32 when
-    # the one-stage A+B LDS footprint fits in 32 KiB. All GPT-2 tiles below
-    # satisfy that bound; halving refill/barrier iterations is particularly
-    # important for the K=3072 projection.
-    comptime BK = 32
     var c_ptr = _make_ptr[F32](c_addr)
-    var c = TileTensor(c_ptr, row_major[M, N]())
-    var a = TileTensor(_make_ptr[F32](a_addr).as_immutable(), row_major[M, K]())
+    # M is deliberately runtime-dynamic: the layout type records only N/K as
+    # static, so one compiled MFMA kernel serves every sufficiently large
+    # decode batch. multistage_gemm derives grid.y and edge predicates from
+    # the runtime first dimension.
+    var c = TileTensor(c_ptr, row_major(Coord(m, Idx[N])))
+    var a = TileTensor(
+        _make_ptr[F32](a_addr).as_immutable(), row_major(Coord(m, Idx[K]))
+    )
 
     # AMDMatmul's built-in MMA_M=16 boundary path checks only `n < N`
     # before a float4 store.  For N=50,257, the final vector therefore
@@ -979,10 +982,11 @@ def _amd_mfma_gemm[
 
     comptime if transpose_b:
         comptime config = MatmulConfig[F32, F32, F32, True](
-            block_tile_shape=Index(BM, BN, BK),
-            warp_tile_shape=Index(WM, WN, BK),
+            block_tile_shape=Index(BM, BN, BLOCK_K),
+            warp_tile_shape=Index(WM, WN, BLOCK_K),
             mma_shape=get_mma_shape[F32, F32](),
             num_pipeline_stages=1,
+            num_warp_k_partitions=WARP_K_PARTITIONS,
         )
         var b = TileTensor(
             _make_ptr[F32](b_addr).as_immutable(), row_major[N, K]()
@@ -1003,8 +1007,8 @@ def _amd_mfma_gemm[
             ](c, a, b, ctx)
     else:
         comptime config = MatmulConfig[F32, F32, F32, False](
-            block_tile_shape=Index(BM, BN, BK),
-            warp_tile_shape=Index(WM, WN, BK),
+            block_tile_shape=Index(BM, BN, BLOCK_K),
+            warp_tile_shape=Index(WM, WN, BLOCK_K),
             mma_shape=get_mma_shape[F32, F32](),
             # The generic non-transposed multistage kernel primes the next
             # LDS slab before entering its K loop and therefore requires a
@@ -1046,30 +1050,49 @@ def _amd_gpt2_mfma_dispatch[
     bias_addr: Int,
     ctx: DeviceContext,
 ) raises -> Bool:
-    # These are the five FP32 linear shapes in GPT-2's batch-256 decode
-    # step. Keep the portable dynamic-shape kernels for everything else.
-    if batch != 1 or a_bstride == 0 or m != 256:
+    # These are the five FP32 linear shapes in a GPT-2 decode step. N/K and
+    # the MFMA tiles are compile-time constants, while M remains runtime
+    # dynamic so changing the user batch size never compiles another kernel.
+    # Smaller M values retain the latency-oriented GEMV/SIMT paths below.
+    if batch != 1 or a_bstride == 0 or m < 64:
         return False
     if n == 2304 and k == 768:
-        _amd_mfma_gemm[256, 2304, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, ctx
+        _amd_mfma_gemm[2304, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
+            c_addr, a_addr, b_addr, bias_addr, m, ctx
         )
     elif n == 768 and k == 768:
-        _amd_mfma_gemm[256, 768, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, ctx
+        _amd_mfma_gemm[768, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
+            c_addr, a_addr, b_addr, bias_addr, m, ctx
         )
     elif n == 3072 and k == 768:
-        _amd_mfma_gemm[256, 3072, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, ctx
+        _amd_mfma_gemm[3072, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
+            c_addr, a_addr, b_addr, bias_addr, m, ctx
         )
     elif n == 768 and k == 3072:
-        _amd_mfma_gemm[256, 768, 3072, 32, 32, 16, 16, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, ctx
-        )
+        comptime if transpose_b:
+            # Modular's AMD selector partitions K across four wavefronts for
+            # <=32x32 blocks. Each wave computes the full output tile over a
+            # quarter of K; AMDMatmul performs the supported LDS reduction.
+            _amd_mfma_gemm[
+                768,
+                3072,
+                32,
+                32,
+                32,
+                32,
+                transpose_b,
+                fuse_bias,
+                16,
+                4,
+            ](c_addr, a_addr, b_addr, bias_addr, m, ctx)
+        else:
+            _amd_mfma_gemm[768, 3072, 32, 32, 16, 16, transpose_b, fuse_bias](
+                c_addr, a_addr, b_addr, bias_addr, m, ctx
+            )
     elif n == 50257 and k == 768:
-        _amd_mfma_gemm[
-            256, 50257, 768, 128, 128, 64, 64, transpose_b, fuse_bias
-        ](c_addr, a_addr, b_addr, bias_addr, ctx)
+        _amd_mfma_gemm[50257, 768, 128, 128, 64, 64, transpose_b, fuse_bias](
+            c_addr, a_addr, b_addr, bias_addr, m, ctx
+        )
     else:
         return False
     return True

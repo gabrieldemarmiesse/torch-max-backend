@@ -395,6 +395,33 @@ max_abs 3.8e-6 vs CPU, argmax match on both models).
 - `conv_transpose` upstream is cuDNN-only in MAX; nothing on the fast
   path uses it.
 
+## MI300X GPT-2 dynamic-batch decode
+
+The gfx942 eager path has pure-Mojo FP32 MFMA schedules for GPT-2's five
+decode GEMMs, a fused single-query attention kernel, reserved strided KV
+storage, and a 512-thread vocabulary argmax. The GEMM output width, reduction
+dimension, and MFMA tile are compile-time constants, but the flattened batch
+dimension is runtime dynamic. Consequently, changing the decode batch does
+not compile a new kernel. Partial M/N tiles are guarded, including GPT-2's
+50,257-column vocabulary head and non-tile-aligned batches.
+
+These results use the unchanged Hugging Face GPT-2 model: the backend only
+optimizes the eager ATen operations it receives. Measured on one MI300X with
+ROCm 7.2 and torch 2.11, using FP32 greedy generation of 200 fixed tokens
+(two warmups, mean of three):
+
+| batch | path | time | aggregate tokens/s | relative to ROCm |
+|---:|---|---:|---:|---:|
+| 256 | torch ROCm eager (rocBLAS) | 1.234 s | 41,493 | 1.00x |
+| 256 | Mojo device eager | 1.472 s | 34,776 | 0.84x |
+| 512 | torch ROCm eager (rocBLAS) | 2.017 s | 50,758 | 1.00x |
+| 512 | Mojo device eager | **1.572 s** | **65,152** | **1.28x** |
+
+Batches 64, 257, and 512 are tested through the same compiled MFMA schedule;
+257 exercises the runtime M edge guards. The eager path was also verified
+with a `torch==2.11.0+cpu` install, and the generated Mojo matmul extension
+has no rocBLAS/hipBLAS dependency.
+
 ## Follow-up work (not in this PoC)
 
 - Scalar (tensor ⊕ python number) variants — one extra kernel per op

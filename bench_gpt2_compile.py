@@ -23,10 +23,6 @@ import time
 
 import torch
 
-from torch_max_backend import max_backend, register_max_devices
-
-register_max_devices()
-
 DEVICE = sys.argv[1]
 MODE = sys.argv[2]
 N_NEW_TOKENS = int(sys.argv[3]) if len(sys.argv) > 3 else 200
@@ -34,6 +30,11 @@ BATCH = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 PROMPT = "Here is how quantum computing works: "
 WARMUP = 2  # first warmup pays compilation, second settles dynamic shapes
 ITERS = 3
+
+if DEVICE == "mojo" or MODE.startswith("compile-max"):
+    from torch_max_backend import max_backend, register_max_devices
+
+    register_max_devices()
 
 
 def main():

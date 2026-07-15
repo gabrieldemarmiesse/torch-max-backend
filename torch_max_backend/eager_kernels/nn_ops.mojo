@@ -569,22 +569,29 @@ def _attn_decode_kernel[
     heads: Int,
     q_b_stride: Int,
     q_h_stride: Int,
+    k_b_stride: Int,
+    k_h_stride: Int,
+    k_s_stride: Int,
+    v_b_stride: Int,
+    v_h_stride: Int,
+    v_s_stride: Int,
 ):
-    """out is (BH, 1, head_dim) contiguous; k/v are (BH, kv_len, head_dim)
-    contiguous. q is (B, H, 1, head_dim) with unit stride in head_dim but
-    arbitrary batch/head strides (q_b_stride/q_h_stride, in elements), so
-    the per-head transpose view of a fused qkv projection reads in place —
-    q is staged through shared memory once per block, so nothing else needs
-    it contiguous. Scores for the block's row are staged in shared memory
-    (hence the ATTN_MAX_KV cap), softmax uses f32 max/sum shared-memory tree
-    reductions, and the V pass has lane d accumulate output element d so V
-    reads coalesce across lanes."""
+    """out is (BH, 1, head_dim) contiguous. Q/K/V have unit head-dimension
+    stride and explicit batch/head/sequence strides; this consumes both the
+    fused-qkv transpose views and capacity-backed KV caches without a gather.
+    Scores for the block's row are staged in shared memory (hence the
+    ATTN_MAX_KV cap), softmax uses f32 max/sum shared-memory tree reductions,
+    and the V pass has lane d accumulate output element d so V reads coalesce
+    across lanes."""
     comptime vec_align = 4 * size_of[dtype]()
     var bh = block_idx.x
     var tid = thread_idx.x
     var out_base = bh * head_dim
-    var q_base = (bh // heads) * q_b_stride + (bh % heads) * q_h_stride
-    var kv_base = bh * kv_len * head_dim
+    var batch = bh // heads
+    var head = bh % heads
+    var q_base = batch * q_b_stride + head * q_h_stride
+    var k_base = batch * k_b_stride + head * k_h_stride
+    var v_base = batch * v_b_stride + head * v_h_stride
 
     var q_smem = stack_allocation[
         MAX_HD, DType.float32, address_space=AddressSpace.SHARED
@@ -605,7 +612,7 @@ def _attn_decode_kernel[
 
     var m = Float32.MIN
     for j in range(tid, kv_len, THREADS):
-        var krow = kv_base + j * head_dim
+        var krow = k_base + j * k_s_stride
         var acc = Float32(0)
         for d in range(0, head_dim, 4):
             var k4 = k_ptr.load[width=4, alignment=vec_align](krow + d).cast[
@@ -662,7 +669,7 @@ def _attn_decode_kernel[
             for j in range(wave, kv_len, 4):
                 acc += (
                     s_smem[j]
-                    * v_ptr[kv_base + j * head_dim + lane].cast[DType.float32]()
+                    * v_ptr[v_base + j * v_s_stride + lane].cast[DType.float32]()
                 )
             red[tid] = acc
             barrier()
@@ -681,7 +688,7 @@ def _attn_decode_kernel[
         for j in range(kv_len):
             acc += (
                 s_smem[j]
-                * v_ptr[kv_base + j * head_dim + d].cast[DType.float32]()
+                * v_ptr[v_base + j * v_s_stride + d].cast[DType.float32]()
             )
         out_ptr[out_base + d] = (acc * inv_denom).cast[dtype]()
 
@@ -701,6 +708,12 @@ def _attn_decode_cpu[
     heads: Int,
     q_b_stride: Int,
     q_h_stride: Int,
+    k_b_stride: Int,
+    k_h_stride: Int,
+    k_s_stride: Int,
+    v_b_stride: Int,
+    v_h_stride: Int,
+    v_s_stride: Int,
     ctx: DeviceContext,
 ) raises:
     """Same math as `_attn_decode_kernel`, one sequential task per (batch *
@@ -721,12 +734,15 @@ def _attn_decode_cpu[
     def func[width: Int, alignment: Int = 1](idx: Coord):
         var i = Int(idx[0].value())
         var out_base = i * head_dim
-        var q_base = (i // heads) * q_b_stride + (i % heads) * q_h_stride
-        var kv_base = i * kv_len * head_dim
+        var batch = i // heads
+        var head = i % heads
+        var q_base = batch * q_b_stride + head * q_h_stride
+        var k_base = batch * k_b_stride + head * k_h_stride
+        var v_base = batch * v_b_stride + head * v_h_stride
 
         var m = Float32.MIN
         for j in range(kv_len):
-            var krow = kv_base + j * head_dim
+            var krow = k_base + j * k_s_stride
             var dot = Float32(0)
             for d in range(head_dim):
                 dot += (
@@ -742,7 +758,7 @@ def _attn_decode_cpu[
             acc_out[d] = Float32(0)
         var denom = Float32(0)
         for j in range(kv_len):
-            var krow = kv_base + j * head_dim
+            var krow = k_base + j * k_s_stride
             var dot = Float32(0)
             for d in range(head_dim):
                 dot += (
@@ -752,7 +768,7 @@ def _attn_decode_cpu[
             var s = dot * scale
             var p = exp(s - m)
             denom += p
-            var vrow = kv_base + j * head_dim
+            var vrow = v_base + j * v_s_stride
             for d in range(head_dim):
                 acc_out[d] += p * v_ptr[vrow + d].cast[DType.float32]()
 
@@ -785,6 +801,12 @@ def _attn_decode[
     heads: Int,
     q_b_stride: Int,
     q_h_stride: Int,
+    k_b_stride: Int,
+    k_h_stride: Int,
+    k_s_stride: Int,
+    v_b_stride: Int,
+    v_h_stride: Int,
+    v_s_stride: Int,
     ctx: DeviceContext,
 ) raises:
     if ctx.api() == "cpu":
@@ -800,6 +822,12 @@ def _attn_decode[
             heads,
             q_b_stride,
             q_h_stride,
+            k_b_stride,
+            k_h_stride,
+            k_s_stride,
+            v_b_stride,
+            v_h_stride,
+            v_s_stride,
             ctx,
         )
         return
@@ -856,6 +884,12 @@ def _attn_decode[
             heads,
             q_b_stride,
             q_h_stride,
+            k_b_stride,
+            k_h_stride,
+            k_s_stride,
+            v_b_stride,
+            v_h_stride,
+            v_s_stride,
         )
     else:
         raise Error("no GPU accelerator available at compile time")
@@ -866,7 +900,7 @@ def _attn_decode_go(
     q_ptr_obj: PyObjectPtr,
     k_ptr_obj: PyObjectPtr,
     v_ptr_obj: PyObjectPtr,
-    # (bh, kv_len, head_dim, scale, heads, q_b_stride, q_h_stride)
+    # (geometry/scale, q batch/head strides, k/v batch/head/seq strides)
     params: PyObjectPtr,
     dtype_obj: PyObjectPtr,
     device_context_ptr: PyObjectPtr,
@@ -883,6 +917,12 @@ def _attn_decode_go(
     var heads = _raw_tuple_int(params, 4)
     var q_b_stride = _raw_tuple_int(params, 5)
     var q_h_stride = _raw_tuple_int(params, 6)
+    var k_b_stride = _raw_tuple_int(params, 7)
+    var k_h_stride = _raw_tuple_int(params, 8)
+    var k_s_stride = _raw_tuple_int(params, 9)
+    var v_b_stride = _raw_tuple_int(params, 10)
+    var v_h_stride = _raw_tuple_int(params, 11)
+    var v_s_stride = _raw_tuple_int(params, 12)
     var ctx = _raw_ctx(device_context_ptr)
 
     # The GPU kernel stages scores/Q in fixed-size shared memory; the CPU
@@ -907,6 +947,12 @@ def _attn_decode_go(
                 heads,
                 q_b_stride,
                 q_h_stride,
+                k_b_stride,
+                k_h_stride,
+                k_s_stride,
+                v_b_stride,
+                v_h_stride,
+                v_s_stride,
                 ctx,
             )
             handled = True
@@ -1354,10 +1400,10 @@ def _any_bool_go(
 # parallel. CPU keeps the original single-task-per-row scalar scan.
 # ---------------------------------------------------------------------------
 
-comptime ARGMAX_THREADS = 256
+comptime ARGMAX_THREADS = 512
 # log2(ARGMAX_THREADS): number of halving steps in the shared-memory
 # reduction tree below.
-comptime ARGMAX_STAGES = 8
+comptime ARGMAX_STAGES = 9
 
 
 @__llvm_metadata(
@@ -2809,7 +2855,8 @@ def _attn_decode_spec_go(
 ) raises -> PyObjectPtr:
     """Fused decode attention (q_len == 1, not causal), GPU only — one
     boundary call replacing the Python gates + geometry + alloc + launch.
-    Q reads through its (batch, head) strides; K/V must be contiguous."""
+    Q/K/V read through their real strides; the innermost head dimension must
+    remain contiguous for vector loads."""
     ref q = _spec_ptr(q_o)[]
     ref k = _spec_ptr(k_o)[]
     ref v = _spec_ptr(v_o)[]
@@ -2825,8 +2872,6 @@ def _attn_decode_spec_go(
             supported = True
     if not supported:
         raise Error("mojo spec attn_decode: unsupported dtype ", q.dtype)
-    if not (k.contig and v.contig):
-        raise Error("mojo spec attn_decode: k/v must be contiguous")
     var b = q.shape[MAX_RANK - 4]
     var h = q.shape[MAX_RANK - 3]
     var q_len = q.shape[MAX_RANK - 2]
@@ -2845,8 +2890,14 @@ def _attn_decode_spec_go(
         raise Error("mojo spec attn_decode: q/k shapes incompatible")
     if b * h * kv_len * head_dim == 0:
         raise Error("mojo spec attn_decode: empty input")
-    if q.strides[MAX_RANK - 1] != 1:
-        raise Error("mojo spec attn_decode: q head_dim stride != 1")
+    if (
+        q.strides[MAX_RANK - 1] != 1
+        or k.strides[MAX_RANK - 1] != 1
+        or v.strides[MAX_RANK - 1] != 1
+        or k.strides[MAX_RANK - 2] != head_dim
+        or v.strides[MAX_RANK - 2] != head_dim
+    ):
+        raise Error("mojo spec attn_decode: unsupported q/k/v strides")
 
     var ctx = q.ctx()
     if ctx.api() == "cpu":
@@ -2873,6 +2924,12 @@ def _attn_decode_spec_go(
                 h,
                 q.strides[MAX_RANK - 4],
                 q.strides[MAX_RANK - 3],
+                k.strides[MAX_RANK - 4],
+                k.strides[MAX_RANK - 3],
+                k.strides[MAX_RANK - 2],
+                v.strides[MAX_RANK - 4],
+                v.strides[MAX_RANK - 3],
+                v.strides[MAX_RANK - 2],
                 ctx,
             )
     var oshape = IndexList[MAX_RANK](1)

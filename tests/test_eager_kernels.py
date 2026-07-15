@@ -510,6 +510,97 @@ def test_fast_addmm_gpt2_batch256_mfma(max_gpu, in_features, out_features):
     assert torch.equal(dev[0], dev[2])
 
 
+@pytest.mark.parametrize("batch", [64, 257, 512])
+def test_fast_addmm_gpt2_dynamic_batch_mfma(max_gpu, batch):
+    if list(get_accelerators())[0].architecture_name != "gfx942":
+        pytest.skip("the GPT-2 MFMA specializations target gfx942")
+
+    # The deep projection uses runtime M with static N/K and the hardest
+    # warp-K schedule. Include a non-tile-aligned M to exercise edge guards.
+    x = torch.randn(batch, 3072)
+    weight = torch.randn(3072, 768)
+    bias = torch.randn(768)
+    dev_x = x.to(max_gpu)
+    dev_weight = weight.to(max_gpu)
+    dev_bias = bias.to(max_gpu)
+    outputs = [torch.addmm(dev_bias, dev_x, dev_weight) for _ in range(3)]
+    actual = [output.cpu() for output in outputs]
+    ref = torch.addmm(bias, x, weight)
+    for output in actual:
+        torch.testing.assert_close(output, ref, atol=5e-2, rtol=5e-2)
+    assert torch.equal(actual[0], actual[1])
+    assert torch.equal(actual[0], actual[2])
+
+
+def test_fast_gpt2_decomposed_gelu_and_broken_chain(max_gpu):
+    if list(get_accelerators())[0].architecture_name != "gfx942":
+        pytest.skip("the GPT-2 eager GELU fusion targets gfx942")
+
+    x = torch.randn(256, 1, 3072)
+    dev_x = x.to(max_gpu)
+
+    def decomposed_gelu(value):
+        return (
+            0.5
+            * value
+            * (
+                1
+                + torch.tanh(
+                    (2 / torch.pi) ** 0.5 * (value + 0.044715 * torch.pow(value, 3.0))
+                )
+            )
+        )
+
+    actual = decomposed_gelu(dev_x).cpu()
+    torch.testing.assert_close(actual, decomposed_gelu(x), atol=2e-5, rtol=2e-5)
+
+    # A consumer that breaks the recognized chain must materialize the exact
+    # intermediate instead of accidentally applying GELU.
+    broken = (torch.pow(dev_x, 3.0) + 2.0).cpu()
+    torch.testing.assert_close(broken, torch.pow(x, 3.0) + 2.0)
+
+
+def test_fast_gpt2_reserved_kv_cache_is_branch_safe(max_gpu):
+    if list(get_accelerators())[0].architecture_name != "gfx942":
+        pytest.skip("the GPT-2 reserved KV cache targets gfx942")
+
+    base = torch.randn(256, 12, 8, 64)
+    token1 = torch.randn(256, 12, 1, 64)
+    token2 = torch.randn(256, 12, 1, 64)
+    branch_token = torch.randn(256, 12, 1, 64)
+    dev_base = base.to(max_gpu)
+    dev_token1 = token1.to(max_gpu)
+    out1 = torch.cat((dev_base, dev_token1), dim=2)
+    out2 = torch.cat((out1, token2.to(max_gpu)), dim=2)
+    branch = torch.cat((out1, branch_token.to(max_gpu)), dim=2)
+
+    ref1 = torch.cat((base, token1), dim=2)
+    ref2 = torch.cat((ref1, token2), dim=2)
+    ref_branch = torch.cat((ref1, branch_token), dim=2)
+    torch.testing.assert_close(out1.cpu(), ref1)
+    torch.testing.assert_close(out2.cpu(), ref2)
+    torch.testing.assert_close(branch.cpu(), ref_branch)
+
+    # Decode attention consumes the capacity-backed, non-contiguous strides
+    # directly rather than gathering the cache on every token.
+    query = torch.randn(256, 12, 1, 64)
+    actual = torch.nn.functional.scaled_dot_product_attention(
+        query.to(max_gpu), out2, out2
+    ).cpu()
+    ref = torch.nn.functional.scaled_dot_product_attention(query, ref2, ref2)
+    torch.testing.assert_close(actual, ref, atol=2e-4, rtol=2e-4)
+
+
+def test_fast_gpt2_logits_argmax(max_gpu):
+    if list(get_accelerators())[0].architecture_name != "gfx942":
+        pytest.skip("the GPT-2 argmax specialization targets gfx942")
+
+    logits = torch.randn(256, 50257)
+    logits[:, 123] = 100.0
+    actual = torch.argmax(logits.to(max_gpu), dim=-1).cpu()
+    torch.testing.assert_close(actual, torch.argmax(logits, dim=-1))
+
+
 def test_fast_bmm(max_gpu):
     a = torch.randn(12, 6, 64)
     b = torch.randn(12, 64, 6)
