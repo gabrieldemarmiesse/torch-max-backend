@@ -645,7 +645,8 @@ def fast_aten_fill_scalar(input, value):
     a = _t(input)
     if a is None or a._dtype not in _FILL_DTYPES:
         return NOT_HANDLED
-    return fast_filled(a._shape, value, a._dtype, a._device)
+    result = fast_filled(a._shape, value, a._dtype, a._device)
+    return result if result is not None else NOT_HANDLED
 
 
 @no_type_check
@@ -655,6 +656,8 @@ def fast_aten_fill__scalar(input, value):
         return None
     a = _t(input)
     if a is None:
+        return None
+    if a._dtype == DType.float64 and a._device.api == "metal":
         return None
     if a._numel > 0:
         eager_kernels.tensor_holder.StridedFill(
@@ -1847,6 +1850,8 @@ def _fast_scatter(input, dim, index, src, value):
     if idx._device != a._device or idx._dtype != DType.int64:
         return NOT_HANDLED
     if a._dtype not in _SCATTER_DTYPES:
+        return NOT_HANDLED
+    if a._dtype == DType.float64 and a._device.api == "metal":
         return NOT_HANDLED
     rank = len(a._shape)
     if rank == 0 or rank > 4 or not -rank <= dim < rank:
@@ -3184,6 +3189,8 @@ def fast_filled(shape, value, dtype: DType, device):
         return None
     if dtype not in _FILL_DTYPES:
         return None
+    if dtype == DType.float64 and device.api == "metal":
+        return None
     shape = tuple(shape)
     result = eager_kernels.elementwise_ops.FillSpec(
         _pad8(shape, 1),
@@ -3205,11 +3212,13 @@ _ARANGE_DTYPES = _FILL_DTYPES[:-1]
 def fast_arange(numel, start, step, dtype: DType, device):
     """A 1-D TorchMojoTensor holding start + i*step (device kernel), or None.
 
-    The caller resolves torch's arange semantics (numel, dtype); values
-    ride through the kernel's Float64 math, so anything beyond exact-f64
-    integer range must not reach here.
+    The caller resolves torch's arange semantics (numel, dtype). Inputs arrive
+    through Float64, while the kernel uses PyTorch's device-specific
+    accumulator type; integers beyond the exact-f64 range must not reach here.
     """
     if dtype not in _ARANGE_DTYPES:
+        return None
+    if dtype == DType.float64 and device.api == "metal":
         return None
     out = _alloc((numel,), dtype, device)
     if numel > 0:

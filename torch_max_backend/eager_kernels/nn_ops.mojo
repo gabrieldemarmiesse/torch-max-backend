@@ -726,7 +726,14 @@ def _attn_decode_cpu[
             out_ptr[out_base + d] = (acc_out[d] / denom).cast[dtype]()
         acc_out.free()
 
-    _parallel_for[func](bh, ctx)
+    # CPU-only launch: `func` uses a host `alloc()`/`free()` for its per-row
+    # scratch, and `_parallel_for` would also compile a `target="gpu"`
+    # instantiation of it. That device instantiation pulls host malloc/free
+    # into the GPU binary -- a no-op on NVIDIA (device malloc exists) but a
+    # link failure on AMDGPU ("undefined symbol: malloc"). This kernel is only
+    # ever reached with a CPU context (see `_attn_decode`), so emit only the
+    # CPU form and the GPU instantiation is never generated on any platform.
+    elementwise[func, simd_width=1](Coord(bh), ctx)
 
 
 @always_inline

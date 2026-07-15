@@ -551,7 +551,7 @@ def _device_arange(start, end, step, dtype: torch.dtype | None, device):
         if isinstance(v, float) and not math.isfinite(v):
             return None
         if abs(v) > _MAX_EXACT_F64_INT:
-            # Values ride through the kernel's Float64 math.
+            # Python inputs cross the kernel boundary as Float64.
             return None
     if step == 0:
         return None  # host path raises torch's own error
@@ -571,7 +571,8 @@ def _device_arange(start, end, step, dtype: torch.dtype | None, device):
     )
 
 
-# fast_arange computes values as start + i*step in Float64.
+# fast_arange receives start/step as Float64; its accumulator follows the
+# output dtype and device, matching PyTorch's range kernels.
 _MAX_EXACT_F64_INT = 2**53
 
 

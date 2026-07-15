@@ -39,9 +39,9 @@ def disable_interpreter():
 
 
 @pytest.fixture(params=["cpu", "cuda"])
-def device(request, gpu_available: bool):
+def device(request, cuda_available: bool):
     device_name = request.param
-    if not gpu_available and device_name == "cuda":
+    if not cuda_available and device_name == "cuda":
         pytest.skip("CUDA not available")
     return device_name
 
@@ -108,8 +108,8 @@ def reset_compiler():
 
 
 @pytest.fixture
-def cuda_device(gpu_available: bool):
-    if not gpu_available:
+def cuda_device(cuda_available: bool):
+    if not cuda_available:
         pytest.skip("CUDA not available")
     return "cuda"
 

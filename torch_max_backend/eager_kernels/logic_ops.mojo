@@ -564,41 +564,69 @@ def _ternary_bcast[
         var b_ptr = _make_ptr[dtype](b_addr)
         var c_ptr = _make_ptr[dtype](c_addr)
 
-        @always_inline
-        @parameter
-        @__copy_capture(out_ptr, a_ptr, b_ptr, c_ptr, value)
-        def func[width: Int, alignment: Int = 1](idx: Coord):
-            var i = Int(idx[0].value())
-            var i3 = i % d3
-            var rest = i // d3
-            var i2 = rest % d2
-            rest = rest // d2
-            var i1 = rest % d1
-            var i0 = rest // d1
-            var a = a_ptr[i0 * as0 + i1 * as1 + i2 * as2 + i3 * as3]
-            var b = b_ptr[i0 * bs0 + i1 * bs1 + i2 * bs2 + i3 * bs3]
-            var c = c_ptr[i0 * cs0 + i1 * cs1 + i2 * cs2 + i3 * cs3]
-            comptime if dtype == DType.float16 or dtype == DType.bfloat16:
+        # The Float64 `value` scalar must be narrowed to its GPU-side type
+        # *before* it is captured by the closure below. Metal has zero
+        # support for the `double` type -- not just arithmetic on it, but
+        # even a single convert-from-f64 instruction inside a GPU-compiled
+        # kernel trips "Metal-unsupported instructions", regardless of the
+        # destination dtype. A comptime if/else can't merge into one `var`
+        # of two different static types afterwards, so the two cases get
+        # their own (otherwise identical) closure, each capturing an
+        # already-narrowed scalar -- mirrors tensor_holder.mojo's
+        # _strided_fill, which never leaks f64 into GPU codegen.
+        comptime if dtype == DType.float16 or dtype == DType.bfloat16:
+            var value_f32 = value.cast[DType.float32]()
+
+            @always_inline
+            @parameter
+            @__copy_capture(out_ptr, a_ptr, b_ptr, c_ptr, value_f32)
+            def func[width: Int, alignment: Int = 1](idx: Coord):
+                var i = Int(idx[0].value())
+                var i3 = i % d3
+                var rest = i // d3
+                var i2 = rest % d2
+                rest = rest // d2
+                var i1 = rest % d1
+                var i0 = rest // d1
+                var a = a_ptr[i0 * as0 + i1 * as1 + i2 * as2 + i3 * as3]
+                var b = b_ptr[i0 * bs0 + i1 * bs1 + i2 * bs2 + i3 * bs3]
+                var c = c_ptr[i0 * cs0 + i1 * cs1 + i2 * cs2 + i3 * cs3]
                 var af = a.cast[DType.float32]()
                 var bf = b.cast[DType.float32]()
                 var cf = c.cast[DType.float32]()
-                var vf = value.cast[DType.float32]()
                 comptime if op_code == TOP_ADDCMUL:
-                    out_ptr[i] = (af + vf * (bf * cf)).cast[dtype]()
+                    out_ptr[i] = (af + value_f32 * (bf * cf)).cast[dtype]()
                 else:
-                    out_ptr[i] = (af + vf * (bf / cf)).cast[dtype]()
-            elif dtype.is_floating_point():
-                var v = value.cast[dtype]()
-                comptime if op_code == TOP_ADDCMUL:
-                    out_ptr[i] = a + v * (b * c)
-                else:
-                    out_ptr[i] = a + v * (b / c)
-            else:
-                # Integer addcmul: value is an exact integer scalar.
-                var v = value.cast[dtype]()
-                out_ptr[i] = a + v * (b * c)
+                    out_ptr[i] = (af + value_f32 * (bf / cf)).cast[dtype]()
 
-        _parallel_for[func](total, ctx)
+            _parallel_for[func](total, ctx)
+        else:
+            var value_dt = value.cast[dtype]()
+
+            @always_inline
+            @parameter
+            @__copy_capture(out_ptr, a_ptr, b_ptr, c_ptr, value_dt)
+            def func2[width: Int, alignment: Int = 1](idx: Coord):
+                var i = Int(idx[0].value())
+                var i3 = i % d3
+                var rest = i // d3
+                var i2 = rest % d2
+                rest = rest // d2
+                var i1 = rest % d1
+                var i0 = rest // d1
+                var a = a_ptr[i0 * as0 + i1 * as1 + i2 * as2 + i3 * as3]
+                var b = b_ptr[i0 * bs0 + i1 * bs1 + i2 * bs2 + i3 * bs3]
+                var c = c_ptr[i0 * cs0 + i1 * cs1 + i2 * cs2 + i3 * cs3]
+                comptime if dtype.is_floating_point():
+                    comptime if op_code == TOP_ADDCMUL:
+                        out_ptr[i] = a + value_dt * (b * c)
+                    else:
+                        out_ptr[i] = a + value_dt * (b / c)
+                else:
+                    # Integer addcmul: value is an exact integer scalar.
+                    out_ptr[i] = a + value_dt * (b * c)
+
+            _parallel_for[func2](total, ctx)
 
 
 def _ternary_bcast_go[

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from torch_max_backend import register_max_devices
+from torch_max_backend import get_accelerators, register_max_devices
 from torch_max_backend.flags import fast_eager_enabled
 
 pytestmark = pytest.mark.xdist_group(name="group1")
@@ -33,6 +33,12 @@ def test_fast_unary_ops_match_cpu(max_device, op, dtype):
     x = torch.randn(33, 65).to(dtype)
     result = op(x.to(max_device))
     torch.testing.assert_close(result.cpu(), op(x))
+
+
+def test_fast_log1p_preserves_small_values(max_device):
+    x = torch.tensor([1e-10, -1e-10, 1e-8, -1e-8, 1e-6, -1e-6])
+    result = torch.log1p(x.to(max_device)).cpu()
+    torch.testing.assert_close(result, torch.log1p(x), rtol=2e-6, atol=0)
 
 
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
@@ -331,6 +337,34 @@ def test_fast_scalar_elementwise(max_device):
     torch.testing.assert_close(torch.tanh(xd).cpu(), torch.tanh(x))
 
 
+def test_fast_gpu_portability_kernels(max_device):
+    # These closures previously captured Float64 or instantiated host-only
+    # code for the GPU target, which is rejected by Metal and gfx942.
+    base = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    device_base = base.to(max_device)
+    device_base.t().fill_(2.5)
+    torch.testing.assert_close(device_base.cpu(), torch.full_like(base, 2.5))
+
+    index = torch.tensor([[0, 2, 1], [1, 0, 2]])
+    source = torch.tensor([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]])
+    scattered = (
+        torch.zeros_like(source)
+        .to(max_device)
+        .scatter(1, index.to(max_device), source.to(max_device))
+    )
+    torch.testing.assert_close(
+        scattered.cpu(), torch.zeros_like(source).scatter(1, index, source)
+    )
+
+    a = torch.randn(2, 3)
+    b = torch.randn(2, 3)
+    c = torch.randn(2, 3)
+    result = torch.addcmul(
+        a.to(max_device), b.to(max_device), c.to(max_device), value=0.125
+    )
+    torch.testing.assert_close(result.cpu(), torch.addcmul(a, b, c, value=0.125))
+
+
 def test_fast_add_scalar_int(max_device):
     x = torch.arange(6)
     torch.testing.assert_close((x.to(max_device) + 3).cpu(), x + 3)
@@ -360,12 +394,57 @@ def test_fast_arange(max_device):
     )
 
 
+def test_fast_arange_uses_device_accumulator(max_device):
+    args = (16_777_217.0, 16_777_227.0, 1.0)
+    result = torch.arange(*args, dtype=torch.float32, device=max_device).cpu()
+    cpu_index = len(list(get_accelerators())) - 1
+    if max_device == f"mojo:{cpu_index}":
+        # PyTorch's CPU kernel specifies a float64 accumulator for float32.
+        # Build that scalar reference explicitly: arm64's vectorized kernel
+        # has platform-specific intermediate rounding at this boundary.
+        expected = torch.tensor(
+            [args[0] + i * args[2] for i in range(10)], dtype=torch.float32
+        )
+    elif torch.cuda.is_available():
+        expected = torch.arange(*args, dtype=torch.float32, device="cuda").cpu()
+    elif torch.backends.mps.is_available():
+        expected = torch.arange(*args, dtype=torch.float32, device="mps").cpu()
+    else:
+        pytest.skip("no native GPU reference for MAX accelerator")
+    assert torch.equal(result, expected)
+
+
 def test_fast_cast(max_device):
     x = torch.randint(0, 3, (1, 6))
     torch.testing.assert_close(x.to(max_device).to(torch.bool).cpu(), x.to(torch.bool))
     f = torch.randn(3, 4)
     torch.testing.assert_close(
         f.to(max_device).to(torch.float16).cpu(), f.to(torch.float16)
+    )
+
+
+def test_fast_float64_factories_fill_scatter_and_arange(max_gpu):
+    if list(get_accelerators())[0].api == "metal":
+        pytest.skip("Metal does not support float64 kernels")
+
+    ones = torch.ones(5, dtype=torch.float64, device=max_gpu)
+    torch.testing.assert_close(ones.cpu(), torch.ones(5, dtype=torch.float64))
+
+    values = torch.arange(5, dtype=torch.float64).to(max_gpu)
+    values.fill_(2.5)
+    torch.testing.assert_close(values.cpu(), torch.full((5,), 2.5, dtype=torch.float64))
+
+    base = torch.zeros(5, dtype=torch.float64).to(max_gpu)
+    index = torch.tensor([1, 3], dtype=torch.int64).to(max_gpu)
+    source = torch.tensor([4.0, 7.0], dtype=torch.float64).to(max_gpu)
+    scattered = base.scatter(0, index, source).cpu()
+    torch.testing.assert_close(
+        scattered, torch.tensor([0.0, 4.0, 0.0, 7.0, 0.0], dtype=torch.float64)
+    )
+
+    result = torch.arange(0.0, 2.0, 0.25, dtype=torch.float64, device=max_gpu)
+    torch.testing.assert_close(
+        result.cpu(), torch.arange(0.0, 2.0, 0.25, dtype=torch.float64)
     )
 
 
@@ -408,6 +487,23 @@ def test_fast_mm_degenerate_dims(max_device, dtype):
     dev3 = torch.bmm(a3.to(max_device), b3.to(max_device)).cpu()
     ref3 = torch.bmm(a3.float(), b3.float()).to(dtype)
     torch.testing.assert_close(dev3, ref3, atol=5e-2, rtol=5e-2)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_fast_mm_aligned_single_row(max_gpu, dtype):
+    # This aligned shape selects GEVM on AMD.  Keep both the plain and bias
+    # paths covered because GPT-2 decode uses the latter.
+    a = torch.randn(1, 128).to(dtype)
+    b = torch.randn(128, 64).to(dtype)
+    bias = torch.randn(64).to(dtype)
+
+    dev = torch.mm(a.to(max_gpu), b.to(max_gpu)).cpu()
+    ref = (a.float() @ b.float()).to(dtype)
+    torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+
+    dev_bias = torch.addmm(bias.to(max_gpu), a.to(max_gpu), b.to(max_gpu)).cpu()
+    ref_bias = (a.float() @ b.float() + bias.float()).to(dtype)
+    torch.testing.assert_close(dev_bias, ref_bias, atol=5e-2, rtol=5e-2)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])

@@ -31,7 +31,11 @@ from std.gpu.memory import (
 from std.gpu.host import DeviceBuffer, DeviceContext
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator, size_of
+from std.sys.info import (
+    _accelerator_arch,
+    has_accelerator,
+    size_of,
+)
 from std.utils.coord import Coord as StdCoord
 from std.utils.static_tuple import StaticTuple
 
@@ -1427,10 +1431,34 @@ def _gemv_dtype_dispatch(
     var handled = False
     comptime for dt in FLOAT_DTYPES:
         if dtype == dt:
-            if transpose_b != 0:
-                _gemv_enqueue[dt, True](c_addr, a_addr, b_addr, m, n, k, ctx)
+            # MAX's bf16 gemv currently emits an fdot2 intrinsic that LLVM
+            # cannot select for gfx942. Avoid instantiating that kernel on
+            # MI300X, but preserve the operation by using the existing GEMM
+            # path that handled m == 1 before the GEMV optimization landed.
+            comptime if (
+                dt == DType.bfloat16 and _accelerator_arch() == "amdgpu:gfx942"
+            ):
+                _gemm_transb_dispatch[dt](
+                    c_addr,
+                    a_addr,
+                    b_addr,
+                    1,
+                    m,
+                    n,
+                    k,
+                    m * k,
+                    transpose_b,
+                    ctx,
+                )
             else:
-                _gemv_enqueue[dt, False](c_addr, a_addr, b_addr, m, n, k, ctx)
+                if transpose_b != 0:
+                    _gemv_enqueue[dt, True](
+                        c_addr, a_addr, b_addr, m, n, k, ctx
+                    )
+                else:
+                    _gemv_enqueue[dt, False](
+                        c_addr, a_addr, b_addr, m, n, k, ctx
+                    )
             handled = True
     if not handled:
         raise Error("unsupported dtype for gemv: " + String(dtype))

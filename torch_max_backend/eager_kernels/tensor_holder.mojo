@@ -40,6 +40,7 @@ from op_utils import (
     _get_ctx,
     _make_ptr,
     _parallel_for,
+    _parallel_for_dt,
     _raw_ctx,
     _raw_dtype_int,
     _raw_f64,
@@ -318,7 +319,7 @@ def _strided_fill[
         dst_off += rest * dst_strides[0]
         dst_ptr[dst_off] = scalar
 
-    _parallel_for[func](total, ctx)
+    _parallel_for_dt[dtype, func](total, ctx)
 
 
 def _strided_fill_go(

@@ -13,7 +13,7 @@ from std.gpu.host import DeviceBuffer, DeviceContext
 from std.memory import OpaquePointer, alloc
 from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
-from std.sys.info import has_accelerator
+from std.sys.info import has_accelerator, has_apple_gpu_accelerator
 from std.utils import IndexList
 from std.utils.coord import Coord
 
@@ -203,15 +203,11 @@ def _raw_tuple_len(t: PyObjectPtr) -> Int:
 # ===========================================================================
 # TensorSpec infrastructure — the single source of truth.
 #
-# CPython type registrations are per extension module: a type registered by
-# one module's PyInit is only constructible (`PythonObject(alloc=...)`)
-# inside that module's .so. Every kernel module that implements spec ops
-# therefore registers its OWN `TensorSpec` (and, if it allocates outputs,
-# its own `TensorHolder`) in its PyInit — but all of them compile this one
-# definition, so the struct layouts are identical and specs/holders created
-# by one module are read by another via `_spec_ptr` (an unchecked bitcast
-# that never consults the type registry). Refcounting and destructors are
-# per-instance, so cross-module flow is sound.
+# `tensor_holder` is the sole registrar of the process-wide Python type
+# objects for `TensorSpec` and `TensorHolder`. The eager module loader imports
+# it before any other kernel module, allowing those modules to construct the
+# shared types from this common Mojo definition. Specs are read through
+# `_spec_ptr`, an unchecked bitcast that relies on this layout staying exact.
 #
 # INVARIANT: never define a per-module TensorSpec/TensorHolder variant —
 # import these. Diverging layouts would turn the unchecked downcast into
@@ -482,12 +478,10 @@ def _parallel_for_dt[
     dtype: DType,
     func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None,
 ](count: Int, ctx: DeviceContext) raises:
-    """`_parallel_for` with the float64-on-GPU comptime guard: the f64 GPU
-    instantiation is never compiled (mirrors the elementwise kernels' own
-    guard), so dtype lists may include float64 for the CPU device."""
-    comptime if dtype == DType.float64:
+    """`_parallel_for` with an Apple-GPU float64 comptime guard."""
+    comptime if dtype == DType.float64 and has_apple_gpu_accelerator():
         if ctx.api() != "cpu":
-            raise Error("float64 is not supported on GPU")
+            raise Error("float64 is not supported on Apple GPU")
         elementwise[func, simd_width=1](Coord(count), ctx)
     else:
         _parallel_for[func](count, ctx)

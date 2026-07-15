@@ -74,8 +74,8 @@ _DLPACK_CODE_OF: dict[DType, tuple[int, int]] = {
     DType.bfloat16: (4, 16),
 }
 
-# kDLCPU=1, kDLCUDA=2, kDLROCM=10.
-_DLPACK_DEVICE_TYPE_OF = {"cpu": 1, "cuda": 2, "hip": 10}
+# kDLCPU=1, kDLCUDA=2, kDLMetal=8, kDLROCM=10.
+_DLPACK_DEVICE_TYPE_OF = {"cpu": 1, "cuda": 2, "metal": 8, "hip": 10}
 
 _CAPSULE_NAME = b"dltensor"
 

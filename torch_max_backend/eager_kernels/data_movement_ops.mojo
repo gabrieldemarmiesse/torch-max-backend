@@ -31,6 +31,7 @@ from op_utils import (
     TensorSpec,
     _make_ptr,
     _parallel_for,
+    _parallel_for_dt,
     _scratch_contig,
     _raw_ctx,
     _raw_dtype_int,
@@ -1099,7 +1100,7 @@ def _scatter_dim[
                 i0 * ss0 + i1 * ss1 + i2 * ss2 + i3 * ss3
             ]
 
-    _parallel_for[func](total, ctx)
+    _parallel_for_dt[dtype, func](total, ctx)
 
 
 def _scatter_dim_go(

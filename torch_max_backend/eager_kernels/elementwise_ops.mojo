@@ -43,7 +43,13 @@ from std.memory import OpaquePointer
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator, simd_width_of, size_of
+from std.sys.info import (
+    has_accelerator,
+    has_apple_gpu_accelerator,
+    is_apple_gpu,
+    simd_width_of,
+    size_of,
+)
 from std.utils.index import IndexList
 from std.utils.coord import Coord
 from std.utils.numerics import isnan
@@ -265,7 +271,17 @@ def _float_unary[
     comptime if op_code == UOP_LOG:
         res = log(a)
     comptime if op_code == UOP_LOG1P:
-        res = log1p(a)
+        comptime if is_apple_gpu():
+            # Mojo's log1p currently upcasts to float64, which Metal rejects.
+            # Use the compensated float32 algorithm from PyTorch's Metal
+            # support so small nonzero inputs do not collapse to zero.
+            var xp1 = 1 + a
+            var rc = log(xp1)
+            var corrected = rc * (a / (xp1 - 1))
+            rc = (a.gt(-0.5) & a.lt(0.5)).select(corrected, rc)
+            res = xp1.eq(1).select(a, rc)
+        else:
+            res = log1p(a)
     comptime if op_code == UOP_RECIPROCAL:
         res = 1 / a
     comptime if op_code == UOP_RSQRT:
@@ -394,10 +410,12 @@ def _unary_bool[
         elementwise[func, simd_width=simd_width_of[dtype]()](Coord(size), ctx)
     else:
         comptime if has_accelerator():
-            comptime if dtype != DType.float64:
-                elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
+            comptime if (
+                dtype == DType.float64 and has_apple_gpu_accelerator()
+            ):
+                raise Error("float64 is not supported on Apple GPU")
             else:
-                raise Error("float64 is not supported on GPU")
+                elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
         else:
             raise Error("no GPU accelerator available at compile time")
 
@@ -502,7 +520,12 @@ def _fill[
         elementwise[func, simd_width=simd_width_of[dtype]()](Coord(size), ctx)
     else:
         comptime if has_accelerator():
-            elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
+            comptime if (
+                dtype == DType.float64 and has_apple_gpu_accelerator()
+            ):
+                raise Error("float64 is not supported on Apple GPU")
+            else:
+                elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
         else:
             raise Error("no GPU accelerator available at compile time")
 
@@ -517,20 +540,99 @@ def _arange[
     size: Int,
     ctx: DeviceContext,
 ) raises:
-    @always_inline
-    @parameter
-    @__copy_capture(out_ptr, start, step)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var i = Int(idx[0].value())
-        out_ptr[i] = (start + Float64(i) * step).cast[dtype]()
+    # Match PyTorch's accumulator types: f32 accumulates in f64 on CPU and
+    # f32 on GPU; half/bfloat16 use f32; integral outputs use int64. Metal
+    # must never see the f64 closure or even capture a Float64 value.
+    comptime if dtype == DType.float32:
+        if ctx.api() == "cpu":
 
-    if ctx.api() == "cpu":
-        elementwise[func, simd_width=1](Coord(size), ctx)
-    else:
-        comptime if has_accelerator():
-            elementwise[func, simd_width=1, target="gpu"](Coord(size), ctx)
+            @always_inline
+            @parameter
+            @__copy_capture(out_ptr, start, step)
+            def cpu_f32[width: Int, alignment: Int = 1](idx: Coord):
+                var i = Int(idx[0].value())
+                out_ptr[i] = (start + Float64(i) * step).cast[dtype]()
+
+            elementwise[cpu_f32, simd_width=1](Coord(size), ctx)
         else:
-            raise Error("no GPU accelerator available at compile time")
+            var start_f32 = start.cast[DType.float32]()
+            var step_f32 = step.cast[DType.float32]()
+
+            @always_inline
+            @parameter
+            @__copy_capture(out_ptr, start_f32, step_f32)
+            def gpu_f32[width: Int, alignment: Int = 1](idx: Coord):
+                var i = Int(idx[0].value())
+                out_ptr[i] = (
+                    start_f32 + Scalar[DType.float32](i) * step_f32
+                ).cast[dtype]()
+
+            comptime if has_accelerator():
+                elementwise[gpu_f32, simd_width=1, target="gpu"](
+                    Coord(size), ctx
+                )
+            else:
+                raise Error("no GPU accelerator available at compile time")
+    elif dtype == DType.float16 or dtype == DType.bfloat16:
+        var start_f32 = start.cast[DType.float32]()
+        var step_f32 = step.cast[DType.float32]()
+
+        @always_inline
+        @parameter
+        @__copy_capture(out_ptr, start_f32, step_f32)
+        def lowp[width: Int, alignment: Int = 1](idx: Coord):
+            var i = Int(idx[0].value())
+            out_ptr[i] = (start_f32 + Scalar[DType.float32](i) * step_f32).cast[
+                dtype
+            ]()
+
+        if ctx.api() == "cpu":
+            elementwise[lowp, simd_width=1](Coord(size), ctx)
+        else:
+            comptime if has_accelerator():
+                elementwise[lowp, simd_width=1, target="gpu"](Coord(size), ctx)
+            else:
+                raise Error("no GPU accelerator available at compile time")
+    elif dtype.is_integral():
+        var start_i64 = start.cast[DType.int64]()
+        var step_i64 = step.cast[DType.int64]()
+
+        @always_inline
+        @parameter
+        @__copy_capture(out_ptr, start_i64, step_i64)
+        def integral[width: Int, alignment: Int = 1](idx: Coord):
+            var i = Int(idx[0].value())
+            out_ptr[i] = (start_i64 + Scalar[DType.int64](i) * step_i64).cast[
+                dtype
+            ]()
+
+        if ctx.api() == "cpu":
+            elementwise[integral, simd_width=1](Coord(size), ctx)
+        else:
+            comptime if has_accelerator():
+                elementwise[integral, simd_width=1, target="gpu"](
+                    Coord(size), ctx
+                )
+            else:
+                raise Error("no GPU accelerator available at compile time")
+    else:
+
+        @always_inline
+        @parameter
+        @__copy_capture(out_ptr, start, step)
+        def f64[width: Int, alignment: Int = 1](idx: Coord):
+            var i = Int(idx[0].value())
+            out_ptr[i] = (start + Float64(i) * step).cast[dtype]()
+
+        if ctx.api() == "cpu":
+            elementwise[f64, simd_width=1](Coord(size), ctx)
+        else:
+            comptime if has_apple_gpu_accelerator():
+                raise Error("float64 is not supported on Apple GPU")
+            elif has_accelerator():
+                elementwise[f64, simd_width=1, target="gpu"](Coord(size), ctx)
+            else:
+                raise Error("no GPU accelerator available at compile time")
 
 
 def _arange_go(

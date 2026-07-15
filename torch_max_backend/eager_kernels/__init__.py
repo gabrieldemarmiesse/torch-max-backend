@@ -86,6 +86,18 @@ def _import_mojo_module(name: str):
 
 def __getattr__(name: str):
     if name in _MOJO_MODULES:
+        # `tensor_holder` registers the process-wide `TensorHolder` /
+        # `TensorSpec` Python type objects that every other module's spec ops
+        # take and return. Those modules only *use* the types (never
+        # re-register them — a duplicate `add_type` aborts the process), so
+        # `tensor_holder` must be imported and finalized before any of them,
+        # whatever op the workload happens to touch first. Loading via `.to()`
+        # (which hits `tensor_holder.alloc_from_host`) usually gets this right
+        # by luck, but a factory-first workload (e.g. `torch.ones(..., FillSpec)`)
+        # would otherwise import `elementwise_ops` first and fail with
+        # "No Python type object registered for ... TensorSpec".
+        if name != "tensor_holder" and "tensor_holder" not in globals():
+            globals()["tensor_holder"] = _import_mojo_module("tensor_holder")
         module = _import_mojo_module(name)
         globals()[name] = module  # later lookups skip __getattr__
         return module
