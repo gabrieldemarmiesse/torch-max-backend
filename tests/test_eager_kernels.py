@@ -521,6 +521,28 @@ def test_fast_linear_single_token(max_device, dtype):
     torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
 
 
+def test_fast_linear_skinny_m_large_output(max_gpu):
+    # GPT-2's batch-32 lm_head takes Apple's 32-row simdgroup-matrix path.
+    # Other GPUs retain the skinny-M C-transpose path.
+    x = torch.randn(32, 1, 768)
+    w = torch.randn(8192, 768)
+    dev = torch.nn.functional.linear(x.to(max_gpu), w.to(max_gpu)).cpu()
+    ref = x @ w.t()
+    torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+
+
+@pytest.mark.parametrize(
+    ("in_features", "out_features"), [(768, 2304), (768, 768), (768, 3072), (3072, 768)]
+)
+def test_fast_addmm_gpt2_batch32(max_gpu, in_features, out_features):
+    x = torch.randn(32, in_features)
+    w = torch.randn(in_features, out_features)
+    bias = torch.randn(out_features)
+    dev = torch.addmm(bias.to(max_gpu), x.to(max_gpu), w.to(max_gpu)).cpu()
+    ref = torch.addmm(bias, x, w)
+    torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 def test_fast_linear_out_features_one(max_device, dtype):
     # out_features == 1 -> transposed-B GEMM with n == 1, plus bias.

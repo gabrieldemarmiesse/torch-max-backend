@@ -34,6 +34,7 @@ from std.python.bindings import PythonModuleBuilder
 from std.sys.info import (
     _accelerator_arch,
     has_accelerator,
+    has_apple_gpu_accelerator,
     size_of,
 )
 from std.utils.coord import Coord as StdCoord
@@ -46,6 +47,7 @@ from layout import TileTensor, row_major
 from linalg.bmm import batched_matmul
 from linalg.gemv import gemv_gpu
 from linalg.matmul import matmul as cpu_lib_matmul
+from linalg.matmul.gpu.apple import gemm_kernel_apple_8x8
 from linalg.matmul.vendor.blas import matmul as vendor_matmul
 
 from std.gpu.primitives.grid_controls import PDLLevel
@@ -1107,6 +1109,44 @@ def _gemm_enqueue[
         # C^T = B @ A^T instead so B streams via cp.async at full rate.
         comptime if dtype == DType.float32:
             comptime if transpose_b:
+                # Apple M1-M4's stock 8x8 simdgroup-matrix kernel uses a
+                # 64-row tile. Specialize it to 32 rows for GPT-2's
+                # batch-32 lm_head so all four simdgroups do useful work.
+                comptime if has_apple_gpu_accelerator():
+                    if batch == 1 and m == 32 and n >= 8192 and k % 16 == 0:
+                        var c = TileTensor(
+                            _make_ptr[DType.float32](c_addr), row_major(m, n)
+                        )
+                        var a = TileTensor(
+                            _make_ptr[DType.float32](a_addr), row_major(m, k)
+                        )
+                        var b = TileTensor(
+                            _make_ptr[DType.float32](b_addr), row_major(n, k)
+                        )
+                        comptime apple_kernel = gemm_kernel_apple_8x8[
+                            DType.float32,
+                            DType.float32,
+                            DType.float32,
+                            type_of(c).LayoutType,
+                            type_of(a).LayoutType,
+                            type_of(b).LayoutType,
+                            True,
+                            BLOCK_M=32,
+                            BLOCK_N=64,
+                            BLOCK_K=16,
+                            NUM_SIMDGROUPS=4,
+                        ]
+                        ctx.enqueue_function[apple_kernel](
+                            c,
+                            a,
+                            b,
+                            m,
+                            n,
+                            k,
+                            grid_dim=(ceildiv(n, 64), ceildiv(m, 32)),
+                            block_dim=(128,),
+                        )
+                        return
                 # Fat C^T path for medium-m transposed-B (lm_head at large
                 # batch): batch==1 only, grid must fill the GPU on its own.
                 if (
@@ -1124,16 +1164,22 @@ def _gemm_enqueue[
                 comptime if transpose_b:
                     # CT path: batch==1 only (no batched A^T scratch), and
                     # only when the weight-row grid alone fills the GPU.
-                    if (
-                        batch == 1
-                        and k % 4 == 0
-                        and m % 4 == 0
-                        and ceildiv(n, 64) >= 128
-                    ):
-                        _ct_enqueue[64, 32, 32, 4, 4, 3](
-                            c_addr, a_addr, b_addr, m, n, k, ctx
-                        )
-                        return
+                    # This C-transpose tile is tuned for NVIDIA/AMD. Its
+                    # 3-stage pipeline needs 36 KiB of threadgroup memory,
+                    # above Apple GPUs' 32 KiB limit. Apple either took the
+                    # simdgroup-matrix path above or uses the regular
+                    # transposed-B fallback below for smaller outputs.
+                    comptime if not has_apple_gpu_accelerator():
+                        if (
+                            batch == 1
+                            and k % 4 == 0
+                            and m % 4 == 0
+                            and ceildiv(n, 64) >= 128
+                        ):
+                            _ct_enqueue[64, 32, 32, 4, 4, 3](
+                                c_addr, a_addr, b_addr, m, n, k, ctx
+                            )
+                            return
                     if k % 4 == 0:
                         _tune_enqueue[32, 64, 16, 4, 4, True, False](
                             c_addr,
@@ -2620,6 +2666,73 @@ def _matmul_bias_run(
             if dtype == dt:
                 _bias_add_row[dt](c_addr, bias_addr, m * n, n, ctx)
         return
+
+    # Apple M1-M4's stock simdgroup-matrix GEMM uses a 64-row tile. A
+    # compile-time 32-row tile avoids wasting half the simdgroups on GPT-2's
+    # batch-32 projections, and the custom store epilogue folds in bias.
+    # This branch is absent from CUDA/ROCm builds, which retain the existing
+    # pure-Mojo SIMT dispatch and tuning constants exactly.
+    comptime if has_apple_gpu_accelerator():
+        if (
+            dtype == DType.float32
+            and transpose_b == 0
+            and m == 32
+            and (
+                (k == 768 and n in (768, 2304, 3072))
+                or (k == 3072 and n == 768)
+            )
+        ):
+            var c = TileTensor(
+                _make_ptr[DType.float32](c_addr), row_major(m, n)
+            )
+            var a = TileTensor(
+                _make_ptr[DType.float32](a_addr), row_major(m, k)
+            )
+            var b = TileTensor(
+                _make_ptr[DType.float32](b_addr), row_major(k, n)
+            )
+            var c_ptr = _make_ptr[DType.float32](c_addr)
+            var bias_ptr = _make_ptr[DType.float32](bias_addr)
+
+            @always_inline
+            @parameter
+            @__copy_capture(c_ptr, bias_ptr, n)
+            def apple_bias_epilogue[
+                _dtype: DType, _width: SIMDSize, *, alignment: Int = 1
+            ](coords: IndexList[2], value: SIMD[_dtype, _width]):
+                var offset = Int(coords[0]) * n + Int(coords[1])
+                var bias = bias_ptr.load[width=_width, alignment=1](
+                    Int(coords[1])
+                )
+                c_ptr.store[alignment=1](
+                    offset, value.cast[DType.float32]() + bias
+                )
+
+            comptime apple_kernel = gemm_kernel_apple_8x8[
+                DType.float32,
+                DType.float32,
+                DType.float32,
+                type_of(c).LayoutType,
+                type_of(a).LayoutType,
+                type_of(b).LayoutType,
+                False,
+                elementwise_lambda_fn=apple_bias_epilogue,
+                BLOCK_M=32,
+                BLOCK_N=64,
+                BLOCK_K=16,
+                NUM_SIMDGROUPS=4,
+            ]
+            ctx.enqueue_function[apple_kernel](
+                c,
+                a,
+                b,
+                m,
+                n,
+                k,
+                grid_dim=(ceildiv(n, 64), ceildiv(m, 32)),
+                block_dim=(128,),
+            )
+            return
 
     # Fused-epilogue path: the float32 pipe3 tile kernels add the bias in
     # the GEMM epilogue, saving a full extra read+write of C per call.
