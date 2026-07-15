@@ -21,6 +21,7 @@ backend keeps using `aten_functions` directly.
 """
 
 import math
+import weakref
 from typing import no_type_check
 
 from max.dtype import DType
@@ -130,6 +131,42 @@ def _tc(x) -> TorchMojoTensor | None:
 
 _alloc = TorchMojoTensor._alloc
 _view_of = TorchMojoTensor._view_of
+
+# GPT-2's Conv1D weights are stored KxN and reach eager mode through addmm,
+# while the fast gfx942 MFMA schedule consumes the transposed NxK layout.
+# Cache that one-time materialization by tensor identity/version so decode
+# steps use the faster transposed-B kernel without recopying model weights.
+_GFX942_GPT2_WEIGHT_T_CACHE = {}
+_GFX942_GPT2_WEIGHT_SHAPES = {(768, 768), (768, 2304), (768, 3072), (3072, 768)}
+
+
+@no_type_check
+def _gfx942_cached_gpt2_weight_t(weight):
+    key = id(weight)
+    version = weight._version
+    cached = _GFX942_GPT2_WEIGHT_T_CACHE.get(key)
+    if cached is not None:
+        source_ref, cached_version, transposed = cached
+        if source_ref() is weight and cached_version == version:
+            return transposed
+
+    transposed_view = _view_of(
+        weight,
+        (weight._shape[1], weight._shape[0]),
+        (weight._strides[1], weight._strides[0]),
+        weight._offset,
+    )
+    transposed = transposed_view._materialize_contiguous()
+
+    def remove(_source_ref, *, cache_key=key):
+        _GFX942_GPT2_WEIGHT_T_CACHE.pop(cache_key, None)
+
+    _GFX942_GPT2_WEIGHT_T_CACHE[key] = (
+        weakref.ref(weight, remove),
+        version,
+        transposed,
+    )
+    return transposed
 
 
 # ---------------------------------------------------------------------------
@@ -2892,6 +2929,26 @@ def fast_aten_mm(x, y):
 def fast_aten_addmm(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     # beta/alpha scaling isn't implemented by the fast path (falls through).
     if beta == 1 and alpha == 1:
+        a = _t(mat1)
+        weight = _t(mat2)
+        bias = _t(input)
+        if (
+            a is not None
+            and weight is not None
+            and bias is not None
+            and a._dtype == weight._dtype == bias._dtype == DType.float32
+            and len(a._shape) == len(weight._shape) == 2
+            and a._shape[0] == 256
+            and tuple(weight._shape) in _GFX942_GPT2_WEIGHT_SHAPES
+            and tuple(bias._shape) == (weight._shape[1],)
+            and a._shape[1] == weight._shape[0]
+            and a._device.architecture_name == "gfx942"
+        ):
+            weight_t = _gfx942_cached_gpt2_weight_t(weight)
+            out = _try_spec_matmul("MatmulBiasSpec", (a, weight_t, bias), 1)
+            if out is not None:
+                return out
+
         out = _try_spec_matmul("MatmulBiasSpec", (mat1, mat2, input), 0)
         if out is not None:
             return out

@@ -469,6 +469,47 @@ def test_fast_mm_addmm(max_gpu):
     torch.testing.assert_close(dev, a @ b, atol=5e-2, rtol=5e-2)
 
 
+@pytest.mark.parametrize(
+    "in_features,out_features", [(768, 2304), (3072, 768), (768, 50257)]
+)
+def test_fast_linear_gpt2_batch256_mfma(max_gpu, in_features, out_features):
+    if list(get_accelerators())[0].architecture_name != "gfx942":
+        pytest.skip("the GPT-2 MFMA specializations target gfx942")
+
+    x = torch.randn(256, in_features)
+    weight = torch.randn(out_features, in_features)
+    bias = torch.randn(out_features)
+    dev = torch.nn.functional.linear(
+        x.to(max_gpu), weight.to(max_gpu), bias.to(max_gpu)
+    ).cpu()
+    ref = torch.nn.functional.linear(x, weight, bias)
+    torch.testing.assert_close(dev, ref, atol=5e-2, rtol=5e-2)
+
+
+@pytest.mark.parametrize(
+    "in_features,out_features", [(768, 768), (768, 2304), (3072, 768)]
+)
+def test_fast_addmm_gpt2_batch256_mfma(max_gpu, in_features, out_features):
+    if list(get_accelerators())[0].architecture_name != "gfx942":
+        pytest.skip("the GPT-2 MFMA specializations target gfx942")
+
+    x = torch.randn(256, in_features)
+    weight = torch.randn(in_features, out_features)
+    bias = torch.randn(out_features)
+    dev_x = x.to(max_gpu)
+    dev_weight = weight.to(max_gpu)
+    dev_bias = bias.to(max_gpu)
+    # Queue repeated launches before synchronizing. This catches invalid
+    # tile schedules whose shared-memory race is hidden by a single launch.
+    dev_outputs = [torch.addmm(dev_bias, dev_x, dev_weight) for _ in range(3)]
+    dev = [output.cpu() for output in dev_outputs]
+    ref = torch.addmm(bias, x, weight)
+    for actual in dev:
+        torch.testing.assert_close(actual, ref, atol=5e-2, rtol=5e-2)
+    assert torch.equal(dev[0], dev[1])
+    assert torch.equal(dev[0], dev[2])
+
+
 def test_fast_bmm(max_gpu):
     a = torch.randn(12, 6, 64)
     b = torch.randn(12, 64, 6)
@@ -612,4 +653,17 @@ def test_fast_sdpa(max_gpu, is_causal, kv_len, dtype):
         q.to(max_gpu), k.to(max_gpu), v.to(max_gpu), is_causal=is_causal
     ).cpu()
     ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+    torch.testing.assert_close(dev, ref, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_fast_sdpa_decode(max_gpu, dtype):
+    # q_len == 1 selects the fused decode kernel used by GPT-2 generation.
+    q = torch.randn(4, 12, 1, 64, dtype=dtype)
+    k = torch.randn(4, 12, 128, 64, dtype=dtype)
+    v = torch.randn(4, 12, 128, 64, dtype=dtype)
+    dev = torch.nn.functional.scaled_dot_product_attention(
+        q.to(max_gpu), k.to(max_gpu), v.to(max_gpu)
+    ).cpu()
+    ref = torch.nn.functional.scaled_dot_product_attention(q, k, v)
     torch.testing.assert_close(dev, ref, atol=1e-2, rtol=1e-2)

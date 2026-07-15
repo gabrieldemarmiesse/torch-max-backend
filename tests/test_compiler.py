@@ -613,6 +613,20 @@ def test_sdpa_with_attention_mask(device: str):
     check_functions_are_equivalent(fn, device, [q, k, v, mask], rtol=1e-2, atol=1e-3)
 
 
+def test_sdpa_decode_gpt2_mask(device: str):
+    """GPT-2 decode shape exercises the fused Mojo graph custom op on GPU."""
+
+    def fn(q, k, v, mask):
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=0.125)
+
+    q = torch.randn(4, 12, 1, 64)
+    k = torch.randn(4, 12, 128, 64)
+    v = torch.randn(4, 12, 128, 64)
+    mask = torch.zeros(4, 1, 1, 128)
+    mask[..., -7:] = float("-inf")
+    check_functions_are_equivalent(fn, device, [q, k, v, mask], rtol=1e-2, atol=1e-3)
+
+
 def test_constant_pad_nd(device: str):
     def fn(x):
         return F.pad(x, (1, 2, 0, 3), mode="constant", value=1.5)

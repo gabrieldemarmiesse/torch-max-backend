@@ -649,6 +649,33 @@ def _attn_decode_kernel[
     barrier()
     var inv_denom = 1.0 / bcast[1]
 
+    # GPT-2's D=64 matches an AMD wavefront. Partition the V reduction over
+    # all four wavefronts so the bandwidth-heavy pass uses the whole block,
+    # then combine four partial vectors in the now-free reduction scratch.
+    # The Apple specialization instantiates this kernel with 64 threads, so
+    # keep the four-wavefront reduction entirely out of non-gfx942 builds.
+    comptime if _accelerator_arch() == "amdgpu:gfx942":
+        if THREADS == 256 and head_dim == 64:
+            var lane = tid % 64
+            var wave = tid // 64
+            var acc = Float32(0)
+            for j in range(wave, kv_len, 4):
+                acc += (
+                    s_smem[j]
+                    * v_ptr[kv_base + j * head_dim + lane].cast[DType.float32]()
+                )
+            red[tid] = acc
+            barrier()
+            if wave == 0:
+                acc = (
+                    red[lane]
+                    + red[64 + lane]
+                    + red[128 + lane]
+                    + red[192 + lane]
+                )
+                out_ptr[out_base + lane] = (acc * inv_denom).cast[dtype]()
+            return
+
     for d in range(tid, head_dim, THREADS):
         var acc = Float32(0)
         for j in range(kv_len):

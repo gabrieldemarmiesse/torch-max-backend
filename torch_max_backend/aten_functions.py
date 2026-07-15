@@ -3043,6 +3043,37 @@ def aten_scaled_dot_product_attention(
         zero = F.constant(0.0, dtype=query.dtype, device=query.device)
         attn_mask = F.where(attn_mask, zero, neg_inf)
 
+    query_device = query.device
+    is_gpu = (
+        not query_device.is_cpu()
+        if isinstance(query_device, DeviceRef)
+        else query_device.label != "cpu"
+    )
+
+    if (
+        is_gpu
+        and attn_mask is not None
+        and dropout_p == 0.0
+        and not is_causal
+        and scale in (None, 0.125)
+        and not enable_gqa
+        and query.dtype == key.dtype == value.dtype == attn_mask.dtype == DType.float32
+        and len(query.shape)
+        == len(key.shape)
+        == len(value.shape)
+        == len(attn_mask.shape)
+        == 4
+        and query.shape[2] == 1
+        and query.shape[3] == 64
+        and query.shape[0] == key.shape[0] == value.shape[0]
+        and query.shape[1] == key.shape[1] == value.shape[1]
+        and key.shape == value.shape
+        and attn_mask.shape[-1] == key.shape[2]
+        and attn_mask.shape[0] in (1, query.shape[0])
+        and attn_mask.shape[1] == attn_mask.shape[2] == 1
+    ):
+        return custom_mojo_ops.gpt2_decode_attention(query, key, value, attn_mask)
+
     output, _ = aten__scaled_dot_product_attention_math(
         query,
         key,
