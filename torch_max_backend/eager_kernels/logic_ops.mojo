@@ -22,12 +22,13 @@
 # ===----------------------------------------------------------------------=== #
 
 from std.os import abort
+from std.gpu import block_dim, block_idx, grid_dim, thread_idx
 from std.gpu.host import DeviceContext
 from std.math import pow
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator
+from std.sys.info import has_accelerator, has_apple_gpu_accelerator
 from std.utils.coord import Coord
 
 from std.algorithm.functional import elementwise
@@ -35,9 +36,12 @@ from std.algorithm.functional import elementwise
 from std.utils import IndexList
 
 from op_utils import (
+    GS_THREADS,
     MAX_RANK,
     TensorHolder,
     TensorSpec,
+    _enqueue_cached,
+    _gs_blocks,
     _make_ptr,
     _parallel_for,
     _parallel_for_dt,
@@ -75,6 +79,92 @@ comptime BOP_POW = 11
 
 
 @always_inline
+def _bin_bcast_body[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    a: Scalar[dtype],
+    b: Scalar[dtype],
+    i: Int,
+):
+    """One output element of the broadcast binary op — shared verbatim by
+    the CPU closure and the cached GPU kernel."""
+    comptime if op_code == BOP_ADD:
+        out_ptr[i] = a + b
+    comptime if op_code == BOP_SUB:
+        out_ptr[i] = a - b
+    comptime if op_code == BOP_MUL:
+        out_ptr[i] = a * b
+    comptime if op_code == BOP_DIV:
+        comptime if dtype.is_floating_point():
+            out_ptr[i] = a / b
+    comptime if op_code == BOP_MAX:
+        out_ptr[i] = max(a, b)
+    comptime if op_code == BOP_MIN:
+        out_ptr[i] = min(a, b)
+    comptime if op_code == BOP_AND:
+        comptime if not dtype.is_floating_point():
+            out_ptr[i] = a & b
+    comptime if op_code == BOP_OR:
+        comptime if not dtype.is_floating_point():
+            out_ptr[i] = a | b
+    comptime if op_code == BOP_XOR:
+        comptime if not dtype.is_floating_point():
+            out_ptr[i] = a ^ b
+    comptime if op_code == BOP_REMAINDER:
+        # Mojo's `%` follows the divisor's sign (Python/torch
+        # semantics) for both signed integers and floats.
+        out_ptr[i] = a % b
+    comptime if op_code == BOP_FLOORDIV:
+        # `//` = floor(a / b), matching torch.floor_divide for
+        # both float and integer dtypes.
+        out_ptr[i] = a // b
+    comptime if op_code == BOP_POW:
+        # Float only (gated at the launcher); accumulate halves in
+        # float32 to match torch's numerics.
+        comptime if dtype == DType.float16 or dtype == DType.bfloat16:
+            out_ptr[i] = pow(
+                a.cast[DType.float32](), b.cast[DType.float32]()
+            ).cast[dtype]()
+        elif dtype.is_floating_point():
+            out_ptr[i] = pow(a, b)
+
+
+def _bin_bcast_kernel[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    l_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    r_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    d1: Int,
+    d2: Int,
+    d3: Int,
+    ls0: Int,
+    ls1: Int,
+    ls2: Int,
+    ls3: Int,
+    rs0: Int,
+    rs1: Int,
+    rs2: Int,
+    rs3: Int,
+    total: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < total:
+        var i3 = i % d3
+        var rest = i // d3
+        var i2 = rest % d2
+        rest = rest // d2
+        var i1 = rest % d1
+        var i0 = rest // d1
+        var a = l_ptr[i0 * ls0 + i1 * ls1 + i2 * ls2 + i3 * ls3]
+        var b = r_ptr[i0 * rs0 + i1 * rs1 + i2 * rs2 + i3 * rs3]
+        _bin_bcast_body[dtype, op_code](out_ptr, a, b, i)
+        i += gstride
+
+
+@always_inline
 def _bin_bcast[
     dtype: DType, op_code: Int
 ](
@@ -109,58 +199,60 @@ def _bin_bcast[
             var l_ptr = _make_ptr[dtype](l_addr)
             var r_ptr = _make_ptr[dtype](r_addr)
 
-            @always_inline
-            @parameter
-            @__copy_capture(out_ptr, l_ptr, r_ptr)
-            def func[width: Int, alignment: Int = 1](idx: Coord):
-                var i = Int(idx[0].value())
-                var i3 = i % d3
-                var rest = i // d3
-                var i2 = rest % d2
-                rest = rest // d2
-                var i1 = rest % d1
-                var i0 = rest // d1
-                var a = l_ptr[i0 * ls0 + i1 * ls1 + i2 * ls2 + i3 * ls3]
-                var b = r_ptr[i0 * rs0 + i1 * rs1 + i2 * rs2 + i3 * rs3]
-                comptime if op_code == BOP_ADD:
-                    out_ptr[i] = a + b
-                comptime if op_code == BOP_SUB:
-                    out_ptr[i] = a - b
-                comptime if op_code == BOP_MUL:
-                    out_ptr[i] = a * b
-                comptime if op_code == BOP_DIV:
-                    out_ptr[i] = a / b
-                comptime if op_code == BOP_MAX:
-                    out_ptr[i] = max(a, b)
-                comptime if op_code == BOP_MIN:
-                    out_ptr[i] = min(a, b)
-                comptime if op_code == BOP_AND:
-                    out_ptr[i] = a & b
-                comptime if op_code == BOP_OR:
-                    out_ptr[i] = a | b
-                comptime if op_code == BOP_XOR:
-                    out_ptr[i] = a ^ b
-                comptime if op_code == BOP_REMAINDER:
-                    # Mojo's `%` follows the divisor's sign (Python/torch
-                    # semantics) for both signed integers and floats.
-                    out_ptr[i] = a % b
-                comptime if op_code == BOP_FLOORDIV:
-                    # `//` = floor(a / b), matching torch.floor_divide for
-                    # both float and integer dtypes.
-                    out_ptr[i] = a // b
-                comptime if op_code == BOP_POW:
-                    # Float only (gated above); accumulate halves in
-                    # float32 to match torch's numerics.
-                    comptime if (
-                        dtype == DType.float16 or dtype == DType.bfloat16
-                    ):
-                        out_ptr[i] = pow(
-                            a.cast[DType.float32](), b.cast[DType.float32]()
-                        ).cast[dtype]()
-                    else:
-                        out_ptr[i] = pow(a, b)
+            if ctx.api() == "cpu":
 
-            _parallel_for_dt[dtype, func](total, ctx)
+                @always_inline
+                @parameter
+                @__copy_capture(out_ptr, l_ptr, r_ptr)
+                def func[width: Int, alignment: Int = 1](idx: Coord):
+                    var i = Int(idx[0].value())
+                    var i3 = i % d3
+                    var rest = i // d3
+                    var i2 = rest % d2
+                    rest = rest // d2
+                    var i1 = rest % d1
+                    var i0 = rest // d1
+                    var a = l_ptr[i0 * ls0 + i1 * ls1 + i2 * ls2 + i3 * ls3]
+                    var b = r_ptr[i0 * rs0 + i1 * rs1 + i2 * rs2 + i3 * rs3]
+                    _bin_bcast_body[dtype, op_code](
+                        out_ptr.as_unsafe_any_origin(), a, b, i
+                    )
+
+                elementwise[func, simd_width=1](Coord(total), ctx)
+            else:
+                comptime if (
+                    dtype == DType.float64 and has_apple_gpu_accelerator()
+                ):
+                    raise Error("float64 is not supported on Apple GPU")
+                else:
+                    comptime if has_accelerator():
+                        _enqueue_cached[_bin_bcast_kernel[dtype, op_code]](
+                            ctx,
+                            String(t"lg_bcast_{op_code}_{dtype}"),
+                            _gs_blocks(total),
+                            1,
+                            1,
+                            GS_THREADS,
+                            out_ptr.as_unsafe_any_origin(),
+                            l_ptr.as_unsafe_any_origin().as_immutable(),
+                            r_ptr.as_unsafe_any_origin().as_immutable(),
+                            d1,
+                            d2,
+                            d3,
+                            ls0,
+                            ls1,
+                            ls2,
+                            ls3,
+                            rs0,
+                            rs1,
+                            rs2,
+                            rs3,
+                            total,
+                        )
+                    else:
+                        raise Error(
+                            "no GPU accelerator available at compile time"
+                        )
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +267,74 @@ comptime COP_GT = 4
 comptime COP_GE = 5
 comptime COP_LAND = 6
 comptime COP_LXOR = 7
+
+
+@always_inline
+def _cmp_bcast_body[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[DType.bool], MutAnyOrigin],
+    a: Scalar[dtype],
+    b: Scalar[dtype],
+    i: Int,
+):
+    """One output element of the broadcast comparison — shared verbatim by
+    the CPU closure and the cached GPU kernel."""
+    comptime if op_code == COP_EQ:
+        out_ptr[i] = Scalar[DType.bool](a == b)
+    comptime if op_code == COP_NE:
+        out_ptr[i] = Scalar[DType.bool](a != b)
+    comptime if op_code == COP_LT:
+        out_ptr[i] = Scalar[DType.bool](a < b)
+    comptime if op_code == COP_LE:
+        out_ptr[i] = Scalar[DType.bool](a <= b)
+    comptime if op_code == COP_GT:
+        out_ptr[i] = Scalar[DType.bool](a > b)
+    comptime if op_code == COP_GE:
+        out_ptr[i] = Scalar[DType.bool](a >= b)
+    comptime if op_code == COP_LAND or op_code == COP_LXOR:
+        # Logical ops test each operand for nonzero-ness, then combine.
+        # Output is bool regardless of the (arbitrary) input dtype.
+        var la = a != Scalar[dtype](0)
+        var lb = b != Scalar[dtype](0)
+        comptime if op_code == COP_LAND:
+            out_ptr[i] = la & lb
+        comptime if op_code == COP_LXOR:
+            out_ptr[i] = la ^ lb
+
+
+def _cmp_bcast_kernel[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[DType.bool], MutAnyOrigin],
+    l_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    r_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    d1: Int,
+    d2: Int,
+    d3: Int,
+    ls0: Int,
+    ls1: Int,
+    ls2: Int,
+    ls3: Int,
+    rs0: Int,
+    rs1: Int,
+    rs2: Int,
+    rs3: Int,
+    total: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < total:
+        var i3 = i % d3
+        var rest = i // d3
+        var i2 = rest % d2
+        rest = rest // d2
+        var i1 = rest % d1
+        var i0 = rest // d1
+        var a = l_ptr[i0 * ls0 + i1 * ls1 + i2 * ls2 + i3 * ls3]
+        var b = r_ptr[i0 * rs0 + i1 * rs1 + i2 * rs2 + i3 * rs3]
+        _cmp_bcast_body[dtype, op_code](out_ptr, a, b, i)
+        i += gstride
 
 
 @always_inline
@@ -202,42 +362,56 @@ def _cmp_bcast[
     var l_ptr = _make_ptr[dtype](l_addr)
     var r_ptr = _make_ptr[dtype](r_addr)
 
-    @always_inline
-    @parameter
-    @__copy_capture(out_ptr, l_ptr, r_ptr)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var i = Int(idx[0].value())
-        var i3 = i % d3
-        var rest = i // d3
-        var i2 = rest % d2
-        rest = rest // d2
-        var i1 = rest % d1
-        var i0 = rest // d1
-        var a = l_ptr[i0 * ls0 + i1 * ls1 + i2 * ls2 + i3 * ls3]
-        var b = r_ptr[i0 * rs0 + i1 * rs1 + i2 * rs2 + i3 * rs3]
-        comptime if op_code == COP_EQ:
-            out_ptr[i] = Scalar[DType.bool](a == b)
-        comptime if op_code == COP_NE:
-            out_ptr[i] = Scalar[DType.bool](a != b)
-        comptime if op_code == COP_LT:
-            out_ptr[i] = Scalar[DType.bool](a < b)
-        comptime if op_code == COP_LE:
-            out_ptr[i] = Scalar[DType.bool](a <= b)
-        comptime if op_code == COP_GT:
-            out_ptr[i] = Scalar[DType.bool](a > b)
-        comptime if op_code == COP_GE:
-            out_ptr[i] = Scalar[DType.bool](a >= b)
-        comptime if op_code == COP_LAND or op_code == COP_LXOR:
-            # Logical ops test each operand for nonzero-ness, then combine.
-            # Output is bool regardless of the (arbitrary) input dtype.
-            var la = a != Scalar[dtype](0)
-            var lb = b != Scalar[dtype](0)
-            comptime if op_code == COP_LAND:
-                out_ptr[i] = la & lb
-            comptime if op_code == COP_LXOR:
-                out_ptr[i] = la ^ lb
+    if ctx.api() == "cpu":
 
-    _parallel_for_dt[dtype, func](total, ctx)
+        @always_inline
+        @parameter
+        @__copy_capture(out_ptr, l_ptr, r_ptr)
+        def func[width: Int, alignment: Int = 1](idx: Coord):
+            var i = Int(idx[0].value())
+            var i3 = i % d3
+            var rest = i // d3
+            var i2 = rest % d2
+            rest = rest // d2
+            var i1 = rest % d1
+            var i0 = rest // d1
+            var a = l_ptr[i0 * ls0 + i1 * ls1 + i2 * ls2 + i3 * ls3]
+            var b = r_ptr[i0 * rs0 + i1 * rs1 + i2 * rs2 + i3 * rs3]
+            _cmp_bcast_body[dtype, op_code](
+                out_ptr.as_unsafe_any_origin(), a, b, i
+            )
+
+        elementwise[func, simd_width=1](Coord(total), ctx)
+    else:
+        comptime if dtype == DType.float64 and has_apple_gpu_accelerator():
+            raise Error("float64 is not supported on Apple GPU")
+        else:
+            comptime if has_accelerator():
+                _enqueue_cached[_cmp_bcast_kernel[dtype, op_code]](
+                    ctx,
+                    String(t"lg_cmp_{op_code}_{dtype}"),
+                    _gs_blocks(total),
+                    1,
+                    1,
+                    GS_THREADS,
+                    out_ptr.as_unsafe_any_origin(),
+                    l_ptr.as_unsafe_any_origin().as_immutable(),
+                    r_ptr.as_unsafe_any_origin().as_immutable(),
+                    d1,
+                    d2,
+                    d3,
+                    ls0,
+                    ls1,
+                    ls2,
+                    ls3,
+                    rs0,
+                    rs1,
+                    rs2,
+                    rs3,
+                    total,
+                )
+            else:
+                raise Error("no GPU accelerator available at compile time")
 
 
 # ---------------------------------------------------------------------------

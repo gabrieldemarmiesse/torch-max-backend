@@ -20,8 +20,12 @@ from std.os import abort
 from std.gpu import (
     MAX_THREADS_PER_BLOCK_METADATA,
     barrier,
+    block_dim,
     block_idx,
+    grid_dim,
+    lane_id,
     thread_idx,
+    warp_id,
 )
 from std.gpu.memory import (
     async_copy,
@@ -48,6 +52,37 @@ from linalg.bmm import batched_matmul
 from linalg.gemv import gemv_gpu
 from linalg.matmul import matmul as cpu_lib_matmul
 from linalg.matmul.gpu.apple import gemm_kernel_apple_8x8
+from std.sys import llvm_intrinsic
+
+# Apple 8x8 simdgroup-matrix primitives (vendored from
+# linalg.matmul.gpu.apple.matmul_8x8, whose helpers are not exported).
+comptime MMA8_DIM = 8
+comptime FRAG8 = 2  # 8x8 = 64 elems / 32 lanes = 2 per lane
+
+
+@always_inline
+def _frag8_layout(lane: Int) -> Tuple[Int, Int]:
+    """Apple 8x8 simdgroup-matrix per-lane layout: lane owns
+    (row, col_base) and (row, col_base + 1)."""
+    return (
+        ((lane & 6) >> 1) + ((lane & 16) >> 2),
+        ((lane & 1) << 1) + ((lane & 8) >> 1),
+    )
+
+
+@always_inline
+def _mma8x8(
+    a: SIMD[DType.float32, FRAG8],
+    b: SIMD[DType.float32, FRAG8],
+    c: SIMD[DType.float32, FRAG8],
+) -> SIMD[DType.float32, FRAG8]:
+    """One 8x8x8 simdgroup-matrix multiply-accumulate: D = A @ B + C."""
+    return llvm_intrinsic[
+        "llvm.air.simdgroup_matrix_8x8_multiply_accumulate",
+        SIMD[DType.float32, FRAG8],
+    ](a, b, c)
+
+
 from linalg.matmul.vendor.blas import matmul as vendor_matmul
 
 from std.gpu.primitives.grid_controls import PDLLevel
@@ -92,7 +127,12 @@ from op_utils import (
 # ---------------------------------------------------------------------------
 
 # Aim for a few blocks per SM when choosing split-K factors (H100: 114 SMs).
-comptime TARGET_BLOCKS = 342
+# Blocks-in-flight target for the split-K heuristic. NVIDIA/AMD parts want
+# a few hundred blocks to hide latency; Apple's 8-40 core GPUs saturate far
+# earlier, and every extra split-K shard costs an m*n float32 workspace
+# write plus a read-back in the reduce pass, so oversplitting turns small-M
+# GEMMs bandwidth-bound on partials.
+comptime TARGET_BLOCKS = 80 if has_apple_gpu_accelerator() else 342
 
 
 @__name("pure_ksplit_reduce")
@@ -1518,6 +1558,217 @@ def _gemv_dtype_dispatch(
 
 
 @always_inline
+# ---------------------------------------------------------------------------
+# Cached raw-pointer variant of the Apple 8x8 simdgroup-matrix GEMM
+# (linalg.matmul.gpu.apple), for float32 row-major C = A @ B [+ bias].
+# Differences from the stock kernel: thin function with plain pointer/int
+# arguments so it launches through `_enqueue_cached` (the stock TileTensor +
+# closure-epilogue form only fits the uncached per-call compile path), an
+# optional bias row folded into the store, and split-K over `grid.z`
+# (each z-slice writes its k-chunk partial to a workspace; a cached reduce
+# sums them and applies the bias). Split-K is what keeps skinny-M
+# projections (a 32-row A against a wide weight) from running a dozen
+# threadgroups on a 10-40 core GPU.
+# ---------------------------------------------------------------------------
+
+
+def _apple8_gemm_kernel[
+    HAS_BIAS: Bool, SPLIT: Bool
+](
+    c_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    a_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    b_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    bias_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    m: Int,
+    n: Int,
+    k: Int,
+    ksplits: Int,
+):
+    comptime BLOCK_M = 32
+    comptime BLOCK_N = 64
+    comptime SG_M = BLOCK_M // 2
+    comptime SG_N = BLOCK_N // 2
+    comptime NT_M = SG_M // MMA8_DIM
+    comptime NT_N = SG_N // MMA8_DIM
+
+    var lane = Int(lane_id())
+    var fl = _frag8_layout(lane)
+    var frow = fl[0]
+    var fcol = fl[1]
+    var sg = Int(warp_id())
+    var row_base = Int(block_idx.y) * BLOCK_M + (sg // 2) * SG_M
+    var col_base = Int(block_idx.x) * BLOCK_N + (sg % 2) * SG_N
+    var interior = (row_base + SG_M <= m) and (col_base + SG_N <= n)
+
+    # This z-slice's k-chunk, in whole 8-wide slabs (dispatch gates k % 8).
+    var slabs = k // MMA8_DIM
+    var chunk = (slabs + ksplits - 1) // ksplits
+    var ks0 = Int(block_idx.z) * chunk
+    var ks1 = min(slabs, ks0 + chunk)
+
+    var accum = InlineArray[SIMD[DType.float32, FRAG8], NT_M * NT_N](
+        fill=SIMD[DType.float32, FRAG8](0)
+    )
+
+    for ks in range(ks0, ks1):
+        var kk = ks * MMA8_DIM
+        var afrag = InlineArray[SIMD[DType.float32, FRAG8], NT_M](
+            uninitialized=True
+        )
+        comptime for mi in range(NT_M):
+            var grow = row_base + mi * MMA8_DIM + frow
+            if interior or grow < m:
+                afrag[mi] = (a_ptr + grow * k + kk + fcol).load[width=FRAG8]()
+            else:
+                afrag[mi] = SIMD[DType.float32, FRAG8](0)
+        var bfrag = InlineArray[SIMD[DType.float32, FRAG8], NT_N](
+            uninitialized=True
+        )
+        comptime for ni in range(NT_N):
+            var krow = kk + frow
+            var gj = col_base + ni * MMA8_DIM + fcol
+            if interior or gj + 1 < n:
+                bfrag[ni] = (b_ptr + krow * n + gj).load[width=FRAG8]()
+            else:
+                var bf = SIMD[DType.float32, FRAG8](0)
+                if gj < n:
+                    bf[0] = b_ptr[krow * n + gj]
+                bfrag[ni] = bf
+        comptime for mi in range(NT_M):
+            comptime for ni in range(NT_N):
+                accum[mi * NT_N + ni] = _mma8x8(
+                    afrag[mi], bfrag[ni], accum[mi * NT_N + ni]
+                )
+
+    var out_base = Int(block_idx.z) * m * n
+    comptime for mi in range(NT_M):
+        comptime for ni in range(NT_N):
+            var frag = accum[mi * NT_N + ni]
+            comptime for s in range(FRAG8):
+                var grow = row_base + mi * MMA8_DIM + frow
+                var gcol = col_base + ni * MMA8_DIM + fcol + s
+                if grow < m and gcol < n:
+                    var v = frag[s]
+                    comptime if SPLIT:
+                        c_ptr[out_base + grow * n + gcol] = v
+                    else:
+                        comptime if HAS_BIAS:
+                            v += bias_ptr[gcol]
+                        c_ptr[grow * n + gcol] = v
+
+
+def _apple8_reduce_kernel[
+    HAS_BIAS: Bool
+](
+    c_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    ws_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    bias_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    mn: Int,
+    n: Int,
+    ksplits: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < mn:
+        var acc = Float32(0)
+        for z in range(ksplits):
+            acc += ws_ptr[z * mn + i]
+        comptime if HAS_BIAS:
+            acc += bias_ptr[i % n]
+        c_ptr[i] = acc
+        i += gstride
+
+
+@always_inline
+def _apple8_enqueue[
+    HAS_BIAS: Bool
+](
+    c_addr: Int,
+    a_addr: Int,
+    b_addr: Int,
+    bias_addr: Int,
+    m: Int,
+    n: Int,
+    k: Int,
+    ctx: DeviceContext,
+) raises:
+    var gx = ceildiv(n, 64)
+    var gy = ceildiv(m, 32)
+    var c = _make_ptr[DType.float32](c_addr).as_unsafe_any_origin()
+    var a = (
+        _make_ptr[DType.float32](a_addr).as_unsafe_any_origin().as_immutable()
+    )
+    var b = (
+        _make_ptr[DType.float32](b_addr).as_unsafe_any_origin().as_immutable()
+    )
+    var bias = (
+        _make_ptr[DType.float32](bias_addr if bias_addr != 0 else a_addr)
+        .as_unsafe_any_origin()
+        .as_immutable()
+    )
+    var slabs = k // MMA8_DIM
+    var ksplits = 1
+    # Split K only when the N-tile grid is far below GPU saturation
+    # (~2 threadgroups per core); each shard costs an m*n partials
+    # round-trip, so a grid that already fills the cores never splits.
+    if gx * gy < 24:
+        ksplits = min(min(ceildiv(TARGET_BLOCKS, gx * gy), slabs), 8)
+    if ksplits == 1:
+        _enqueue_cached[_apple8_gemm_kernel[HAS_BIAS, False]](
+            ctx,
+            String(t"apple8_gemm_b{HAS_BIAS}"),
+            gx,
+            gy,
+            1,
+            128,
+            c,
+            a,
+            b,
+            bias,
+            m,
+            n,
+            k,
+            1,
+        )
+        return
+    var ws = ctx.enqueue_create_buffer[DType.float32](ksplits * m * n)
+    var ws_mut = UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin](
+        unsafe_from_address=Int(ws.unsafe_ptr())
+    ).as_unsafe_any_origin()
+    _enqueue_cached[_apple8_gemm_kernel[False, True]](
+        ctx,
+        String("apple8_gemm_split"),
+        gx,
+        gy,
+        ksplits,
+        128,
+        ws_mut,
+        a,
+        b,
+        bias,
+        m,
+        n,
+        k,
+        ksplits,
+    )
+    var mn = m * n
+    _enqueue_cached[_apple8_reduce_kernel[HAS_BIAS]](
+        ctx,
+        String(t"apple8_reduce_b{HAS_BIAS}"),
+        max(1, min((mn + 255) // 256, 512)),
+        1,
+        1,
+        256,
+        c,
+        ws_mut.as_immutable(),
+        bias,
+        mn,
+        n,
+        ksplits,
+    )
+    _ = ws^  # dropped now: the stream-ordered free lands after the reduce
+
+
 def _tune_enqueue[
     BM: Int,
     BN: Int,
@@ -2667,73 +2918,23 @@ def _matmul_bias_run(
                 _bias_add_row[dt](c_addr, bias_addr, m * n, n, ctx)
         return
 
-    # Apple M1-M4's stock simdgroup-matrix GEMM uses a 64-row tile. A
-    # compile-time 32-row tile avoids wasting half the simdgroups on GPT-2's
-    # batch-32 projections, and the custom store epilogue folds in bias.
-    # This branch is absent from CUDA/ROCm builds, which retain the existing
-    # pure-Mojo SIMT dispatch and tuning constants exactly.
+    # Apple: skinny-M float32 projections take the vendored cached
+    # simdgroup-matrix kernel (32-row tile, bias folded in the store,
+    # split-K when the N-tile grid alone cannot fill the GPU). This branch
+    # is absent from CUDA/ROCm builds, which retain the existing pure-Mojo
+    # SIMT dispatch and tuning constants exactly.
     comptime if has_apple_gpu_accelerator():
         if (
             dtype == DType.float32
             and transpose_b == 0
-            and m == 32
-            and (
-                (k == 768 and n in (768, 2304, 3072))
-                or (k == 3072 and n == 768)
-            )
+            and m > SMALLM_MR
+            and m <= 32
+            and k % MMA8_DIM == 0
         ):
-            var c = TileTensor(
-                _make_ptr[DType.float32](c_addr), row_major(m, n)
-            )
-            var a = TileTensor(
-                _make_ptr[DType.float32](a_addr), row_major(m, k)
-            )
-            var b = TileTensor(
-                _make_ptr[DType.float32](b_addr), row_major(k, n)
-            )
-            var c_ptr = _make_ptr[DType.float32](c_addr)
-            var bias_ptr = _make_ptr[DType.float32](bias_addr)
-
-            @always_inline
-            @parameter
-            @__copy_capture(c_ptr, bias_ptr, n)
-            def apple_bias_epilogue[
-                _dtype: DType, _width: SIMDSize, *, alignment: Int = 1
-            ](coords: IndexList[2], value: SIMD[_dtype, _width]):
-                var offset = Int(coords[0]) * n + Int(coords[1])
-                var bias = bias_ptr.load[width=_width, alignment=1](
-                    Int(coords[1])
-                )
-                c_ptr.store[alignment=1](
-                    offset, value.cast[DType.float32]() + bias
-                )
-
-            comptime apple_kernel = gemm_kernel_apple_8x8[
-                DType.float32,
-                DType.float32,
-                DType.float32,
-                type_of(c).LayoutType,
-                type_of(a).LayoutType,
-                type_of(b).LayoutType,
-                False,
-                elementwise_lambda_fn=apple_bias_epilogue,
-                BLOCK_M=32,
-                BLOCK_N=64,
-                BLOCK_K=16,
-                NUM_SIMDGROUPS=4,
-            ]
-            ctx.enqueue_function[apple_kernel](
-                c,
-                a,
-                b,
-                m,
-                n,
-                k,
-                grid_dim=(ceildiv(n, 64), ceildiv(m, 32)),
-                block_dim=(128,),
+            _apple8_enqueue[True](
+                c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
             )
             return
-
     # Fused-epilogue path: the float32 pipe3 tile kernels add the bias in
     # the GEMM epilogue, saving a full extra read+write of C per call.
     if (
@@ -3032,7 +3233,7 @@ def _matmul_spec_go(
     var ctx = a.ctx()
     var numel = m * n
     var nbytes = numel * a.itemsize
-    var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
 
     _matmul_spec_operands_launch(
@@ -3088,7 +3289,7 @@ def _matmul_bias_spec_go(
     var ctx = a.ctx()
     var numel = m * n
     var nbytes = numel * a.itemsize
-    var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if bias.contig:
         _matmul_spec_operands_launch(
@@ -3177,7 +3378,7 @@ def _bmm_spec_go(
     var ctx = a.ctx()
     var numel = batch * m * n
     var nbytes = numel * a.itemsize
-    var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     _matmul_spec_operands_launch(
         a, b, 0, False, addr, batch, m, n, k, transpose_b, ctx

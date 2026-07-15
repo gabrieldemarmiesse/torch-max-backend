@@ -15,6 +15,7 @@
 # ===----------------------------------------------------------------------=== #
 
 from std.os import abort
+from std.gpu import block_dim, block_idx, grid_dim, thread_idx
 from std.gpu.host import DeviceContext
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
@@ -27,8 +28,11 @@ from std.utils import IndexList
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 
 from op_utils import (
+    GS_THREADS,
     MAX_RANK,
     TensorSpec,
+    _enqueue_cached,
+    _gs_blocks,
     _make_ptr,
     _parallel_for,
     _parallel_for_dt,
@@ -73,6 +77,33 @@ comptime SCATTER_DTYPES = [
 # ---------------------------------------------------------------------------
 
 
+def _permute_copy_kernel[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    d1: Int,
+    d2: Int,
+    d3: Int,
+    s0: Int,
+    s1: Int,
+    s2: Int,
+    s3: Int,
+    total: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < total:
+        var i3 = i % d3
+        var rest = i // d3
+        var i2 = rest % d2
+        rest = rest // d2
+        var i1 = rest % d1
+        var i0 = rest // d1
+        out_ptr[i] = in_ptr[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3]
+        i += gstride
+
+
 @always_inline
 def _permute_copy[
     dtype: DType
@@ -91,21 +122,46 @@ def _permute_copy[
 ) raises:
     var out_ptr = _make_ptr[dtype](out_addr)
     var in_ptr = _make_ptr[dtype](in_addr)
+    var total = d0 * d1 * d2 * d3
 
-    @always_inline
-    @parameter
-    @__copy_capture(out_ptr, in_ptr)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var i = Int(idx[0].value())
-        var i3 = i % d3
-        var rest = i // d3
-        var i2 = rest % d2
-        rest = rest // d2
-        var i1 = rest % d1
-        var i0 = rest // d1
-        out_ptr[i] = in_ptr[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3]
+    if ctx.api() == "cpu":
 
-    _parallel_for[func](d0 * d1 * d2 * d3, ctx)
+        @always_inline
+        @parameter
+        @__copy_capture(out_ptr, in_ptr)
+        def func[width: Int, alignment: Int = 1](idx: Coord):
+            var i = Int(idx[0].value())
+            var i3 = i % d3
+            var rest = i // d3
+            var i2 = rest % d2
+            rest = rest // d2
+            var i1 = rest % d1
+            var i0 = rest // d1
+            out_ptr[i] = in_ptr[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3]
+
+        elementwise[func, simd_width=1](Coord(total), ctx)
+    else:
+        comptime if has_accelerator():
+            _enqueue_cached[_permute_copy_kernel[dtype]](
+                ctx,
+                String(t"dm_permute_{dtype}"),
+                _gs_blocks(total),
+                1,
+                1,
+                GS_THREADS,
+                out_ptr.as_unsafe_any_origin(),
+                in_ptr.as_unsafe_any_origin().as_immutable(),
+                d1,
+                d2,
+                d3,
+                s0,
+                s1,
+                s2,
+                s3,
+                total,
+            )
+        else:
+            raise Error("no GPU accelerator available at compile time")
 
 
 def _permute_copy_go(
@@ -156,6 +212,222 @@ def _permute_copy_go(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Fused two-input concatenation: out rows are `len1 + len2` contiguous
+# elements, filled from in1's and in2's contiguous rows in one launch (the
+# common cat([a, b], dim) case after outer/inner flattening). One grid row
+# per outer block; threads grid-stride the output row's float4 chunks and
+# pick their source by column, so the append never pays two kernel
+# launches and a pipeline bubble between them.
+# ---------------------------------------------------------------------------
+
+
+def _cat2_kernel2d[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in1_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    in2_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    len1_4: Int,
+    len2_4: Int,
+):
+    comptime vec_align = 4 * size_of[dtype]()
+    var o = Int(block_idx.y)
+    var total4 = len1_4 + len2_4
+    var out_base = o * total4 * 4
+    var in1_base = o * len1_4 * 4
+    var in2_base = o * len2_4 * 4
+    var c = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var cstride = Int(grid_dim.x) * Int(block_dim.x)
+    while c < total4:
+        var j = c * 4
+        if c < len1_4:
+            out_ptr.store[width=4, alignment=vec_align](
+                out_base + j,
+                in1_ptr.load[width=4, alignment=vec_align](in1_base + j),
+            )
+        else:
+            var j2 = (c - len1_4) * 4
+            out_ptr.store[width=4, alignment=vec_align](
+                out_base + j,
+                in2_ptr.load[width=4, alignment=vec_align](in2_base + j2),
+            )
+        c += cstride
+
+
+def _cat2_go(
+    out_ptr_o: PyObjectPtr,
+    in1_ptr_o: PyObjectPtr,
+    in2_ptr_o: PyObjectPtr,
+    outer_o: PyObjectPtr,
+    len1_o: PyObjectPtr,
+    len2_o: PyObjectPtr,
+    itemsize_o: PyObjectPtr,
+    ctx_ptr: PyObjectPtr,
+) raises:
+    var out_addr = _raw_int(out_ptr_o)
+    var in1_addr = _raw_int(in1_ptr_o)
+    var in2_addr = _raw_int(in2_ptr_o)
+    var outer = _raw_int(outer_o)
+    var len1 = _raw_int(len1_o)
+    var len2 = _raw_int(len2_o)
+    var itemsize = _raw_int(itemsize_o)
+    var ctx = _raw_ctx(ctx_ptr)
+
+    if ctx.api() == "cpu" or len1 % 4 != 0 or len2 % 4 != 0 or outer > 65535:
+        raise Error("cat2 fast path preconditions not met")
+    comptime if has_accelerator():
+        var total4 = (len1 + len2) // 4
+        var gx = max(1, min((total4 + GS_THREADS - 1) // GS_THREADS, 32))
+        if itemsize == 4:
+            _enqueue_cached[_cat2_kernel2d[DType.uint32]](
+                ctx,
+                String("dm_cat2_u32"),
+                gx,
+                outer,
+                1,
+                GS_THREADS,
+                _make_ptr[DType.uint32](out_addr).as_unsafe_any_origin(),
+                _make_ptr[DType.uint32](in1_addr)
+                .as_unsafe_any_origin()
+                .as_immutable(),
+                _make_ptr[DType.uint32](in2_addr)
+                .as_unsafe_any_origin()
+                .as_immutable(),
+                len1 // 4,
+                len2 // 4,
+            )
+        elif itemsize == 2:
+            _enqueue_cached[_cat2_kernel2d[DType.uint16]](
+                ctx,
+                String("dm_cat2_u16"),
+                gx,
+                outer,
+                1,
+                GS_THREADS,
+                _make_ptr[DType.uint16](out_addr).as_unsafe_any_origin(),
+                _make_ptr[DType.uint16](in1_addr)
+                .as_unsafe_any_origin()
+                .as_immutable(),
+                _make_ptr[DType.uint16](in2_addr)
+                .as_unsafe_any_origin()
+                .as_immutable(),
+                len1 // 4,
+                len2 // 4,
+            )
+        elif itemsize == 8:
+            _enqueue_cached[_cat2_kernel2d[DType.uint64]](
+                ctx,
+                String("dm_cat2_u64"),
+                gx,
+                outer,
+                1,
+                GS_THREADS,
+                _make_ptr[DType.uint64](out_addr).as_unsafe_any_origin(),
+                _make_ptr[DType.uint64](in1_addr)
+                .as_unsafe_any_origin()
+                .as_immutable(),
+                _make_ptr[DType.uint64](in2_addr)
+                .as_unsafe_any_origin()
+                .as_immutable(),
+                len1 // 4,
+                len2 // 4,
+            )
+        elif itemsize == 1:
+            _enqueue_cached[_cat2_kernel2d[DType.uint8]](
+                ctx,
+                String("dm_cat2_u8"),
+                gx,
+                outer,
+                1,
+                GS_THREADS,
+                _make_ptr[DType.uint8](out_addr).as_unsafe_any_origin(),
+                _make_ptr[DType.uint8](in1_addr)
+                .as_unsafe_any_origin()
+                .as_immutable(),
+                _make_ptr[DType.uint8](in2_addr)
+                .as_unsafe_any_origin()
+                .as_immutable(),
+                len1 // 4,
+                len2 // 4,
+            )
+        else:
+            raise Error("unsupported element size for cat2")
+    else:
+        raise Error("no GPU accelerator available at compile time")
+
+
+def _cat2_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        _cat2_go(
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
+            args[6],
+            args[7],
+        )
+        return _raw_ret_none()
+    except e:
+        return _spec_unsupported(e)
+
+
+def _narrow_copy_kernel4[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    src_stride: Int,
+    copy_len: Int,
+    src_offset: Int,
+    total: Int,
+    nchunks: Int,
+):
+    var c = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while c < nchunks:
+        var i = c * 4
+        var o = i // copy_len
+        var j = i % copy_len
+        if j + 4 <= copy_len and i + 4 <= total:
+            out_ptr.store(
+                i, in_ptr.load[width=4](o * src_stride + src_offset + j)
+            )
+        else:
+            for u in range(4):
+                var iu = i + u
+                if iu < total:
+                    var ou = iu // copy_len
+                    var ju = iu % copy_len
+                    out_ptr[iu] = in_ptr[ou * src_stride + src_offset + ju]
+        c += gstride
+
+
+def _narrow_copy_kernel1[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    src_stride: Int,
+    copy_len: Int,
+    src_offset: Int,
+    total: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < total:
+        var o = i // copy_len
+        var j = i % copy_len
+        out_ptr[i] = in_ptr[o * src_stride + src_offset + j]
+        i += gstride
+
+
 @always_inline
 def _narrow_copy[
     dtype: DType
@@ -172,10 +444,49 @@ def _narrow_copy[
     var in_ptr = _make_ptr[dtype](in_addr)
     var total = outer * copy_len
 
-    # Chunk-of-4: one div/mod chain and one (unaligned) vector transfer
-    # per 4 output elements; chunks that cross a block boundary fall back
-    # to per-element math. Big row slices (e.g. last-token logits) are
-    # otherwise division-throughput-bound.
+    if ctx.api() != "cpu":
+        comptime if has_accelerator():
+            # Chunk-of-4: one div/mod chain and one (unaligned) vector
+            # transfer per 4 output elements; chunks that cross a block
+            # boundary fall back to per-element math. Big row slices
+            # (e.g. last-token logits) are otherwise
+            # division-throughput-bound.
+            if copy_len >= 4:
+                var nchunks = (total + 3) // 4
+                _enqueue_cached[_narrow_copy_kernel4[dtype]](
+                    ctx,
+                    String(t"dm_narrow4_{dtype}"),
+                    _gs_blocks(nchunks),
+                    1,
+                    1,
+                    GS_THREADS,
+                    out_ptr.as_unsafe_any_origin(),
+                    in_ptr.as_unsafe_any_origin().as_immutable(),
+                    src_stride,
+                    copy_len,
+                    src_offset,
+                    total,
+                    nchunks,
+                )
+            else:
+                _enqueue_cached[_narrow_copy_kernel1[dtype]](
+                    ctx,
+                    String(t"dm_narrow1_{dtype}"),
+                    _gs_blocks(total),
+                    1,
+                    1,
+                    GS_THREADS,
+                    out_ptr.as_unsafe_any_origin(),
+                    in_ptr.as_unsafe_any_origin().as_immutable(),
+                    src_stride,
+                    copy_len,
+                    src_offset,
+                    total,
+                )
+            return
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
     @always_inline
     @parameter
     @__copy_capture(out_ptr, in_ptr, total)
@@ -206,9 +517,9 @@ def _narrow_copy[
         out_ptr[i] = in_ptr[o * src_stride + src_offset + j]
 
     if copy_len >= 4:
-        _parallel_for[func4]((total + 3) // 4, ctx)
+        elementwise[func4, simd_width=1](Coord((total + 3) // 4), ctx)
     else:
-        _parallel_for[func](total, ctx)
+        elementwise[func, simd_width=1](Coord(total), ctx)
 
 
 def _narrow_copy_go(
@@ -282,6 +593,73 @@ def _narrow_copy_go(
 # ---------------------------------------------------------------------------
 
 
+def _narrow_copy_dst_kernel2d[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    dst_stride: Int,
+    copy_len4: Int,
+    dst_offset: Int,
+):
+    comptime vec_align = 4 * size_of[dtype]()
+    var o = Int(block_idx.y)
+    var src_base = o * copy_len4 * 4
+    var dst_base = o * dst_stride + dst_offset
+    var c = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var cstride = Int(grid_dim.x) * Int(block_dim.x)
+    while c < copy_len4:
+        var j = c * 4
+        out_ptr.store[width=4, alignment=vec_align](
+            dst_base + j,
+            in_ptr.load[width=4, alignment=vec_align](src_base + j),
+        )
+        c += cstride
+
+
+def _narrow_copy_dst_kernel4[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    dst_stride: Int,
+    copy_len: Int,
+    dst_offset: Int,
+    nchunks: Int,
+):
+    comptime vec_align = 4 * size_of[dtype]()
+    var c = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while c < nchunks:
+        var i = c * 4
+        var o = i // copy_len
+        var j = i % copy_len
+        var v = in_ptr.load[width=4, alignment=vec_align](i)
+        out_ptr.store[width=4, alignment=vec_align](
+            o * dst_stride + dst_offset + j, v
+        )
+        c += gstride
+
+
+def _narrow_copy_dst_kernel1[
+    dtype: DType
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    dst_stride: Int,
+    copy_len: Int,
+    dst_offset: Int,
+    total: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < total:
+        var o = i // copy_len
+        var j = i % copy_len
+        out_ptr[o * dst_stride + dst_offset + j] = in_ptr[i]
+        i += gstride
+
+
 @always_inline
 def _narrow_copy_dst[
     dtype: DType
@@ -297,12 +675,72 @@ def _narrow_copy_dst[
     var out_ptr = _make_ptr[dtype](out_addr)
     var in_ptr = _make_ptr[dtype](in_addr)
 
+    if ctx.api() != "cpu":
+        comptime if has_accelerator():
+            if (
+                copy_len % 4 == 0
+                and dst_stride % 4 == 0
+                and dst_offset % 4 == 0
+            ):
+                # Vector fast path: float4 loads/stores (buffer bases are
+                # over-aligned and every index below is a multiple of 4
+                # elements). KV-cache concatenation hits this on each
+                # decode step. One grid row per outer block keeps the
+                # indexing division-free; the 1D chunk kernel covers the
+                # (rare) outer counts past the grid-dim cap.
+                var copy_len4 = copy_len // 4
+                if outer <= 65535:
+                    var gx = min((copy_len4 + GS_THREADS - 1) // GS_THREADS, 32)
+                    _enqueue_cached[_narrow_copy_dst_kernel2d[dtype]](
+                        ctx,
+                        String(t"dm_narrowdst2d_{dtype}"),
+                        max(gx, 1),
+                        outer,
+                        1,
+                        GS_THREADS,
+                        out_ptr.as_unsafe_any_origin(),
+                        in_ptr.as_unsafe_any_origin().as_immutable(),
+                        dst_stride,
+                        copy_len4,
+                        dst_offset,
+                    )
+                    return
+                var nchunks = outer * copy_len4
+                _enqueue_cached[_narrow_copy_dst_kernel4[dtype]](
+                    ctx,
+                    String(t"dm_narrowdst4_{dtype}"),
+                    _gs_blocks(nchunks),
+                    1,
+                    1,
+                    GS_THREADS,
+                    out_ptr.as_unsafe_any_origin(),
+                    in_ptr.as_unsafe_any_origin().as_immutable(),
+                    dst_stride,
+                    copy_len,
+                    dst_offset,
+                    nchunks,
+                )
+            else:
+                var total = outer * copy_len
+                _enqueue_cached[_narrow_copy_dst_kernel1[dtype]](
+                    ctx,
+                    String(t"dm_narrowdst1_{dtype}"),
+                    _gs_blocks(total),
+                    1,
+                    1,
+                    GS_THREADS,
+                    out_ptr.as_unsafe_any_origin(),
+                    in_ptr.as_unsafe_any_origin().as_immutable(),
+                    dst_stride,
+                    copy_len,
+                    dst_offset,
+                    total,
+                )
+            return
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
     if copy_len % 4 == 0 and dst_stride % 4 == 0 and dst_offset % 4 == 0:
-        # Vector fast path: 4 elements per thread with vector-aligned
-        # accesses (buffer bases are over-aligned and every index below is
-        # a multiple of 4 elements). KV-cache concatenation hits this on
-        # each decode step, where the scalar path's per-element div/mod
-        # and single-element transactions cost ~2x the bandwidth.
         comptime vec_align = 4 * size_of[dtype]()
 
         @always_inline
@@ -317,7 +755,7 @@ def _narrow_copy_dst[
                 o * dst_stride + dst_offset + j, v
             )
 
-        _parallel_for[func4](outer * copy_len // 4, ctx)
+        elementwise[func4, simd_width=1](Coord(outer * copy_len // 4), ctx)
         return
 
     @always_inline
@@ -329,7 +767,7 @@ def _narrow_copy_dst[
         var j = i % copy_len
         out_ptr[o * dst_stride + dst_offset + j] = in_ptr[i]
 
-    _parallel_for[func](outer * copy_len, ctx)
+    elementwise[func, simd_width=1](Coord(outer * copy_len), ctx)
 
 
 def _narrow_copy_dst_go(
@@ -1422,6 +1860,14 @@ def PyInit_data_movement_ops() abi("C") -> PythonObject:
             docstring=(
                 "copy `outer` contiguous blocks of `copy_len` elements to a"
                 " destination stride/offset (concatenation)"
+            ),
+        )
+        b.def_py_c_function(
+            _cat2_dispatcher,
+            "Cat2",
+            docstring=(
+                "(out, in1, in2, outer, len1, len2, itemsize, ctx); fused"
+                " two-input concat rows"
             ),
         )
         b.def_py_c_function(

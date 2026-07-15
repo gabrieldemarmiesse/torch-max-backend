@@ -9,6 +9,7 @@
 from std.algorithm.functional import elementwise
 from std.builtin.device_passable import DevicePassable
 from std.ffi import _get_global_or_null, external_call
+from std.gpu import block_dim, block_idx, grid_dim, thread_idx
 from std.gpu.host import DeviceBuffer, DeviceContext
 from std.memory import OpaquePointer, alloc
 from std.python import Python, PythonObject
@@ -71,6 +72,20 @@ def _enqueue_cached[
     ctx.enqueue_function(
         fptr[], *args, grid_dim=(gx, gy, gz), block_dim=(threads,)
     )
+
+
+# Launch geometry for the cached grid-stride kernels that replace stdlib
+# `elementwise` on GPU: `ctx.enqueue_function` costs ~20us per call on Metal
+# but `elementwise` pays ~42us (it rebuilds and re-resolves its closure
+# kernel every call), so the hot eager ops launch pre-compiled thin kernels
+# through `_enqueue_cached` instead.
+comptime GS_THREADS = 256
+
+
+@always_inline
+def _gs_blocks(total: Int) -> Int:
+    """Grid size for a GS_THREADS-wide grid-stride launch."""
+    return max(1, min((total + GS_THREADS - 1) // GS_THREADS, 4096))
 
 
 def _get_buffer_ptr[
@@ -487,6 +502,34 @@ def _parallel_for_dt[
         _parallel_for[func](count, ctx)
 
 
+def _copy_strided_kernel[
+    dtype: DType
+](
+    dst_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    src_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    shape: IndexList[MAX_RANK],
+    dst_strides: IndexList[MAX_RANK],
+    src_strides: IndexList[MAX_RANK],
+    total: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < total:
+        var rest = i
+        var dst_off = 0
+        var src_off = 0
+
+        comptime for d in range(MAX_RANK - 1, 0, -1):
+            var coord = rest % shape[d]
+            rest = rest // shape[d]
+            dst_off += coord * dst_strides[d]
+            src_off += coord * src_strides[d]
+        dst_off += rest * dst_strides[0]
+        src_off += rest * src_strides[0]
+        dst_ptr[dst_off] = src_ptr[src_off]
+        i += gstride
+
+
 @always_inline
 def _copy_strided[
     dtype: DType
@@ -509,24 +552,44 @@ def _copy_strided[
     if total == 0:
         return
 
-    @always_inline
-    @parameter
-    @__copy_capture(dst_ptr, src_ptr, shape, dst_strides, src_strides)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var rest = Int(idx[0].value())
-        var dst_off = 0
-        var src_off = 0
+    if ctx.api() == "cpu":
 
-        comptime for d in range(MAX_RANK - 1, 0, -1):
-            var coord = rest % shape[d]
-            rest = rest // shape[d]
-            dst_off += coord * dst_strides[d]
-            src_off += coord * src_strides[d]
-        dst_off += rest * dst_strides[0]
-        src_off += rest * src_strides[0]
-        dst_ptr[dst_off] = src_ptr[src_off]
+        @always_inline
+        @parameter
+        @__copy_capture(dst_ptr, src_ptr, shape, dst_strides, src_strides)
+        def func[width: Int, alignment: Int = 1](idx: Coord):
+            var rest = Int(idx[0].value())
+            var dst_off = 0
+            var src_off = 0
 
-    _parallel_for[func](total, ctx)
+            comptime for d in range(MAX_RANK - 1, 0, -1):
+                var coord = rest % shape[d]
+                rest = rest // shape[d]
+                dst_off += coord * dst_strides[d]
+                src_off += coord * src_strides[d]
+            dst_off += rest * dst_strides[0]
+            src_off += rest * src_strides[0]
+            dst_ptr[dst_off] = src_ptr[src_off]
+
+        elementwise[func, simd_width=1](Coord(total), ctx)
+    else:
+        comptime if has_accelerator():
+            _enqueue_cached[_copy_strided_kernel[dtype]](
+                ctx,
+                String(t"copy_strided_{dtype}"),
+                _gs_blocks(total),
+                1,
+                1,
+                GS_THREADS,
+                dst_ptr.as_unsafe_any_origin(),
+                src_ptr.as_unsafe_any_origin().as_immutable(),
+                shape,
+                dst_strides,
+                src_strides,
+                total,
+            )
+        else:
+            raise Error("no GPU accelerator available at compile time")
 
 
 @always_inline

@@ -21,6 +21,7 @@
 # ===----------------------------------------------------------------------=== #
 
 from std.os import abort
+from std.gpu import block_dim, block_idx, grid_dim, thread_idx
 from std.gpu.host import DeviceContext
 from std.math import (
     acos,
@@ -58,9 +59,12 @@ from std.algorithm.functional import elementwise
 
 from op_utils import (
     FLOAT_DTYPES,
+    GS_THREADS,
     MAX_RANK,
     TensorHolder,
     TensorSpec,
+    _enqueue_cached,
+    _gs_blocks,
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
@@ -98,6 +102,66 @@ comptime OP_MAX = 4
 comptime OP_MIN = 5
 
 
+def _bin_contig_kernel4[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    lhs_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    n4: Int,
+):
+    comptime vec_align = 4 * size_of[dtype]()
+    var c = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while c < n4:
+        var i = c * 4
+        var a = lhs_ptr.load[width=4, alignment=vec_align](i)
+        var b = rhs_ptr.load[width=4, alignment=vec_align](i)
+        comptime if op_code == OP_ADD:
+            out_ptr.store[width=4, alignment=vec_align](i, a + b)
+        comptime if op_code == OP_SUB:
+            out_ptr.store[width=4, alignment=vec_align](i, a - b)
+        comptime if op_code == OP_MUL:
+            out_ptr.store[width=4, alignment=vec_align](i, a * b)
+        comptime if op_code == OP_DIV:
+            comptime if dtype.is_floating_point():
+                out_ptr.store[width=4, alignment=vec_align](i, a / b)
+        comptime if op_code == OP_MAX:
+            out_ptr.store[width=4, alignment=vec_align](i, max(a, b))
+        comptime if op_code == OP_MIN:
+            out_ptr.store[width=4, alignment=vec_align](i, min(a, b))
+        c += gstride
+
+
+def _bin_contig_kernel[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    lhs_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    rhs_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    size: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < size:
+        var a = lhs_ptr[i]
+        var b = rhs_ptr[i]
+        comptime if op_code == OP_ADD:
+            out_ptr[i] = a + b
+        comptime if op_code == OP_SUB:
+            out_ptr[i] = a - b
+        comptime if op_code == OP_MUL:
+            out_ptr[i] = a * b
+        comptime if op_code == OP_DIV:
+            comptime if dtype.is_floating_point():
+                out_ptr[i] = a / b
+        comptime if op_code == OP_MAX:
+            out_ptr[i] = max(a, b)
+        comptime if op_code == OP_MIN:
+            out_ptr[i] = min(a, b)
+        i += gstride
+
+
 @always_inline
 def _bin_elementwise[
     dtype: DType, op_code: Int
@@ -113,36 +177,60 @@ def _bin_elementwise[
     comptime if op_code == OP_DIV and not dtype.is_floating_point():
         raise Error("integer/bool div is not supported in the fast path")
     else:
-
-        @always_inline
-        @parameter
-        @__copy_capture(out_ptr, lhs_ptr, rhs_ptr)
-        def func[width: Int, alignment: Int = 1](idx: Coord):
-            var i = Int(idx[0].value())
-            var a = lhs_ptr.load[width=width](i)
-            var b = rhs_ptr.load[width=width](i)
-            comptime if op_code == OP_ADD:
-                out_ptr.store[width=width](i, a + b)
-            comptime if op_code == OP_SUB:
-                out_ptr.store[width=width](i, a - b)
-            comptime if op_code == OP_MUL:
-                out_ptr.store[width=width](i, a * b)
-            comptime if op_code == OP_DIV:
-                out_ptr.store[width=width](i, a / b)
-            comptime if op_code == OP_MAX:
-                out_ptr.store[width=width](i, max(a, b))
-            comptime if op_code == OP_MIN:
-                out_ptr.store[width=width](i, min(a, b))
-
         if ctx.api() == "cpu":
+
+            @always_inline
+            @parameter
+            @__copy_capture(out_ptr, lhs_ptr, rhs_ptr)
+            def func[width: Int, alignment: Int = 1](idx: Coord):
+                var i = Int(idx[0].value())
+                var a = lhs_ptr.load[width=width](i)
+                var b = rhs_ptr.load[width=width](i)
+                comptime if op_code == OP_ADD:
+                    out_ptr.store[width=width](i, a + b)
+                comptime if op_code == OP_SUB:
+                    out_ptr.store[width=width](i, a - b)
+                comptime if op_code == OP_MUL:
+                    out_ptr.store[width=width](i, a * b)
+                comptime if op_code == OP_DIV:
+                    out_ptr.store[width=width](i, a / b)
+                comptime if op_code == OP_MAX:
+                    out_ptr.store[width=width](i, max(a, b))
+                comptime if op_code == OP_MIN:
+                    out_ptr.store[width=width](i, min(a, b))
+
             elementwise[func, simd_width=simd_width_of[dtype]()](
                 Coord(size), ctx
             )
         else:
             comptime if has_accelerator():
                 comptime if dtype != DType.float64:
-                    elementwise[func, simd_width=1, target="gpu"](
-                        Coord(size), ctx
+                    if size % 4 == 0:
+                        var n4 = size // 4
+                        _enqueue_cached[_bin_contig_kernel4[dtype, op_code]](
+                            ctx,
+                            String(t"ew_bin4_{op_code}_{dtype}"),
+                            _gs_blocks(n4),
+                            1,
+                            1,
+                            GS_THREADS,
+                            out_ptr.as_unsafe_any_origin(),
+                            lhs_ptr.as_unsafe_any_origin().as_immutable(),
+                            rhs_ptr.as_unsafe_any_origin().as_immutable(),
+                            n4,
+                        )
+                        return
+                    _enqueue_cached[_bin_contig_kernel[dtype, op_code]](
+                        ctx,
+                        String(t"ew_bin_{op_code}_{dtype}"),
+                        _gs_blocks(size),
+                        1,
+                        1,
+                        GS_THREADS,
+                        out_ptr.as_unsafe_any_origin(),
+                        lhs_ptr.as_unsafe_any_origin().as_immutable(),
+                        rhs_ptr.as_unsafe_any_origin().as_immutable(),
+                        size,
                     )
                 else:
                     raise Error("float64 is not supported on GPU")
@@ -311,6 +399,47 @@ def _float_unary[
     return res
 
 
+def _unary_contig_kernel[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    size: Int,
+):
+    comptime is_direct = (
+        op_code == UOP_RELU
+        or op_code == UOP_ABS
+        or op_code == UOP_NEG
+        or op_code == UOP_SIGN
+    )
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < size:
+        var a = in_ptr[i]
+        comptime if op_code == UOP_RELU:
+            out_ptr[i] = max(a, Scalar[dtype](0))
+        comptime if op_code == UOP_ABS:
+            out_ptr[i] = abs(a)
+        comptime if op_code == UOP_NEG:
+            # `-a` (pop.neg) wraps for unsigned/overflow exactly like torch.
+            out_ptr[i] = -a
+        comptime if op_code == UOP_SIGN:
+            var zero = Scalar[dtype](0)
+            var pos = a.gt(zero).cast[dtype]()
+            var neg = a.lt(zero).cast[dtype]()
+            # NaN compares false on both sides -> 0, matching torch.
+            out_ptr[i] = pos - neg
+        comptime if not is_direct:
+            comptime if dtype == DType.float16 or dtype == DType.bfloat16:
+                var af = a.cast[DType.float32]()
+                out_ptr[i] = _float_unary[DType.float32, 1, op_code](af).cast[
+                    dtype
+                ]()
+            elif dtype.is_floating_point():
+                out_ptr[i] = _float_unary[dtype, 1, op_code](a)
+        i += gstride
+
+
 @always_inline
 def _unary_elementwise[
     dtype: DType, op_code: Int
@@ -332,46 +461,56 @@ def _unary_elementwise[
         # defensive guard (and keeps the float math out of int instantiations).
         raise Error("this unary op requires a floating point dtype")
     else:
-
-        @always_inline
-        @parameter
-        @__copy_capture(out_ptr, in_ptr)
-        def func[width: Int, alignment: Int = 1](idx: Coord):
-            var i = Int(idx[0].value())
-            var a = in_ptr.load[width=width](i)
-            comptime if op_code == UOP_RELU:
-                out_ptr.store[width=width](i, max(a, SIMD[dtype, width](0)))
-            comptime if op_code == UOP_ABS:
-                out_ptr.store[width=width](i, abs(a))
-            comptime if op_code == UOP_NEG:
-                # `-a` (pop.neg) wraps for unsigned/overflow exactly like torch.
-                out_ptr.store[width=width](i, -a)
-            comptime if op_code == UOP_SIGN:
-                var zero = SIMD[dtype, width](0)
-                var pos = a.gt(zero).cast[dtype]()
-                var neg = a.lt(zero).cast[dtype]()
-                # NaN compares false on both sides -> 0, matching torch.
-                out_ptr.store[width=width](i, pos - neg)
-            comptime if not is_direct:
-                comptime if (dtype == DType.float16 or dtype == DType.bfloat16):
-                    var af = a.cast[DType.float32]()
-                    out_ptr.store[width=width](
-                        i, _float_unary[op_code=op_code](af).cast[dtype]()
-                    )
-                elif dtype.is_floating_point():
-                    out_ptr.store[width=width](
-                        i, _float_unary[op_code=op_code](a)
-                    )
-
         if ctx.api() == "cpu":
+
+            @always_inline
+            @parameter
+            @__copy_capture(out_ptr, in_ptr)
+            def func[width: Int, alignment: Int = 1](idx: Coord):
+                var i = Int(idx[0].value())
+                var a = in_ptr.load[width=width](i)
+                comptime if op_code == UOP_RELU:
+                    out_ptr.store[width=width](i, max(a, SIMD[dtype, width](0)))
+                comptime if op_code == UOP_ABS:
+                    out_ptr.store[width=width](i, abs(a))
+                comptime if op_code == UOP_NEG:
+                    # `-a` (pop.neg) wraps for unsigned/overflow like torch.
+                    out_ptr.store[width=width](i, -a)
+                comptime if op_code == UOP_SIGN:
+                    var zero = SIMD[dtype, width](0)
+                    var pos = a.gt(zero).cast[dtype]()
+                    var neg = a.lt(zero).cast[dtype]()
+                    # NaN compares false on both sides -> 0, matching torch.
+                    out_ptr.store[width=width](i, pos - neg)
+                comptime if not is_direct:
+                    comptime if (
+                        dtype == DType.float16 or dtype == DType.bfloat16
+                    ):
+                        var af = a.cast[DType.float32]()
+                        out_ptr.store[width=width](
+                            i, _float_unary[op_code=op_code](af).cast[dtype]()
+                        )
+                    elif dtype.is_floating_point():
+                        out_ptr.store[width=width](
+                            i, _float_unary[op_code=op_code](a)
+                        )
+
             elementwise[func, simd_width=simd_width_of[dtype]()](
                 Coord(size), ctx
             )
         else:
             comptime if has_accelerator():
                 comptime if dtype != DType.float64:
-                    elementwise[func, simd_width=1, target="gpu"](
-                        Coord(size), ctx
+                    _enqueue_cached[_unary_contig_kernel[dtype, op_code]](
+                        ctx,
+                        String(t"ew_unary_{op_code}_{dtype}"),
+                        _gs_blocks(size),
+                        1,
+                        1,
+                        GS_THREADS,
+                        out_ptr.as_unsafe_any_origin(),
+                        in_ptr.as_unsafe_any_origin().as_immutable(),
+                        size,
                     )
                 else:
                     raise Error("float64 is not supported on GPU")

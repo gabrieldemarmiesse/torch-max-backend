@@ -1683,6 +1683,34 @@ def fast_aten_cat(tensors, dim=0):
     out = _alloc(out_shape, first._dtype, first._device)
     dst_stride = out_shape[dim] * inner
     ctx = _ctx_ptr(first._device)
+    if (
+        len(ins) == 2
+        and ins[0]._is_contiguous
+        and ins[1]._is_contiguous
+        and outer > 0
+        and inner > 0
+    ):
+        # Both source rows contiguous: one fused kernel fills each output
+        # row from both inputs (no second launch, no bubble between the
+        # two copies). Raises (e.g. row lengths not vector-aligned, outer
+        # over the grid cap, CPU device) -> per-input copy loop below.
+        len1 = ins[0]._shape[dim] * inner
+        len2 = ins[1]._shape[dim] * inner
+        if len1 > 0 and len2 > 0:
+            try:
+                eager_kernels.data_movement_ops.Cat2(
+                    out._ptr,
+                    ins[0]._ptr,
+                    ins[1]._ptr,
+                    outer,
+                    len1,
+                    len2,
+                    out._itemsize,
+                    ctx,
+                )
+                return out
+            except NotImplementedError:
+                pass
     offset = 0
     for b in ins:
         copy_len = b._shape[dim] * inner
