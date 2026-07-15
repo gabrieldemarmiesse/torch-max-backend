@@ -1,5 +1,7 @@
 """Unit tests for basic max_device functionality"""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -150,6 +152,73 @@ def test_multiple_conversions():
     assert result_value == 0
 
     torch.testing.assert_close(cpu2, tensor)
+
+
+def test_transformers_new_gelu_uses_fused_op_only_for_mojo(
+    max_gpu_available: bool, monkeypatch: pytest.MonkeyPatch
+):
+    if not max_gpu_available:
+        pytest.skip("No MAX GPU available")
+
+    from transformers.activations import NewGELUActivation
+
+    from torch_max_backend.max_device.apple_optimizations import (
+        _patch_transformers_new_gelu,
+    )
+
+    current_forward = NewGELUActivation.forward
+    original_forward = getattr(current_forward, "__wrapped__", current_forward)
+    # Restore the process-global class method when this test exits.
+    monkeypatch.setattr(NewGELUActivation, "forward", original_forward)
+    assert _patch_transformers_new_gelu()
+    assert not _patch_transformers_new_gelu()  # idempotent
+
+    activation = NewGELUActivation()
+    x = torch.linspace(-5, 5, 257)
+
+    # Non-mojo tensors still execute the exact original implementation.
+    torch.testing.assert_close(
+        activation(x), original_forward(activation, x), rtol=0, atol=0
+    )
+
+    calls = []
+    original_gelu = torch.nn.functional.gelu
+
+    def gelu_spy(input, *args, **kwargs):
+        calls.append((args, kwargs))
+        return original_gelu(input, *args, **kwargs)
+
+    monkeypatch.setattr(torch.nn.functional, "gelu", gelu_spy)
+    result = activation(x.to("mojo:0")).cpu()
+    assert calls == [((), {"approximate": "tanh"})]
+    torch.testing.assert_close(
+        result, original_forward(activation, x), rtol=1e-5, atol=1e-5
+    )
+
+
+def test_apple_optimizations_are_only_registered_for_metal(monkeypatch):
+    from torch_max_backend.max_device import apple_optimizations
+
+    calls = []
+    monkeypatch.setattr(
+        apple_optimizations, "_patch_transformers_new_gelu", lambda: calls.append(None)
+    )
+
+    monkeypatch.setattr(
+        apple_optimizations,
+        "get_accelerators",
+        lambda: [SimpleNamespace(api="cuda"), SimpleNamespace(api="cpu")],
+    )
+    apple_optimizations.register_apple_optimizations()
+    assert calls == []
+
+    monkeypatch.setattr(
+        apple_optimizations,
+        "get_accelerators",
+        lambda: [SimpleNamespace(api="metal"), SimpleNamespace(api="cpu")],
+    )
+    apple_optimizations.register_apple_optimizations()
+    assert calls == [None]
 
 
 def test_device_ordering():

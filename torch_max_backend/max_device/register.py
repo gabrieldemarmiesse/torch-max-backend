@@ -110,4 +110,8 @@ def register_max_devices():
     _declare_mojo_tensor_as_plain_tensor()
     _keep_mojo_kernels_out_of_fake_tensor_construction()
 
+    from .apple_optimizations import register_apple_optimizations
+
+    register_apple_optimizations()
+
     _registered = True
