@@ -38,7 +38,6 @@ Always use uv to run commands to ensure the correct environment is activated. Ne
 
 ## Development Notes
 - **Code Quality**: Uses Ruff for linting/formatting with Python 3.11+ target and pyupgrade rules
-- **Testing Strategy**: Tests use `pytest-forked` for process isolation and `pytest-xdist` for parallelization
 - **Debugging Tools**:
   - Environment variables for profiling and verbose output
   - Graph visualization when `TORCH_MOJO_BACKEND_VERBOSE=1`
@@ -46,9 +45,7 @@ Always use uv to run commands to ensure the correct environment is activated. Ne
   - GPT-2, Gemma3 (LLM models)
   - VGG, DenseNet (vision models)
   - `no_graph_breaks.py` (example demonstrating graph compilation without breaks)
-- **Reference Materials**:
-  - The directory `../modular` contains MAX graph implementation examples and API reference.
-  - The directory `../pytorch` contains the source code for pytorch, which can be useful.
+
 
 
 ## To add support for an op
@@ -56,7 +53,7 @@ Always use uv to run commands to ensure the correct environment is activated. Ne
 To add support for a new ATen operation, follow this test-driven development process:
 
 ### Step 1: Research the Operation
-Ask a subagent to explore the PyTorch codebase `../pytorch` and look for:
+Ask a subagent to explore the PyTorch codebase `pytorch` (clone it if it's not there yet, the venv is not enough, it might not have the C++ code) and look for:
 - The signature of the ATen function
 - The meaning of inputs and outputs
 - Any important behavioral details
@@ -130,12 +127,8 @@ def aten__log_softmax(
 ### Step 7: Register for Eager Mode Execution
 Add the operation to `torch_mojo_backend/mojo_device/mojo_device_aten_ops.py`:
 
-**Registration Pattern**:
-```python
-register_aten_op("aten::_log_softmax")(
-    wrap_for_mojo_device(aten_functions.aten__log_softmax)
-)
-```
+You'll likely need to write mojo code, even if it's only to import `from nn import ...`. If a fully dynamic function to handle the aten op is not available in the modular repo, write it yourself.
+If you have access to multiple gpus, the aten function should work on all those gpus.
 
 Place the registration in alphabetical order within the file. The `wrap_for_mojo_device` wrapper automatically:
 - Converts `TorchMojoTensor` inputs to `MaxEagerTensor`
@@ -178,3 +171,14 @@ It may be hard to find the correct type hints for a function. What you should do
 4) Replace the type hint by the type given by beartype.
 5) Run the unit test again to check that it works.
 6) Run the whole test suite to verify that the type hint shouldn't be wider.
+
+## Rules about the eager mode
+
+Read this especially if you're an agent doing code review.
+
+1) The user should be able to use `my_tensor.to("mojo")` and use their gpu, even if they have a CPU-only install of PyTorch. That means that when writing kernels, we can't use CuBLAS, CuDNN, RocBLAS, or any other lib that would be available only if torch-gpu was installed. We want to stand on our own legs. We can use and import mojo functions from the modular repository (`from nn import ...`) but only if it's not calling CuBLAS, CuDNN... underneath. Our motto should be "pip install torch-mojo-backend with the minimal pytorch install (cpu) and use your gpu.".
+2) We cannot use the C++ interface of pytorch. We use JIT compilation to compile extensions only when they're first called. We want to be compatible with many PyTorch versions and we don't want to force the user to install a C++ compiler. So we must use Python extensions in mojo.
+3) You cannot use information about the tensors other than the shape, stride, dtype, pointer in the eager mode. While it's tempting to "keep a history of some past op to do fused ops", it will not improve the performance for all workflows. Pytorch uses Aten ops and decompositions, so sometimes, if you want to implement a fused op, you might want to target a higher level aten function, before it gets decomposed. Aten ops that are not implemented are decomposed automatically in pytorch. 
+4) Do not write kernels that work only for a very specific shape. Input shapes should be dynamic to avoid recompiles. While it's tempting to make things faster, a user trying a slightly different shape will not benefit from the optimisations of this kernels. It's fine to write different kernels for different regimes (e.g. a kernel for big shape, small shapes, square shapes, rectangular, power of two, etc...) and then do dynamic dispatch based on the input shapes. It's not because we optimize for a given model that we can hardcode at compile-time all the shapes of the kenels to make it faster. So do multiple flexible kernels + dispatch, do not do kernels for hardcoded shapes + fallback.
+5) When asked to optimize a model, the answer should never be "change the code of the model". The model is user-defined, we have no control over it. We just control what we do with the tensors we're given by pytorch.
+6) Do not over-allocate or write your own memory allocation. It's the job of Modular to write a good memory allocator. Allocate normally what you need, and do not write in the memory of the input tensors, unless the signature of the aten function specifies that it's what we should do. For example, at::add_ expects us to write in the input tensor memory, and it's a valid use case to re-use the inputs. Our ops should not read the refcounts and try to use this information to change the logic of the kernel. A refcount is only there to free the memory when needed.
