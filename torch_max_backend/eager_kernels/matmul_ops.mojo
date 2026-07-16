@@ -53,7 +53,6 @@ from linalg.bmm import batched_matmul
 from linalg.gemv import gemv_gpu
 from linalg.matmul import matmul as cpu_lib_matmul
 from linalg.matmul.gpu import multistage_gemm
-from linalg.matmul.gpu.apple import gemm_kernel_apple_8x8
 from linalg.matmul.vendor.blas import matmul as vendor_matmul
 from linalg.utils import elementwise_epilogue_type
 from linalg.utils_gpu import MatmulConfig
@@ -1378,37 +1377,8 @@ def _gemm_enqueue[
                 # batch-32 lm_head so all four simdgroups do useful work.
                 comptime if has_apple_gpu_accelerator():
                     if batch == 1 and m == 32 and n >= 8192 and k % 16 == 0:
-                        var c = TileTensor(
-                            _make_ptr[DType.float32](c_addr), row_major(m, n)
-                        )
-                        var a = TileTensor(
-                            _make_ptr[DType.float32](a_addr), row_major(m, k)
-                        )
-                        var b = TileTensor(
-                            _make_ptr[DType.float32](b_addr), row_major(n, k)
-                        )
-                        comptime apple_kernel = gemm_kernel_apple_8x8[
-                            DType.float32,
-                            DType.float32,
-                            DType.float32,
-                            type_of(c).LayoutType,
-                            type_of(a).LayoutType,
-                            type_of(b).LayoutType,
-                            True,
-                            BLOCK_M=32,
-                            BLOCK_N=64,
-                            BLOCK_K=16,
-                            NUM_SIMDGROUPS=4,
-                        ]
-                        ctx.enqueue_function[apple_kernel](
-                            c,
-                            a,
-                            b,
-                            m,
-                            n,
-                            k,
-                            grid_dim=(ceildiv(n, 64), ceildiv(m, 32)),
-                            block_dim=(128,),
+                        _apple8_enqueue[False, True](
+                            c_addr, a_addr, b_addr, 0, m, n, k, ctx
                         )
                         return
                 # Fat C^T path for medium-m transposed-B (lm_head at large
@@ -1783,7 +1753,8 @@ def _gemv_dtype_dispatch(
 @always_inline
 # ---------------------------------------------------------------------------
 # Cached raw-pointer variant of the Apple 8x8 simdgroup-matrix GEMM
-# (linalg.matmul.gpu.apple), for float32 row-major C = A @ B [+ bias].
+# (linalg.matmul.gpu.apple), for float32 row-major C = A @ B [+ bias],
+# including B stored transposed as (N, K).
 # Differences from the stock kernel: thin function with plain pointer/int
 # arguments so it launches through `_enqueue_cached` (the stock TileTensor +
 # closure-epilogue form only fits the uncached per-call compile path), an
@@ -1796,7 +1767,7 @@ def _gemv_dtype_dispatch(
 
 
 def _apple8_gemm_kernel[
-    HAS_BIAS: Bool, SPLIT: Bool
+    HAS_BIAS: Bool, SPLIT: Bool, TRANSPOSE_B: Bool
 ](
     c_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
     a_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
@@ -1848,15 +1819,23 @@ def _apple8_gemm_kernel[
             uninitialized=True
         )
         comptime for ni in range(NT_N):
-            var krow = kk + frow
-            var gj = col_base + ni * MMA8_DIM + fcol
-            if interior or gj + 1 < n:
-                bfrag[ni] = (b_ptr + krow * n + gj).load[width=FRAG8]()
-            else:
+            comptime if TRANSPOSE_B:
                 var bf = SIMD[DType.float32, FRAG8](0)
-                if gj < n:
-                    bf[0] = b_ptr[krow * n + gj]
+                comptime for s in range(FRAG8):
+                    var gj = col_base + ni * MMA8_DIM + fcol + s
+                    if interior or gj < n:
+                        bf[s] = b_ptr[gj * k + kk + frow]
                 bfrag[ni] = bf
+            else:
+                var krow = kk + frow
+                var gj = col_base + ni * MMA8_DIM + fcol
+                if interior or gj + 1 < n:
+                    bfrag[ni] = (b_ptr + krow * n + gj).load[width=FRAG8]()
+                else:
+                    var bf = SIMD[DType.float32, FRAG8](0)
+                    if gj < n:
+                        bf[0] = b_ptr[krow * n + gj]
+                    bfrag[ni] = bf
         comptime for mi in range(NT_M):
             comptime for ni in range(NT_N):
                 accum[mi * NT_N + ni] = _mma8x8(
@@ -1904,7 +1883,7 @@ def _apple8_reduce_kernel[
 
 @always_inline
 def _apple8_enqueue[
-    HAS_BIAS: Bool
+    HAS_BIAS: Bool, TRANSPOSE_B: Bool = False
 ](
     c_addr: Int,
     a_addr: Int,
@@ -1937,9 +1916,9 @@ def _apple8_enqueue[
     if gx * gy < 24:
         ksplits = min(min(ceildiv(TARGET_BLOCKS, gx * gy), slabs), 8)
     if ksplits == 1:
-        _enqueue_cached[_apple8_gemm_kernel[HAS_BIAS, False]](
+        _enqueue_cached[_apple8_gemm_kernel[HAS_BIAS, False, TRANSPOSE_B]](
             ctx,
-            String(t"apple8_gemm_b{HAS_BIAS}"),
+            String(t"apple8_gemm_b{HAS_BIAS}_tb{TRANSPOSE_B}"),
             gx,
             gy,
             1,
@@ -1958,9 +1937,9 @@ def _apple8_enqueue[
     var ws_mut = UnsafePointer[Scalar[DType.float32], MutUntrackedOrigin](
         unsafe_from_address=Int(ws.unsafe_ptr())
     ).as_unsafe_any_origin()
-    _enqueue_cached[_apple8_gemm_kernel[False, True]](
+    _enqueue_cached[_apple8_gemm_kernel[False, True, TRANSPOSE_B]](
         ctx,
-        String("apple8_gemm_split"),
+        String(t"apple8_gemm_split_tb{TRANSPOSE_B}"),
         gx,
         gy,
         ksplits,
