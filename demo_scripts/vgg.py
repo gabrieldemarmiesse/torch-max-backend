@@ -6,12 +6,12 @@ import torch
 from PIL import Image
 from torchvision import models, transforms
 
-from torch_max_backend import register_max_devices
+from torch_mojo_backend import register_mojo_devices
 
-register_max_devices()
+register_mojo_devices()
 
-os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
+os.environ["TORCH_MOJO_BACKEND_PROFILE"] = "1"
+os.environ["TORCH_MOJO_BACKEND_VERBOSE"] = "0"
 
 
 device = "mojo"
@@ -21,7 +21,7 @@ model = models.vgg11(pretrained=True)
 
 model = model.to(device)
 model.eval()
-# model = torch.compile(model, backend=max_backend, fullgraph=True)
+# model = torch.compile(model, backend=mojo_backend, fullgraph=True)
 
 preprocess = transforms.Compose(
     [

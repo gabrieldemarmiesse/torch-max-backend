@@ -1,6 +1,6 @@
-# Contributing to Torch MAX Backend
+# Contributing to Torch Mojo Backend
 
-Thank you for your interest in contributing to the Torch MAX Backend project! This guide will help you get started with development and understand our development workflow.
+Thank you for your interest in contributing to the Torch Mojo Backend project! This guide will help you get started with development and understand our development workflow.
 
 ## Prerequisites
 
@@ -34,8 +34,8 @@ The `AGENTS.md` file contains detailed information about:
 2. Clone your fork locally:
 
 ```bash
-git clone git@github.com:youraccount/torch-max-backend.git
-cd torch-max-backend/
+git clone git@github.com:youraccount/torch-mojo-backend.git
+cd torch-mojo-backend/
 ```
 
 ### 2. Install Pre-commit Hooks
@@ -62,12 +62,12 @@ uv run pytest tests/test_compiler.py
 
 The project supports PyTorch operations in **two execution modes**:
 
-1. **Graph Mode**: Via `torch.compile(backend=max_backend)` - compiles FX graphs to MAX
+1. **Graph Mode**: Via `torch.compile(backend=mojo_backend)` - compiles FX graphs to MAX
 2. **Eager Mode**: Via `torch.device("mojo")` - executes operations immediately on MAX
 
 When implementing operations, you must:
-- Implement in `torch_max_backend/aten_functions.py` (works for both modes)
-- Register in `torch_max_backend/max_device/max_device_aten_ops.py` (enables eager mode)
+- Implement in `torch_mojo_backend/aten_functions.py` (works for both modes)
+- Register in `torch_mojo_backend/mojo_device/mojo_device_aten_ops.py` (enables eager mode)
 
 ## Development Workflow
 
@@ -106,7 +106,7 @@ You should see an error indicating the operation is not supported.
 
 ### Step 4: Find Operation Signature
 
-1. Locate the operation signature in `torch_max_backend/aten_functions.py`
+1. Locate the operation signature in `torch_mojo_backend/aten_functions.py`
 2. If not present, add it following alphabetical order
 3. The signature should be in a comment above the implementation
 
@@ -124,7 +124,7 @@ When there is no MAX alternative, the best alternative would be to migrate to Mo
 
 ### Step 6: Implement the Operation
 
-Write the ATen operation implementation in `torch_max_backend/aten_functions.py` using MAX functions.
+Write the ATen operation implementation in `torch_mojo_backend/aten_functions.py` using MAX functions.
 
 **Important**: Implementation must support **both** graph mode (`TensorValue`) and eager mode (`MaxEagerTensor`). Use `MaxTensor` type hint for dual-mode support.
 
@@ -137,11 +137,11 @@ def aten_cat(tensors: list[MaxTensor], dim: int = 0) -> MaxTensor:
 
 ### Step 7: Register for Eager Mode
 
-Add registration in `torch_max_backend/max_device/max_device_aten_ops.py`:
+Add registration in `torch_mojo_backend/mojo_device/mojo_device_aten_ops.py`:
 
 ```python
 register_aten_op("aten::cat")(
-    wrap_for_max_device(aten_functions.aten_cat)
+    wrap_for_mojo_device(aten_functions.aten_cat)
 )
 ```
 
@@ -174,9 +174,9 @@ Finding correct type hints can be challenging. Here's our approach:
 
 ### Environment Variables
 
-- `TORCH_MAX_BACKEND_PROFILE=1`: Enable timing profiling
-- `TORCH_MAX_BACKEND_VERBOSE=1`: Show graph structures
-- `TORCH_MAX_BACKEND_BEARTYPE=0`: Disable type checking (for debugging)
+- `TORCH_MOJO_BACKEND_PROFILE=1`: Enable timing profiling
+- `TORCH_MOJO_BACKEND_VERBOSE=1`: Show graph structures
+- `TORCH_MOJO_BACKEND_BEARTYPE=0`: Disable type checking (for debugging)
 
 Values accepted: "1", "true", "yes" (case-insensitive)
 
@@ -184,10 +184,10 @@ Values accepted: "1", "true", "yes" (case-insensitive)
 
 ```bash
 # Debug compilation with verbose output
-TORCH_MAX_BACKEND_VERBOSE=1 uv run python your_script.py
+TORCH_MOJO_BACKEND_VERBOSE=1 uv run python your_script.py
 
 # Profile performance
-TORCH_MAX_BACKEND_PROFILE=1 uv run python your_script.py
+TORCH_MOJO_BACKEND_PROFILE=1 uv run python your_script.py
 ```
 
 ## Testing Strategy
@@ -203,7 +203,7 @@ TORCH_MAX_BACKEND_PROFILE=1 uv run python your_script.py
 
 - **ATen Operations**: Graph mode (`torch.compile`) and eager mode (`mojo`)
 - **Device Support**: CPU and mojo (with GPU if available)
-- **Compilation**: `torch.compile(backend=max_backend)` integration
+- **Compilation**: `torch.compile(backend=mojo_backend)` integration
 - **Error Handling**: Unsupported operations
 
 ### Test Fixtures
@@ -217,7 +217,7 @@ To stay synchronized with the upstream repository:
 
 ```bash
 # Add upstream remote (one-time setup)
-git remote add upstream https://github.com/gabrieldemarmiesse/torch-max-backend.git
+git remote add upstream https://github.com/gabrieldemarmiesse/torch-mojo-backend.git
 
 # Fetch latest changes
 git fetch upstream

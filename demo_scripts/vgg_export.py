@@ -9,7 +9,7 @@ from max.graph import DeviceRef
 from PIL import Image
 from torchvision import models, transforms
 
-from torch_max_backend.torch_compile_backend.exporter import export_to_max_graph
+from torch_mojo_backend.torch_compile_backend.exporter import export_to_max_graph
 
 model = models.vgg11(pretrained=True)
 model.eval()

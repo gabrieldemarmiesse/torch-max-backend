@@ -3,7 +3,7 @@ Comprehensive unit tests for MNIST SimpleNet model.
 
 This module provides thorough testing of the MNIST model implementation,
 including forward/backward passes, compilation, training steps, and
-integration with the MAX backend.
+integration with the Mojo backend.
 """
 
 import pytest
@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch_max_backend import max_backend
-from torch_max_backend.testing import check_functions_are_equivalent
+from torch_mojo_backend import mojo_backend
+from torch_mojo_backend.testing import check_functions_are_equivalent
 
 
 class SimpleNet(nn.Module):
@@ -252,10 +252,10 @@ class TestMNISTBackwardPass:
 
 
 class TestMNISTCompilation:
-    """Tests for MNIST model compilation with MAX backend."""
+    """Tests for MNIST model compilation with the Mojo backend."""
 
     def test_model_compiles_successfully(self, device: str):
-        """Test that SimpleNet compiles successfully with max_backend."""
+        """Test that SimpleNet compiles successfully with mojo_backend."""
         model = SimpleNet().to(device)
         x = torch.randn(8, 1, 28, 28).to(device)
 
@@ -286,7 +286,7 @@ class TestMNISTCompilation:
             output_eager = model(x)
 
         # Compiled execution
-        compiled_model = torch.compile(model, backend=max_backend, fullgraph=True)
+        compiled_model = torch.compile(model, backend=mojo_backend, fullgraph=True)
         with torch.no_grad():
             output_compiled = compiled_model(x)
 
@@ -296,7 +296,7 @@ class TestMNISTCompilation:
     def test_compiled_model_multiple_calls(self, device: str):
         """Test that compiled model can be called multiple times."""
         model = SimpleNet().to(device)
-        compiled_model = torch.compile(model, backend=max_backend, fullgraph=True)
+        compiled_model = torch.compile(model, backend=mojo_backend, fullgraph=True)
 
         x1 = torch.randn(8, 1, 28, 28).to(device)
         x2 = torch.randn(4, 1, 28, 28).to(device)

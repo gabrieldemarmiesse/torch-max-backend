@@ -9,9 +9,9 @@ import torch
 from PIL import Image
 from torch._dynamo import mark_dynamic
 
-from torch_max_backend import make_torch_op_from_mojo, max_backend
+from torch_mojo_backend import make_torch_op_from_mojo, mojo_backend
 
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+os.environ["TORCH_MOJO_BACKEND_VERBOSE"] = "1"
 
 
 def allocate_outputs_grayscale(pic: torch.Tensor) -> torch.Tensor:
@@ -32,7 +32,7 @@ def simple_graph(img: torch.Tensor) -> torch.Tensor:
     return img
 
 
-simple_graph_compiled = torch.compile(simple_graph, backend=max_backend)
+simple_graph_compiled = torch.compile(simple_graph, backend=mojo_backend)
 
 img_url = "https://docs.modular.com/images/artwork/pytorch-custom-operators.jpg"
 

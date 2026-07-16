@@ -8,11 +8,11 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from safetensors.torch import load_file
 from torch._dynamo import mark_dynamic
 
-from torch_max_backend import max_backend
+from torch_mojo_backend import mojo_backend
 
-os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
-os.environ["TORCH_MAX_BACKEND_DEBUG_GRAPH"] = "0"
+os.environ["TORCH_MOJO_BACKEND_PROFILE"] = "1"
+os.environ["TORCH_MOJO_BACKEND_VERBOSE"] = "1"
+os.environ["TORCH_MOJO_BACKEND_DEBUG_GRAPH"] = "0"
 
 
 USE_INSTRUCT_MODEL = True
@@ -650,7 +650,7 @@ input_token_ids = tokenizer.encode(prompt)
 text = tokenizer.decode(input_token_ids)
 
 
-model = torch.compile(model, backend=max_backend)
+model = torch.compile(model, backend=mojo_backend)
 
 
 def generate_text_basic_stream(model, token_ids, max_new_tokens, eos_token_id=None):

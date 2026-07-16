@@ -9,7 +9,7 @@ below so a fresh session can re-run it without any external scratch files.
 
 ## Implementation status (what was actually built)
 
-The eager `max_device` path was rewritten onto the holder. The
+The eager `mojo_device` path was rewritten onto the holder. The
 torch.compile backend (`aten_functions.py`, `torch_compile_backend/`) is
 **unchanged** — this work is confined to eager mode.
 
@@ -18,7 +18,7 @@ struct.** `TensorHolder` (`eager_kernels/tensor_holder.mojo`) is a *pure
 ownership token*: it owns one byte-typed `DeviceBuffer[uint8]` and nothing
 else. All layout metadata (`_ptr`, `_shape`, `_strides` in elements,
 `_offset`, `_dtype`, `_numel`, `_itemsize`, `_device`, `_is_contiguous`)
-lives as plain Python attributes on `TorchMaxTensor`; views share the same
+lives as plain Python attributes on `TorchMojoTensor`; views share the same
 holder object and CPython's refcount on it is the ownership mechanism (last
 drop → stream-ordered free). This is simpler than putting shape/strides in
 the struct and downcasting, and it makes zero-copy views pure Python (no
@@ -42,7 +42,7 @@ without materializing. `.contiguous()`/materialize uses the rank-4
 `PermuteCopy` fast path (the generic rank-8 `CopyStrided` is ~2× slower and
 is used only for rank > 4 / strided-destination copies).
 
-**The graph fallback is deleted.** `max_device_aten_ops.py` binds each op
+**The graph fallback is deleted.** `mojo_device_aten_ops.py` binds each op
 to its `aten_fast` impl or raises `NotImplementedError` naming the op. The
 `_max_data`/`MaxEagerTensor`/`driver.Buffer` slots are gone from the eager
 path entirely. Inputs the fast kernels don't cover (float64 — the GPU can't
@@ -50,7 +50,7 @@ do it at all; training/backward ops; SDPA with an attention mask;
 isin-on-floats) raise; the eager test helpers convert that specific raise
 into an `xfail` so the suite records them as expected-unsupported.
 
-**Verified:** gpt2 runs correctly on `max_device:0` (GPU) — including under
+**Verified:** gpt2 runs correctly on `mojo_device:0` (GPU) — including under
 a **torch-CPU-only** install (`torch==2.11.0+cpu`), proving the hard
 constraint that CUDA-in-torch is not required; MAX drives the GPU via the
 CUDA driver. Batch-256 decode throughput is ~1.31× torch-CUDA
@@ -108,7 +108,7 @@ same change.
 
 ### Hard constraint: CPU-only PyTorch + MAX GPU must keep working
 
-`max_device` exists so a **CPU-only** PyTorch install (no CUDA/ROCm
+`mojo_device` exists so a **CPU-only** PyTorch install (no CUDA/ROCm
 torch build) can still do GPU work, with MAX providing the GPU. This
 design preserves that **by construction**: PyTorch only ever holds an
 opaque handle (the Mojo struct) inside a meta `PrivateUse1` tensor from
@@ -139,11 +139,11 @@ to those decompositions — they'd compute wrong geometry *silently*.
 kernels for essentially every view op — `permute`, `slice.Tensor`,
 `expand`, `view`, `_unsafe_view`, `transpose.int`, `t`, `squeeze.dim`,
 `unsqueeze`, `select.int`, `split.Tensor`, `unbind.int`, `alias`
-(see `max_device_aten_ops.py`). When a kernel is registered for the
+(see `mojo_device_aten_ops.py`). When a kernel is registered for the
 `PrivateUse1` key, PyTorch dispatches straight to it and never runs its
 own decomposition, so it never reads the (contiguous-looking) TensorImpl
 strides. The strides live in our Mojo struct, our kernels read them, and
-we intercept every op that consumes a `max_device` tensor. **We do not
+we intercept every op that consumes a `mojo_device` tensor. **We do not
 need to put strides on the TensorImpl, and therefore do not need DLPack
 or a C++ tensor constructor.** (Earlier exploration of DLPack `kDLExtDev`
 and extending `torch._C._acc` was rejected for this reason.)
@@ -166,7 +166,7 @@ going through a registered op:
 
 A single Mojo struct, registered as one Python type in **exactly one**
 module (see single-registration rule below), stored in
-`TorchMaxTensor` in place of `_buffer`/`_max_data`:
+`TorchMojoTensor` in place of `_buffer`/`_max_data`:
 
 ```mojo
 comptime MAX_RANK = 8
@@ -269,7 +269,7 @@ Driver:
 ```python
 import mojo.importer  # noqa
 import gc
-from torch_max_backend.max_device.torch_max_tensor import get_ordered_accelerators
+from torch_mojo_backend.mojo_device.torch_mojo_tensor import get_ordered_accelerators
 import mojo_owned
 
 gpu = [a for a in get_ordered_accelerators() if a.label == "gpu"][0]
@@ -307,9 +307,9 @@ correctness change.
 | Today (Python `driver.Buffer`) | Replacement (Mojo) |
 |---|---|
 | Output alloc `driver.Buffer(dtype, shape, dev)` in `aten_fast._new_buffer` | `ctx.enqueue_create_buffer` in the op → returns holder |
-| `TorchMaxTensor._buffer` / `_from_buffer` / lazy `_max_data` | the `TensorHolder` struct |
+| `TorchMojoTensor._buffer` / `_from_buffer` / lazy `_max_data` | the `TensorHolder` struct |
 | Kernel unwrap (`_data_ptr()`/`num_elements`/`dtype` GetAttr in `op_utils`) | `downcast_value_ptr` + field reads |
-| H2D — `Buffer.from_dlpack(cpu.detach())` in `max_device__copy_from` | `buf.enqueue_copy_from(Span)` from the CPU torch tensor's `data_ptr()` |
+| H2D — `Buffer.from_dlpack(cpu.detach())` in `mojo_device__copy_from` | `buf.enqueue_copy_from(Span)` from the CPU torch tensor's `data_ptr()` |
 | D2H / `.item()` — `buffer.to_numpy()` | `buf.enqueue_copy_to(host)` + `ctx.synchronize()` |
 | dtype cast — `_to_copy` via graph | Mojo cast kernel (fast cast already exists) |
 | free — `driver.Buffer` GC | holder `__del__` → `DeviceBuffer` stream-ordered free |
@@ -343,7 +343,7 @@ strides too and need the same stride-awareness or guard.
 1. **`TensorHolder`** Mojo type owning a `DeviceBuffer`, registered in one
    module (e.g. a new `tensor_holder.mojo` in `eager_kernels/`, imported
    first). Fields as above.
-2. **Wire it into `TorchMaxTensor`** in place of `_buffer`/`_max_data`;
+2. **Wire it into `TorchMojoTensor`** in place of `_buffer`/`_max_data`;
    move output allocation into the ops (`enqueue_create_buffer`). Keep the
    `create_empty_tensor` meta wrapper + `__class__` swap unchanged.
 3. **Stride-aware `.contiguous()`** copy kernel + **H2D/D2H/`.item()`** on
@@ -351,10 +351,10 @@ strides too and need the same stride-awareness or guard.
    `driver.Buffer` uses.
 4. **One stride-aware elementwise kernel** + `permute`/`slice` returning
    **zero-copy strided holders**; verify a non-materializing
-   `permute`/`slice` against CPU on `max_device`.
+   `permute`/`slice` against CPU on `mojo_device`.
 5. **Delete the graph fallback**; replace with the guarded raise. Audit
    the `NOT_HANDLED`/`None` sentinels in `aten_fast.py` and the
-   `wrap_for_max_device`-only registrations (permute/expand/index/scatter/
+   `wrap_for_mojo_device`-only registrations (permute/expand/index/scatter/
    repeat/stack/softmax/... — the ~40 ops with no fast path today) and
    decide per op: implement, materialize, or raise.
 
@@ -379,9 +379,9 @@ strides too and need the same stride-awareness or guard.
 
 ## Reference files
 
-- This repo: `torch_max_backend/eager_kernels/{__init__.py,aten_fast.py,
+- This repo: `torch_mojo_backend/eager_kernels/{__init__.py,aten_fast.py,
   op_utils/__init__.mojo,elementwise_ops.mojo}`,
-  `torch_max_backend/max_device/{torch_max_tensor.py,max_device_aten_ops.py}`.
+  `torch_mojo_backend/mojo_device/{torch_mojo_tensor.py,mojo_device_aten_ops.py}`.
 - Mojo stdlib (`/root/modular` or `.venv/.../modular`):
   `mojo/stdlib/std/python/bindings.mojo` (`add_type`/`PythonTypeBuilder`/
   `_tp_dealloc_wrapper`), `mojo/stdlib/std/python/python_object.mojo`

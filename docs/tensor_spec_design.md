@@ -70,7 +70,7 @@ trailing edge, so Mojo-side broadcasting needs no rank bookkeeping at all
 A spec is **effectively immutable**. Python swaps which spec a tensor
 points to; nothing ever mutates a spec in place.
 
-### 2.2 Spec lifecycle (Python, `aten_fast.py` / `torch_max_tensor.py`)
+### 2.2 Spec lifecycle (Python, `aten_fast.py` / `torch_mojo_tensor.py`)
 
 - `_spec_of(t)` builds a spec lazily on first use via
   `tensor_holder.make_spec(...)` and caches it as `t._spec` (read through
@@ -257,7 +257,7 @@ spec ops read strided inputs directly anyway), H2D/D2H transfers,
   workers stand up concurrent MAX GPU contexts and fail with spurious
   CUDA OOM `device_context.mojo` errors. Serial passes in seconds.
 - Syntax-check fast with
-  `uv run mojo build torch_max_backend/eager_kernels/<file>.mojo --emit shared-lib -o /tmp/x.so`
+  `uv run mojo build torch_mojo_backend/eager_kernels/<file>.mojo --emit shared-lib -o /tmp/x.so`
   instead of waiting on the import-hook compile inside pytest.
 - The spy test `test_fast_path_is_used` monkeypatches the *spec* entry
   (`eager_kernels.tensor_holder.AddSpec`) — follow that pattern when a

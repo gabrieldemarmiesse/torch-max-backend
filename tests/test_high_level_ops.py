@@ -5,8 +5,8 @@ import torch
 import torch.nn.functional as F
 from torch._dynamo import mark_dynamic
 
-from torch_max_backend import max_backend
-from torch_max_backend.testing import (
+from torch_mojo_backend import mojo_backend
+from torch_mojo_backend.testing import (
     Conf,
     check_functions_are_equivalent,
     check_outputs,
@@ -3739,14 +3739,14 @@ def test_torch_clamp_max_only(conf: Conf, shapes):
 def test_torch_clamp_tensor_bounds(device: str, tensor_shapes: tuple):
     """Test torch.clamp with tensor bounds (min and max as tensors)."""
 
-    def fn(x, min_tensor, max_tensor):
-        return torch.clamp(x, min=min_tensor, max=max_tensor)
+    def fn(x, min_tensor, mojo_tensor):
+        return torch.clamp(x, min=min_tensor, max=mojo_tensor)
 
     a = torch.randn(tensor_shapes)
     min_tensor = torch.full(tensor_shapes, -0.5)
-    max_tensor = torch.full(tensor_shapes, 0.5)
+    mojo_tensor = torch.full(tensor_shapes, 0.5)
 
-    check_functions_are_equivalent(fn, device, [a, min_tensor, max_tensor])
+    check_functions_are_equivalent(fn, device, [a, min_tensor, mojo_tensor])
 
 
 def test_torch_clamp_edge_cases(conf: Conf):
@@ -5163,7 +5163,7 @@ def test_optimizer(conf: Conf):
     opt_uncompiled = torch.optim.Adam(model_uncompiled.parameters(), lr=0.01)
 
     # Run optimizer step with compilation
-    @torch.compile(backend=max_backend)
+    @torch.compile(backend=mojo_backend)
     def fn_compiled():
         opt_compiled.step()
 

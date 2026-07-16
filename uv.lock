@@ -2329,7 +2329,7 @@ wheels = [
 ]
 
 [[package]]
-name = "torch-max-backend"
+name = "torch-mojo-backend"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
