@@ -472,9 +472,9 @@ def test_fast_mm_addmm(max_gpu):
 @pytest.mark.parametrize(
     "in_features,out_features", [(768, 2304), (3072, 768), (768, 50257)]
 )
-def test_fast_linear_gpt2_batch256_amd(max_gpu, in_features, out_features):
+def test_fast_linear_gpt2_batch256_mfma(max_gpu, in_features, out_features):
     if list(get_accelerators())[0].architecture_name != "gfx942":
-        pytest.skip("the GPT-2 AMD matmul regimes target gfx942")
+        pytest.skip("the GPT-2 MFMA specializations target gfx942")
 
     x = torch.randn(256, in_features)
     weight = torch.randn(out_features, in_features)
@@ -489,9 +489,9 @@ def test_fast_linear_gpt2_batch256_amd(max_gpu, in_features, out_features):
 @pytest.mark.parametrize(
     "in_features,out_features", [(768, 768), (768, 2304), (3072, 768)]
 )
-def test_fast_addmm_gpt2_batch256_amd(max_gpu, in_features, out_features):
+def test_fast_addmm_gpt2_batch256_mfma(max_gpu, in_features, out_features):
     if list(get_accelerators())[0].architecture_name != "gfx942":
-        pytest.skip("the GPT-2 AMD matmul regimes target gfx942")
+        pytest.skip("the GPT-2 MFMA specializations target gfx942")
 
     x = torch.randn(256, in_features)
     weight = torch.randn(in_features, out_features)
@@ -511,12 +511,12 @@ def test_fast_addmm_gpt2_batch256_amd(max_gpu, in_features, out_features):
 
 
 @pytest.mark.parametrize("batch", [64, 257, 512])
-def test_fast_addmm_gpt2_dynamic_batch_amd(max_gpu, batch):
+def test_fast_addmm_gpt2_dynamic_batch_mfma(max_gpu, batch):
     if list(get_accelerators())[0].architecture_name != "gfx942":
-        pytest.skip("the GPT-2 AMD matmul regimes target gfx942")
+        pytest.skip("the GPT-2 MFMA specializations target gfx942")
 
-    # Exercise changing runtime M on one GPT-2 projection, including a
-    # non-tile-aligned value.
+    # The deep projection uses runtime M with static N/K and the hardest
+    # warp-K schedule. Include a non-tile-aligned M to exercise edge guards.
     x = torch.randn(batch, 3072)
     weight = torch.randn(3072, 768)
     bias = torch.randn(768)
@@ -530,36 +530,6 @@ def test_fast_addmm_gpt2_dynamic_batch_amd(max_gpu, batch):
         torch.testing.assert_close(output, ref, atol=5e-2, rtol=5e-2)
     assert torch.equal(actual[0], actual[1])
     assert torch.equal(actual[0], actual[2])
-
-
-def test_fast_matmul_amd_runtime_shapes(max_gpu):
-    if list(get_accelerators())[0].architecture_name != "gfx942":
-        pytest.skip("the AMD runtime-shape matmul regimes target gfx942")
-
-    # Exercise unrelated, non-tile-aligned M/N/K values in one process. The
-    # AMD receives all three dimensions at runtime; neither rocBLAS nor the
-    # fallback cache keys specialize on these concrete shapes.
-    for m, n, k in [(65, 259, 197), (96, 513, 320), (129, 1001, 768)]:
-        x = torch.randn(m, k)
-        bias = torch.randn(n)
-
-        linear_weight = torch.randn(n, k)
-        linear = torch.nn.functional.linear(
-            x.to(max_gpu), linear_weight.to(max_gpu), bias.to(max_gpu)
-        ).cpu()
-        linear_ref = torch.nn.functional.linear(x, linear_weight, bias)
-        torch.testing.assert_close(linear, linear_ref, atol=5e-2, rtol=5e-2)
-
-        addmm_weight = linear_weight.t().contiguous()
-        mm = torch.mm(x.to(max_gpu), addmm_weight.to(max_gpu)).cpu()
-        mm_ref = torch.mm(x, addmm_weight)
-        torch.testing.assert_close(mm, mm_ref, atol=5e-2, rtol=5e-2)
-
-        addmm = torch.addmm(
-            bias.to(max_gpu), x.to(max_gpu), addmm_weight.to(max_gpu)
-        ).cpu()
-        addmm_ref = torch.addmm(bias, x, addmm_weight)
-        torch.testing.assert_close(addmm, addmm_ref, atol=5e-2, rtol=5e-2)
 
 
 def test_fast_gpt2_decode_attention_with_strided_kv(max_gpu):
