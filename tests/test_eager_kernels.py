@@ -472,11 +472,11 @@ def test_fast_mm_addmm(mojo_gpu):
 
 
 @pytest.mark.parametrize(
-    "in_features,out_features", [(768, 2304), (3072, 768), (768, 50257)]
+    "in_features,out_features", [(768, 2304), (4096, 1024), (992, 3001), (768, 50257)]
 )
-def test_fast_linear_gpt2_batch256_mfma(mojo_gpu, in_features, out_features):
+def test_fast_linear_gfx942_dynamic_mfma(mojo_gpu, in_features, out_features):
     if list(get_accelerators())[0].architecture_name != "gfx942":
-        pytest.skip("the GPT-2 MFMA specializations target gfx942")
+        pytest.skip("the dynamic MFMA kernels target gfx942")
 
     x = torch.randn(256, in_features)
     weight = torch.randn(out_features, in_features)
@@ -489,11 +489,11 @@ def test_fast_linear_gpt2_batch256_mfma(mojo_gpu, in_features, out_features):
 
 
 @pytest.mark.parametrize(
-    "in_features,out_features", [(768, 768), (768, 2304), (3072, 768)]
+    "in_features,out_features", [(768, 768), (1024, 4096), (4096, 1024), (992, 3001)]
 )
-def test_fast_addmm_gpt2_batch256_mfma(mojo_gpu, in_features, out_features):
+def test_fast_addmm_gfx942_dynamic_mfma(mojo_gpu, in_features, out_features):
     if list(get_accelerators())[0].architecture_name != "gfx942":
-        pytest.skip("the GPT-2 MFMA specializations target gfx942")
+        pytest.skip("the dynamic MFMA kernels target gfx942")
 
     x = torch.randn(256, in_features)
     weight = torch.randn(in_features, out_features)
@@ -513,15 +513,15 @@ def test_fast_addmm_gpt2_batch256_mfma(mojo_gpu, in_features, out_features):
 
 
 @pytest.mark.parametrize("batch", [64, 257, 512])
-def test_fast_addmm_gpt2_dynamic_batch_mfma(mojo_gpu, batch):
+def test_fast_addmm_gfx942_dynamic_batch_mfma(mojo_gpu, batch):
     if list(get_accelerators())[0].architecture_name != "gfx942":
-        pytest.skip("the GPT-2 MFMA specializations target gfx942")
+        pytest.skip("the dynamic MFMA kernels target gfx942")
 
-    # The deep projection uses runtime M with static N/K and the hardest
-    # warp-K schedule. Include a non-tile-aligned M to exercise edge guards.
-    x = torch.randn(batch, 3072)
-    weight = torch.randn(3072, 768)
-    bias = torch.randn(768)
+    # A K-dominant projection selects that shape regime without embedding
+    # these dimensions in the kernel. The non-tile-aligned M covers its edge.
+    x = torch.randn(batch, 4096)
+    weight = torch.randn(4096, 1024)
+    bias = torch.randn(1024)
     dev_x = x.to(mojo_gpu)
     dev_weight = weight.to(mojo_gpu)
     dev_bias = bias.to(mojo_gpu)
@@ -532,6 +532,21 @@ def test_fast_addmm_gpt2_dynamic_batch_mfma(mojo_gpu, batch):
         torch.testing.assert_close(output, ref, atol=5e-2, rtol=5e-2)
     assert torch.equal(actual[0], actual[1])
     assert torch.equal(actual[0], actual[2])
+
+
+def test_fast_addmm_gfx942_unaligned_k(mojo_gpu):
+    if list(get_accelerators())[0].architecture_name != "gfx942":
+        pytest.skip("the dynamic MFMA dispatch targets gfx942")
+
+    # K values outside the MFMA tile-alignment regime retain the general
+    # dynamic GEMM path; this is a regime fallback, not a model-shape gate.
+    x = torch.randn(65, 1000)
+    weight = torch.randn(1000, 257)
+    bias = torch.randn(257)
+    actual = torch.addmm(bias.to(mojo_gpu), x.to(mojo_gpu), weight.to(mojo_gpu)).cpu()
+    torch.testing.assert_close(
+        actual, torch.addmm(bias, x, weight), atol=5e-2, rtol=5e-2
+    )
 
 
 def test_fast_gpt2_decode_attention_with_strided_kv(mojo_gpu):

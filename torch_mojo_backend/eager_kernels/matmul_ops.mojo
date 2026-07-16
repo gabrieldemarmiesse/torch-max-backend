@@ -32,7 +32,7 @@ from std.gpu.memory import (
     async_copy_commit_group,
     async_copy_wait_group,
 )
-from std.gpu.host import DeviceBuffer, DeviceContext
+from std.gpu.host import DeviceBuffer, DeviceContext, FuncAttribute
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from std.sys.info import (
@@ -52,7 +52,7 @@ from layout.tensor_core import get_mma_shape
 from linalg.bmm import batched_matmul
 from linalg.gemv import gemv_gpu
 from linalg.matmul import matmul as cpu_lib_matmul
-from linalg.matmul.gpu import multistage_gemm
+from linalg.matmul.gpu import multistage_gemm, multistage_gemm_kernel
 from linalg.matmul.vendor.blas import matmul as vendor_matmul
 from linalg.utils import elementwise_epilogue_type
 from linalg.utils_gpu import MatmulConfig
@@ -897,19 +897,62 @@ def _gemm_smallm_kernel[
 
 # ---------------------------------------------------------------------------
 # MI300X FP32 MFMA GEMM.  The portable kernels above use scalar FFMAs and
-# were tuned for NVIDIA; on gfx942 they leave the matrix cores idle.  This
-# wrapper instantiates MAX's open-source Mojo multistage GEMM directly with
-# static GPT-2 N/K layouts, which guarantees the pure MFMA path is selected
-# and cannot fall through to vendor BLAS.  M is a runtime dimension, so one
-# compiled schedule handles changing decode batches.  Partial M/N tiles are
-# masked by the multistage epilogue (notably GPT-2's 50,257-column head).
+# were tuned for NVIDIA; on gfx942 they leave the matrix cores idle.  MAX's
+# public multistage wrapper selects a transposed-B AMD schedule that requires
+# static N/K layouts.  Enqueue the underlying pure-Mojo MFMA kernel directly
+# instead: its tile configuration is static, while M/N/K and all edge guards
+# remain runtime values.  This gives one compiled kernel per shape regime,
+# not one per model dimension, and never calls vendor BLAS.
 # ---------------------------------------------------------------------------
 
 
+@__llvm_metadata(
+    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256))
+)
+@__name(t"amd_dynamic_mfma_edge_tb{transpose_b}_bias{fuse_bias}")
+def _amd_dynamic_mfma_edge_kernel[
+    transpose_b: Bool, fuse_bias: Bool
+](
+    c: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    a: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    b: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    bias: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    m: Int,
+    n: Int,
+    k: Int,
+    row_start: Int,
+    row_count: Int,
+    col_start: Int,
+    col_count: Int,
+):
+    """Compute a partial M/N edge without padding or a workspace.
+
+    The MFMA launch handles only complete BMxBN tiles. At most one thin row
+    strip and one thin column strip remain for this scalar cleanup kernel.
+    """
+    var idx = block_idx.x * 256 + thread_idx.x
+    if idx >= row_count * col_count:
+        return
+    var row = row_start + idx // col_count
+    var col = col_start + idx % col_count
+    var acc = Scalar[DType.float32](0)
+    var k4 = (k // 4) * 4
+    for kk in range(0, k4, 4):
+        comptime for u in range(4):
+            var bv = b[col * k + kk + u] if transpose_b else b[
+                (kk + u) * n + col
+            ]
+            acc = a[row * k + kk + u].fma(bv, acc)
+    for kk in range(k4, k):
+        var bv = b[col * k + kk] if transpose_b else b[kk * n + col]
+        acc = a[row * k + kk].fma(bv, acc)
+    comptime if fuse_bias:
+        acc += bias[col]
+    c[row * n + col] = acc
+
+
 @always_inline
-def _amd_mfma_gemm[
-    N: Int,
-    K: Int,
+def _amd_dynamic_mfma_gemm[
     BM: Int,
     BN: Int,
     WM: Int,
@@ -924,38 +967,31 @@ def _amd_mfma_gemm[
     b_addr: Int,
     bias_addr: Int,
     m: Int,
+    n: Int,
+    k: Int,
     ctx: DeviceContext,
 ) raises:
     comptime F32 = DType.float32
     var c_ptr = _make_ptr[F32](c_addr)
-    # M is deliberately runtime-dynamic: the layout type records only N/K as
-    # static, so one compiled MFMA kernel serves every sufficiently large
-    # decode batch. multistage_gemm derives grid.y and edge predicates from
-    # the runtime first dimension.
-    var c = TileTensor(c_ptr, row_major(Coord(m, Idx[N])))
+    var c = TileTensor(c_ptr, row_major(Coord(m, n)))
     var a = TileTensor(
-        _make_ptr[F32](a_addr).as_immutable(), row_major(Coord(m, Idx[K]))
+        _make_ptr[F32](a_addr).as_immutable(), row_major(Coord(m, k))
     )
 
-    # AMDMatmul's built-in MMA_M=16 boundary path checks only `n < N`
-    # before a float4 store.  For N=50,257, the final vector therefore
-    # overwrites the first three values of the following row.  Supplying an
-    # epilogue selects its masked path; keep vector stores for full groups
-    # and scalarize only the final partial vector.
     @always_inline
     @parameter
-    @__copy_capture(c_ptr)
+    @__copy_capture(c_ptr, n)
     def _edge_store[
         dtype: DType, width: SIMDSize, *, alignment: Int = 1
     ](coords: IndexList[2], value: SIMD[dtype, width]):
         var row = Int(coords[0])
         var col = Int(coords[1])
-        var off = row * N + col
-        if col + width <= N:
+        var off = row * n + col
+        if col + width <= n:
             c_ptr.store[width=width, alignment=4](off, value.cast[F32]())
         else:
             comptime for i in range(width):
-                if col + i < N:
+                if col + i < n:
                     c_ptr[off + i] = value[i].cast[F32]()
 
     comptime edge_epilogue = Optional[elementwise_epilogue_type](_edge_store)
@@ -964,80 +1000,86 @@ def _amd_mfma_gemm[
 
     @always_inline
     @parameter
-    @__copy_capture(c_ptr, bias_ptr)
+    @__copy_capture(c_ptr, bias_ptr, n)
     def _bias_store[
         dtype: DType, width: SIMDSize, *, alignment: Int = 1
     ](coords: IndexList[2], value: SIMD[dtype, width]):
         var row = Int(coords[0])
         var col = Int(coords[1])
-        var off = row * N + col
-        if col + width <= N:
+        var off = row * n + col
+        if col + width <= n:
             var result = value.cast[F32]() + bias_ptr.load[width=width](col)
             c_ptr.store[width=width, alignment=4](off, result)
         else:
             comptime for i in range(width):
-                if col + i < N:
+                if col + i < n:
                     c_ptr[off + i] = value[i].cast[F32]() + bias_ptr[col + i]
 
     comptime bias_epilogue = Optional[elementwise_epilogue_type](_bias_store)
 
-    comptime if transpose_b:
-        comptime config = MatmulConfig[F32, F32, F32, True](
-            block_tile_shape=Index(BM, BN, BLOCK_K),
-            warp_tile_shape=Index(WM, WN, BLOCK_K),
-            mma_shape=get_mma_shape[F32, F32](),
-            num_pipeline_stages=1,
-            num_warp_k_partitions=WARP_K_PARTITIONS,
+    comptime config = MatmulConfig[F32, F32, F32, transpose_b](
+        block_tile_shape=Index(BM, BN, BLOCK_K),
+        warp_tile_shape=Index(WM, WN, BLOCK_K),
+        mma_shape=get_mma_shape[F32, F32](),
+        num_pipeline_stages=2,
+        num_warp_k_partitions=WARP_K_PARTITIONS,
+    )
+    var b = TileTensor(
+        _make_ptr[F32](b_addr).as_immutable(),
+        row_major(Coord(n, k)) if transpose_b else row_major(Coord(k, n)),
+    )
+
+    comptime kernel = multistage_gemm_kernel[
+        CLT=c.LayoutType,
+        ALT=a.LayoutType,
+        BLT=b.LayoutType,
+        c_linear_idx_type=c.linear_idx_type,
+        a_linear_idx_type=a.linear_idx_type,
+        b_linear_idx_type=b.linear_idx_type,
+        config=config,
+        elementwise_lambda_fn=(bias_epilogue if fuse_bias else edge_epilogue),
+    ]
+    var n_full = (n // BN) * BN
+    if n_full > 0:
+        ctx.enqueue_function[kernel](
+            c,
+            a,
+            b,
+            grid_dim=(n_full // BN, ceildiv(m, BM)),
+            block_dim=config.block_dim(),
+            shared_mem_bytes=config.shared_mem_usage(),
+            func_attribute=FuncAttribute.MAX_DYNAMIC_SHARED_SIZE_BYTES(
+                UInt32(config.shared_mem_usage())
+            ),
         )
-        var b = TileTensor(
-            _make_ptr[F32](b_addr).as_immutable(), row_major[N, K]()
+    var c_raw = c_ptr.as_unsafe_any_origin()
+    var a_raw = _make_ptr[F32](a_addr).as_unsafe_any_origin().as_immutable()
+    var b_raw = _make_ptr[F32](b_addr).as_unsafe_any_origin().as_immutable()
+    if n_full < n:
+        var col_count = n - n_full
+        _enqueue_cached[_amd_dynamic_mfma_edge_kernel[transpose_b, fuse_bias]](
+            ctx,
+            String(t"amd_dynamic_mfma_edge_tb{transpose_b}_bias{fuse_bias}"),
+            ceildiv(m * col_count, 256),
+            1,
+            1,
+            256,
+            c_raw,
+            a_raw,
+            b_raw,
+            bias_ptr.as_unsafe_any_origin(),
+            m,
+            n,
+            k,
+            0,
+            m,
+            n_full,
+            col_count,
         )
-        comptime if fuse_bias:
-            multistage_gemm[
-                transpose_b=True,
-                config=config,
-                elementwise_lambda_fn=bias_epilogue,
-            ](c, a, b, ctx)
-        elif N % 4 == 0:
-            multistage_gemm[transpose_b=True, config=config](c, a, b, ctx)
-        else:
-            multistage_gemm[
-                transpose_b=True,
-                config=config,
-                elementwise_lambda_fn=edge_epilogue,
-            ](c, a, b, ctx)
-    else:
-        comptime config = MatmulConfig[F32, F32, F32, False](
-            block_tile_shape=Index(BM, BN, BLOCK_K),
-            warp_tile_shape=Index(WM, WN, BLOCK_K),
-            mma_shape=get_mma_shape[F32, F32](),
-            # The generic non-transposed multistage kernel primes the next
-            # LDS slab before entering its K loop and therefore requires a
-            # two-stage ring. The transposed AMDMatmul schedule above owns
-            # its prologue explicitly and remains single-stage.
-            num_pipeline_stages=2,
-        )
-        var b = TileTensor(
-            _make_ptr[F32](b_addr).as_immutable(), row_major[K, N]()
-        )
-        comptime if fuse_bias:
-            multistage_gemm[
-                transpose_b=False,
-                config=config,
-                elementwise_lambda_fn=bias_epilogue,
-            ](c, a, b, ctx)
-        elif N % 4 == 0:
-            multistage_gemm[transpose_b=False, config=config](c, a, b, ctx)
-        else:
-            multistage_gemm[
-                transpose_b=False,
-                config=config,
-                elementwise_lambda_fn=edge_epilogue,
-            ](c, a, b, ctx)
 
 
 @always_inline
-def _amd_gpt2_mfma_dispatch[
+def _amd_dynamic_mfma_dispatch[
     transpose_b: Bool, fuse_bias: Bool = False
 ](
     c_addr: Int,
@@ -1051,32 +1093,17 @@ def _amd_gpt2_mfma_dispatch[
     bias_addr: Int,
     ctx: DeviceContext,
 ) raises -> Bool:
-    # These are the five FP32 linear shapes in a GPT-2 decode step. N/K and
-    # the MFMA tiles are compile-time constants, while M remains runtime
-    # dynamic so changing the user batch size never compiles another kernel.
-    # Smaller M values retain the latency-oriented GEMV/SIMT paths below.
-    if batch != 1 or a_bstride == 0 or m < 64:
+    # The cutoffs describe reusable workload regimes. All tensor dimensions
+    # stay runtime-dynamic inside every selected kernel.
+    if batch != 1 or a_bstride == 0 or m < 64 or k % 32 != 0:
         return False
-    if n == 2304 and k == 768:
-        _amd_mfma_gemm[2304, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, m, ctx
+    if m >= 128 and n >= 8192 and k >= 128:
+        _amd_dynamic_mfma_gemm[128, 128, 64, 64, transpose_b, fuse_bias](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
         )
-    elif n == 768 and k == 768:
-        _amd_mfma_gemm[768, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, m, ctx
-        )
-    elif n == 3072 and k == 768:
-        _amd_mfma_gemm[3072, 768, 32, 64, 16, 32, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, m, ctx
-        )
-    elif n == 768 and k == 3072:
+    elif k >= 2048 and k >= 2 * n:
         comptime if transpose_b:
-            # Modular's AMD selector partitions K across four wavefronts for
-            # <=32x32 blocks. Each wave computes the full output tile over a
-            # quarter of K; AMDMatmul performs the supported LDS reduction.
-            _amd_mfma_gemm[
-                768,
-                3072,
+            _amd_dynamic_mfma_gemm[
                 32,
                 32,
                 32,
@@ -1085,17 +1112,15 @@ def _amd_gpt2_mfma_dispatch[
                 fuse_bias,
                 16,
                 4,
-            ](c_addr, a_addr, b_addr, bias_addr, m, ctx)
+            ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
         else:
-            _amd_mfma_gemm[768, 3072, 32, 32, 16, 16, transpose_b, fuse_bias](
-                c_addr, a_addr, b_addr, bias_addr, m, ctx
+            _amd_dynamic_mfma_gemm[32, 32, 16, 16, transpose_b, fuse_bias](
+                c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
             )
-    elif n == 50257 and k == 768:
-        _amd_mfma_gemm[50257, 768, 128, 128, 64, 64, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, m, ctx
-        )
     else:
-        return False
+        _amd_dynamic_mfma_gemm[32, 64, 16, 32, transpose_b, fuse_bias](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     return True
 
 
@@ -1348,7 +1373,7 @@ def _gemm_enqueue[
         comptime if (
             dtype == DType.float32 and _accelerator_arch() == "amdgpu:gfx942"
         ):
-            if _amd_gpt2_mfma_dispatch[transpose_b](
+            if _amd_dynamic_mfma_dispatch[transpose_b](
                 c_addr,
                 a_addr,
                 b_addr,
@@ -3138,14 +3163,14 @@ def _matmul_bias_run(
             )
             return
 
-    # Large-batch GPT-2 on MI300X: use the same pure-Mojo MFMA kernel as
-    # Matmul and fold the row-broadcast bias into its store epilogue. This
-    # check precedes the portable SIMT fused-bias route below.
+    # Large-M gfx942 workloads use the dynamic pure-Mojo MFMA kernels and
+    # fold the row-broadcast bias into the store epilogue. This check
+    # precedes the portable SIMT fused-bias route below.
     comptime if _accelerator_arch() == "amdgpu:gfx942":
         if dtype == DType.float32:
-            var used_mfma = _amd_gpt2_mfma_dispatch[True, True](
+            var used_mfma = _amd_dynamic_mfma_dispatch[True, True](
                 c_addr, a_addr, b_addr, 1, m, n, k, m * k, bias_addr, ctx
-            ) if transpose_b != 0 else _amd_gpt2_mfma_dispatch[False, True](
+            ) if transpose_b != 0 else _amd_dynamic_mfma_dispatch[False, True](
                 c_addr, a_addr, b_addr, 1, m, n, k, m * k, bias_addr, ctx
             )
             if used_mfma:
