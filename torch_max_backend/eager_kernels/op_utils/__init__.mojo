@@ -1,0 +1,716 @@
+# ===----------------------------------------------------------------------=== #
+# Shared helpers for the fast eager-mode kernel modules.
+#
+# Mirrors `max._interpreter_ops.op_utils`: unwrap `max.driver.Buffer` Python
+# objects into raw typed pointers, and rebuild the MAX DeviceContext from the
+# pointer that `device._device_context_ptr()` hands us on the Python side.
+# ===----------------------------------------------------------------------=== #
+
+from std.algorithm.functional import elementwise
+from std.builtin.device_passable import DevicePassable
+from std.ffi import _get_global_or_null, external_call
+from std.gpu import block_dim, block_idx, grid_dim, thread_idx
+from std.gpu.host import DeviceBuffer, DeviceContext
+from std.memory import OpaquePointer, alloc
+from std.python import Python, PythonObject
+from std.python._cpython import PyObjectPtr, Py_ssize_t
+from std.sys.info import has_accelerator, has_apple_gpu_accelerator
+from std.utils import IndexList
+from std.utils.coord import Coord
+
+
+# The floating-point dtypes the fast kernels specialize for. Dispatchers loop
+# over this at compile time (`comptime for dt in FLOAT_DTYPES`) to pick the
+# runtime dtype, which unrolls into the same `if dtype == ...` chain without
+# repeating the call site once per dtype.
+comptime FLOAT_DTYPES = [DType.float32, DType.float16, DType.bfloat16]
+
+
+def _get_dtype(buffer: PythonObject) raises -> DType:
+    return DType._from_ui8(UInt8(py=buffer.dtype.value)._mlir_value)
+
+
+@always_inline
+def _enqueue_cached[
+    declared_arg_types: TypeList[Trait=AnyType, ...],
+    //,
+    func: def(* args: * declared_arg_types) thin -> None,
+    *Ts: DevicePassable,
+](
+    ctx: DeviceContext,
+    key: String,
+    gx: Int,
+    gy: Int,
+    gz: Int,
+    threads: Int,
+    *args: *Ts,
+) raises:
+    """Enqueue `func`, compiling it at most once per process and context.
+
+    `ctx.enqueue_function[func]` re-runs `compile_function` on every call
+    (~180µs even when the runtime's module cache hits); caching the
+    `DeviceFunction` in the process-global registry — the same pattern the
+    vendor BLAS handle uses — brings the enqueue cost down to a few µs.
+    """
+    var name = String(t"TMB_KERNEL_{key}_{ctx.id()}")
+    comptime FuncT = type_of(ctx.compile_function[func]())
+
+    if global_ptr := _get_global_or_null(name):
+        var fptr = global_ptr.value().bitcast[FuncT]()
+        ctx.enqueue_function(
+            fptr[], *args, grid_dim=(gx, gy, gz), block_dim=(threads,)
+        )
+        return
+
+    var compiled = ctx.compile_function[func]()
+    var fptr = alloc[FuncT](1)
+    fptr.init_pointee_move(compiled^)
+    external_call["KGEN_CompilerRT_InsertGlobal", NoneType](
+        StringSlice(name),
+        fptr.bitcast[NoneType](),
+    )
+    ctx.enqueue_function(
+        fptr[], *args, grid_dim=(gx, gy, gz), block_dim=(threads,)
+    )
+
+
+# Launch geometry for the cached grid-stride kernels that replace stdlib
+# `elementwise` on GPU: `ctx.enqueue_function` costs ~20us per call on Metal
+# but `elementwise` pays ~42us (it rebuilds and re-resolves its closure
+# kernel every call), so the hot eager ops launch pre-compiled thin kernels
+# through `_enqueue_cached` instead.
+comptime GS_THREADS = 256
+
+
+@always_inline
+def _gs_blocks(total: Int) -> Int:
+    """Grid size for a GS_THREADS-wide grid-stride launch."""
+    return max(1, min((total + GS_THREADS - 1) // GS_THREADS, 4096))
+
+
+def _get_buffer_ptr[
+    dtype: DType
+](buffer: PythonObject) raises -> UnsafePointer[
+    Scalar[dtype], MutUntrackedOrigin
+]:
+    return UnsafePointer[Scalar[dtype], MutUntrackedOrigin](
+        unsafe_from_address=Int(py=buffer._data_ptr())
+    )
+
+
+@always_inline
+def _make_ptr[
+    dtype: DType
+](addr: Int) -> UnsafePointer[Scalar[dtype], MutUntrackedOrigin]:
+    """Create a typed pointer from a raw integer address."""
+    return UnsafePointer[Scalar[dtype], MutUntrackedOrigin](
+        unsafe_from_address=addr
+    )
+
+
+def _get_size(buffer: PythonObject) raises -> Int:
+    return Int(py=buffer.num_elements)
+
+
+def _get_ctx(device_context_ptr: PythonObject) raises -> DeviceContext:
+    var addr = Int(py=device_context_ptr)
+    return DeviceContext(
+        OpaquePointer[MutUntrackedOrigin](unsafe_from_address=addr)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Raw-CPython argument unpacking for METH_FASTCALL dispatchers
+# (`def_py_c_function`). The high-level `def_function` path pays an owning
+# PythonObject per argument plus PyNumber round-trips per int — several
+# hundred ns per argument. These helpers read the exact types aten_fast.py
+# passes (ints, tuples of ints, driver.Buffer objects) directly, with
+# borrowed references where possible. No type checking: the Python callers
+# are internal and guarantee the shapes.
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _raw_int(obj: PyObjectPtr) -> Int:
+    return Int(Python().cpython().PyLong_AsSsize_t(obj))
+
+
+@always_inline
+def _raw_f64(obj: PyObjectPtr) -> Float64:
+    return Float64(Python().cpython().PyFloat_AsDouble(obj))
+
+
+@always_inline
+def _raw_tuple_int(t: PyObjectPtr, i: Int) -> Int:
+    # PyTuple_GetItem returns a borrowed reference: no refcount traffic.
+    ref cpy = Python().cpython()
+    return Int(cpy.PyLong_AsSsize_t(cpy.PyTuple_GetItem(t, i)))
+
+
+@always_inline
+def _raw_addr(buffer: PyObjectPtr) -> Int:
+    """buffer._data_ptr() via direct CPython calls."""
+    ref cpy = Python().cpython()
+    var meth = cpy.PyObject_GetAttrString(buffer, "_data_ptr")
+    var addr_obj = cpy.PyObject_CallObject(meth, PyObjectPtr())
+    var addr = Int(cpy.PyLong_AsSsize_t(addr_obj))
+    cpy.Py_DecRef(addr_obj)
+    cpy.Py_DecRef(meth)
+    return addr
+
+
+@always_inline
+def _raw_numel(buffer: PyObjectPtr) -> Int:
+    ref cpy = Python().cpython()
+    var v = cpy.PyObject_GetAttrString(buffer, "num_elements")
+    var n = Int(cpy.PyLong_AsSsize_t(v))
+    cpy.Py_DecRef(v)
+    return n
+
+
+@always_inline
+def _raw_dtype_int(obj: PyObjectPtr) -> DType:
+    """DType from a Python int holding `max.dtype.DType.value`.
+
+    The raw-pointer kernel convention passes dtypes as plain ints; this is
+    the counterpart of the GetAttr-based `_raw_dtype` below (which reads a
+    `driver.Buffer.dtype` and dies with the Buffer).
+    """
+    return DType._from_ui8(UInt8(_raw_int(obj))._mlir_value)
+
+
+@always_inline
+def _raw_dtype(buffer: PyObjectPtr) -> DType:
+    ref cpy = Python().cpython()
+    var dt = cpy.PyObject_GetAttrString(buffer, "dtype")
+    var val = cpy.PyObject_GetAttrString(dt, "value")
+    var v = Int(cpy.PyLong_AsSsize_t(val))
+    cpy.Py_DecRef(val)
+    cpy.Py_DecRef(dt)
+    return DType._from_ui8(UInt8(v)._mlir_value)
+
+
+@always_inline
+def _raw_ctx(ptr_obj: PyObjectPtr) -> DeviceContext:
+    return DeviceContext(
+        OpaquePointer[MutUntrackedOrigin](unsafe_from_address=_raw_int(ptr_obj))
+    )
+
+
+@always_inline
+def _raw_ret_none() -> PyObjectPtr:
+    # The Python callers ignore the return value; 0 is an immortal cached
+    # small int, so this is refcount-only.
+    return Python().cpython().PyLong_FromSsize_t(0)
+
+
+@always_inline
+def _raw_tuple_f64(t: PyObjectPtr, i: Int) -> Float64:
+    ref cpy = Python().cpython()
+    return Float64(cpy.PyFloat_AsDouble(cpy.PyTuple_GetItem(t, i)))
+
+
+@always_inline
+def _raw_tuple_len(t: PyObjectPtr) -> Int:
+    return Int(Python().cpython().PyObject_Length(t))
+
+
+# ===========================================================================
+# TensorSpec infrastructure — the single source of truth.
+#
+# `tensor_holder` is the sole registrar of the process-wide Python type
+# objects for `TensorSpec` and `TensorHolder`. The eager module loader imports
+# it before any other kernel module, allowing those modules to construct the
+# shared types from this common Mojo definition. Specs are read through
+# `_spec_ptr`, an unchecked bitcast that relies on this layout staying exact.
+#
+# INVARIANT: never define a per-module TensorSpec/TensorHolder variant —
+# import these. Diverging layouts would turn the unchecked downcast into
+# silent memory corruption.
+#
+# Spec ops (see docs/tensor_spec_design.md) do the whole op prologue in one
+# boundary call: input checks, geometry, output alloc, kernel launch, and
+# return `(holder, out_spec, shape_tuple, data_ptr)` via `_spec_result`.
+# Errors are REAL: dispatchers catch Mojo errors and return
+# `_spec_unsupported(e)`, which raises NotImplementedError into Python;
+# the Python callers treat that as "take the classic path".
+# ===========================================================================
+
+# Strided kernels always work on shapes/strides padded to this rank
+# (leading dims of size 1 / stride 0).
+comptime MAX_RANK = 8
+
+
+struct TensorHolder(Movable, Writable):
+    """Owns one device allocation. Nothing else.
+
+    `buf`'s destructor (run by this struct's destructor when the CPython
+    refcount hits 0) calls `AsyncRT_DeviceBuffer_release`, which enqueues
+    the stream-ordered free.
+    """
+
+    var buf: DeviceBuffer[DType.uint8]
+    var nbytes: Int
+
+    def __init__(out self, var buf: DeviceBuffer[DType.uint8], nbytes: Int):
+        self.buf = buf^
+        self.nbytes = nbytes
+
+    def write_to(self, mut writer: Some[Writer]):
+        # Writable is mandatory for types exposed via add_type (tp_repr).
+        writer.write(
+            "TensorHolder(ptr=",
+            Int(self.buf.unsafe_ptr()),
+            ", nbytes=",
+            self.nbytes,
+            ")",
+        )
+
+    @staticmethod
+    def data_ptr(
+        self_ptr: UnsafePointer[Self, MutAnyOrigin]
+    ) raises -> PythonObject:
+        return PythonObject(Int(self_ptr[].buf.unsafe_ptr()))
+
+    @staticmethod
+    def get_nbytes(
+        self_ptr: UnsafePointer[Self, MutAnyOrigin]
+    ) raises -> PythonObject:
+        return PythonObject(self_ptr[].nbytes)
+
+
+struct TensorSpec(Movable, Writable):
+    """Layout descriptor for one mojo eager tensor. Effectively immutable:
+    Python swaps which spec a tensor points to (rebind) rather than mutating
+    one in place."""
+
+    var ptr: Int  # data pointer, storage offset already applied
+    var rank: Int
+    var shape: IndexList[MAX_RANK]  # leading-padded with 1s
+    var strides: IndexList[MAX_RANK]  # element strides, leading-padded with 0s
+    var offset: Int  # storage offset in elements (informational)
+    var dtype: DType
+    var itemsize: Int
+    var numel: Int
+    var contig: Bool
+    var ctx_ptr: Int  # DeviceContext address of the tensor's device
+
+    def __init__(
+        out self,
+        ptr: Int,
+        rank: Int,
+        shape: IndexList[MAX_RANK],
+        strides: IndexList[MAX_RANK],
+        offset: Int,
+        dtype: DType,
+        itemsize: Int,
+        numel: Int,
+        contig: Bool,
+        ctx_ptr: Int,
+    ):
+        self.ptr = ptr
+        self.rank = rank
+        self.shape = shape
+        self.strides = strides
+        self.offset = offset
+        self.dtype = dtype
+        self.itemsize = itemsize
+        self.numel = numel
+        self.contig = contig
+        self.ctx_ptr = ctx_ptr
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write(
+            "TensorSpec(ptr=",
+            self.ptr,
+            ", rank=",
+            self.rank,
+            ", numel=",
+            self.numel,
+            ", dtype=",
+            self.dtype,
+            ")",
+        )
+
+    @always_inline
+    def dim(self, i: Int) -> Int:
+        """Logical dim i (hides the leading-pad convention)."""
+        return self.shape[MAX_RANK - self.rank + i]
+
+    @always_inline
+    def ctx(self) -> DeviceContext:
+        return DeviceContext(
+            OpaquePointer[MutUntrackedOrigin](unsafe_from_address=self.ctx_ptr)
+        )
+
+
+@always_inline
+def _spec_ptr(o: PyObjectPtr) -> UnsafePointer[TensorSpec, MutAnyOrigin]:
+    """The TensorSpec behind a borrowed spec argument — a pure pointer cast.
+
+    Callers are internal and guarantee the type (never consults the type
+    registry, so it works on specs registered by any kernel module)."""
+    var obj = PythonObject(from_borrowed=o)
+    return obj.unchecked_downcast_value_ptr[TensorSpec]().unsafe_origin_cast[
+        MutAnyOrigin
+    ]()
+
+
+def _spec_unsupported(e: Error) -> PyObjectPtr:
+    """Translate a Mojo Error into a real Python NotImplementedError: set the
+    CPython error indicator and return null so the dispatcher signals failure
+    (nothing is swallowed on the spec paths)."""
+    ref cpy = Python().cpython()
+    var msg = String(e)
+    cpy.PyErr_SetString(
+        cpy.get_error_global("PyExc_NotImplementedError"),
+        msg.as_c_string_slice().unsafe_ptr().as_unsafe_any_origin(),
+    )
+    return PyObjectPtr()
+
+
+@always_inline
+def _row_major8(shape: IndexList[MAX_RANK], rank: Int) -> IndexList[MAX_RANK]:
+    """Row-major element strides over the trailing `rank` slots (leading 0s)."""
+    var strides = IndexList[MAX_RANK](0)
+    var acc = 1
+    for k in range(rank):
+        var i = MAX_RANK - 1 - k
+        strides[i] = acc
+        acc *= shape[i]
+    return strides
+
+
+@always_inline
+def _spec_group(
+    var buf: DeviceBuffer[DType.uint8],
+    addr: Int,
+    nbytes: Int,
+    rank: Int,
+    shape: IndexList[MAX_RANK],
+    dtype: DType,
+    itemsize: Int,
+    numel: Int,
+    ctx_ptr: Int,
+) raises -> PythonObject:
+    """One (holder, out_spec, shape_tuple, data_ptr) group for a fresh
+    contiguous output — everything Python needs to mint the torch wrapper."""
+    var spec_obj = PythonObject(
+        alloc=TensorSpec(
+            ptr=addr,
+            rank=rank,
+            shape=shape,
+            strides=_row_major8(shape, rank),
+            offset=0,
+            dtype=dtype,
+            itemsize=itemsize,
+            numel=numel,
+            contig=True,
+            ctx_ptr=ctx_ptr,
+        )
+    )
+    var holder_obj = PythonObject(alloc=TensorHolder(buf=buf^, nbytes=nbytes))
+    ref cpy = Python().cpython()
+    var shape_tuple = cpy.PyTuple_New(rank)
+    for i in range(rank):
+        _ = cpy.PyTuple_SetItem(
+            shape_tuple, i, cpy.PyLong_FromSsize_t(shape[MAX_RANK - rank + i])
+        )
+    return Python.tuple(
+        holder_obj^,
+        spec_obj^,
+        PythonObject(from_owned=shape_tuple),
+        PythonObject(addr),
+    )
+
+
+@always_inline
+def _spec_result(
+    var buf: DeviceBuffer[DType.uint8],
+    addr: Int,
+    nbytes: Int,
+    rank: Int,
+    shape: IndexList[MAX_RANK],
+    dtype: DType,
+    itemsize: Int,
+    numel: Int,
+    ctx_ptr: Int,
+) raises -> PyObjectPtr:
+    """Single-output spec-op result: one (holder, spec, shape, ptr) tuple."""
+    var group = _spec_group(
+        buf^, addr, nbytes, rank, shape, dtype, itemsize, numel, ctx_ptr
+    )
+    return group^.steal_data()
+
+
+@always_inline
+def _spec_result2(
+    var buf1: DeviceBuffer[DType.uint8],
+    addr1: Int,
+    nbytes1: Int,
+    rank1: Int,
+    shape1: IndexList[MAX_RANK],
+    dtype1: DType,
+    itemsize1: Int,
+    numel1: Int,
+    var buf2: DeviceBuffer[DType.uint8],
+    addr2: Int,
+    nbytes2: Int,
+    rank2: Int,
+    shape2: IndexList[MAX_RANK],
+    dtype2: DType,
+    itemsize2: Int,
+    numel2: Int,
+    ctx_ptr: Int,
+) raises -> PyObjectPtr:
+    """Two-output spec-op result: ((holder, spec, shape, ptr) x 2) in ONE
+    tuple, so multi-output ops stay one boundary call."""
+    var g1 = _spec_group(
+        buf1^, addr1, nbytes1, rank1, shape1, dtype1, itemsize1, numel1, ctx_ptr
+    )
+    var g2 = _spec_group(
+        buf2^, addr2, nbytes2, rank2, shape2, dtype2, itemsize2, numel2, ctx_ptr
+    )
+    var result = Python.tuple(g1^, g2^)
+    return result^.steal_data()
+
+
+@always_inline
+def _parallel_for[
+    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None
+](count: Int, ctx: DeviceContext) raises:
+    if ctx.api() == "cpu":
+        elementwise[func, simd_width=1](Coord(count), ctx)
+    else:
+        comptime if has_accelerator():
+            elementwise[func, simd_width=1, target="gpu"](Coord(count), ctx)
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
+
+@always_inline
+def _parallel_for_dt[
+    dtype: DType,
+    func: def[width: Int, alignment: Int = 1](Coord) capturing[_] -> None,
+](count: Int, ctx: DeviceContext) raises:
+    """`_parallel_for` with an Apple-GPU float64 comptime guard."""
+    comptime if dtype == DType.float64 and has_apple_gpu_accelerator():
+        if ctx.api() != "cpu":
+            raise Error("float64 is not supported on Apple GPU")
+        elementwise[func, simd_width=1](Coord(count), ctx)
+    else:
+        _parallel_for[func](count, ctx)
+
+
+def _copy_strided_kernel[
+    dtype: DType
+](
+    dst_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    src_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    shape: IndexList[MAX_RANK],
+    dst_strides: IndexList[MAX_RANK],
+    src_strides: IndexList[MAX_RANK],
+    total: Int,
+):
+    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    while i < total:
+        var rest = i
+        var dst_off = 0
+        var src_off = 0
+
+        comptime for d in range(MAX_RANK - 1, 0, -1):
+            var coord = rest % shape[d]
+            rest = rest // shape[d]
+            dst_off += coord * dst_strides[d]
+            src_off += coord * src_strides[d]
+        dst_off += rest * dst_strides[0]
+        src_off += rest * src_strides[0]
+        dst_ptr[dst_off] = src_ptr[src_off]
+        i += gstride
+
+
+@always_inline
+def _copy_strided[
+    dtype: DType
+](
+    dst_addr: Int,
+    src_addr: Int,
+    shape: IndexList[MAX_RANK],
+    dst_strides: IndexList[MAX_RANK],
+    src_strides: IndexList[MAX_RANK],
+    ctx: DeviceContext,
+) raises:
+    """dst[coords] = src[coords] over a rank-8-padded strided index space
+    (0-stride broadcast reads included). Layout-only: dispatch on element
+    *size*, not dtype."""
+    var dst_ptr = _make_ptr[dtype](dst_addr)
+    var src_ptr = _make_ptr[dtype](src_addr)
+    var total = 1
+    for i in range(MAX_RANK):
+        total *= shape[i]
+    if total == 0:
+        return
+
+    if ctx.api() == "cpu":
+
+        @always_inline
+        @parameter
+        @__copy_capture(dst_ptr, src_ptr, shape, dst_strides, src_strides)
+        def func[width: Int, alignment: Int = 1](idx: Coord):
+            var rest = Int(idx[0].value())
+            var dst_off = 0
+            var src_off = 0
+
+            comptime for d in range(MAX_RANK - 1, 0, -1):
+                var coord = rest % shape[d]
+                rest = rest // shape[d]
+                dst_off += coord * dst_strides[d]
+                src_off += coord * src_strides[d]
+            dst_off += rest * dst_strides[0]
+            src_off += rest * src_strides[0]
+            dst_ptr[dst_off] = src_ptr[src_off]
+
+        elementwise[func, simd_width=1](Coord(total), ctx)
+    else:
+        comptime if has_accelerator():
+            _enqueue_cached[_copy_strided_kernel[dtype]](
+                ctx,
+                String(t"copy_strided_{dtype}"),
+                _gs_blocks(total),
+                1,
+                1,
+                GS_THREADS,
+                dst_ptr.as_unsafe_any_origin(),
+                src_ptr.as_unsafe_any_origin().as_immutable(),
+                shape,
+                dst_strides,
+                src_strides,
+                total,
+            )
+        else:
+            raise Error("no GPU accelerator available at compile time")
+
+
+@always_inline
+def _scratch_copy(
+    src_addr: Int,
+    shape: IndexList[MAX_RANK],
+    strides: IndexList[MAX_RANK],
+    rank: Int,
+    numel: Int,
+    itemsize: Int,
+    ctx: DeviceContext,
+) raises -> DeviceBuffer[DType.uint8]:
+    """Materialize the logical order of (shape, strides) into a fresh
+    contiguous scratch buffer — the Mojo-side temporary of
+    docs/tensor_spec_design.md §4.7. Python never sees a wrapper for it;
+    the caller keeps the returned buffer alive until its kernel launch is
+    enqueued (`_ = buf^`); the stream-ordered free rides the same queue."""
+    var nbytes = numel * itemsize
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if numel > 0:
+        var dst_strides = _row_major8(shape, rank)
+        if itemsize == 4:
+            _copy_strided[DType.uint32](
+                addr, src_addr, shape, dst_strides, strides, ctx
+            )
+        elif itemsize == 2:
+            _copy_strided[DType.uint16](
+                addr, src_addr, shape, dst_strides, strides, ctx
+            )
+        elif itemsize == 8:
+            _copy_strided[DType.uint64](
+                addr, src_addr, shape, dst_strides, strides, ctx
+            )
+        elif itemsize == 1:
+            _copy_strided[DType.uint8](
+                addr, src_addr, shape, dst_strides, strides, ctx
+            )
+        else:
+            raise Error("mojo spec temp: unsupported element size ", itemsize)
+    return buf^
+
+
+@always_inline
+def _scratch_contig(
+    a: TensorSpec, ctx: DeviceContext
+) raises -> DeviceBuffer[DType.uint8]:
+    """`_scratch_copy` over a spec's own logical layout."""
+    return _scratch_copy(
+        a.ptr, a.shape, a.strides, a.rank, a.numel, a.itemsize, ctx
+    )
+
+
+@always_inline
+def _reduce_spec_geom(
+    a: TensorSpec,
+    rdims_t: PyObjectPtr,
+    keepdim_o: PyObjectPtr,
+    mut rows: Int,
+    mut cols: Int,
+    mut out_rank: Int,
+    mut oshape: IndexList[MAX_RANK],
+    mut pshape: IndexList[MAX_RANK],
+    mut pstrides: IndexList[MAX_RANK],
+    mut needs_copy: Bool,
+) raises:
+    """Geometry for a reduction spec op over arbitrary (sorted, normalized)
+    reduce dims — Python only parses the dim spec.
+
+    (pshape, pstrides) is the permuted logical layout — kept dims ascending,
+    then reduce dims ascending, trailing-aligned — i.e. the layout the
+    Python classic path used to build with permute+materialize. When the
+    input is contiguous with trailing reduce dims (the hot path) it is
+    already exactly that layout and `needs_copy` stays False; otherwise the
+    caller materializes it via `_scratch_copy` inside the call. The output
+    shape is leading-padded for `out_rank`: keepdim puts 1s at the original
+    reduce positions; otherwise the kept dims pack the trailing slots.
+    """
+    var n = _raw_tuple_len(rdims_t)
+    if n > a.rank:
+        raise Error("mojo spec reduce: more reduce dims than rank")
+    var is_red = IndexList[MAX_RANK](0)
+    for k in range(n):
+        var d = _raw_tuple_int(rdims_t, k)
+        if d < 0 or d >= a.rank:
+            raise Error("mojo spec reduce: reduce dim out of range")
+        is_red[MAX_RANK - a.rank + d] = 1
+
+    pshape = IndexList[MAX_RANK](1)
+    pstrides = IndexList[MAX_RANK](0)
+    var w = MAX_RANK - a.rank
+    rows = 1
+    for i in range(MAX_RANK - a.rank, MAX_RANK):
+        if is_red[i] == 0:
+            pshape[w] = a.shape[i]
+            pstrides[w] = a.strides[i]
+            rows *= a.shape[i]
+            w += 1
+    cols = 1
+    for i in range(MAX_RANK - a.rank, MAX_RANK):
+        if is_red[i] == 1:
+            pshape[w] = a.shape[i]
+            pstrides[w] = a.strides[i]
+            cols *= a.shape[i]
+            w += 1
+
+    needs_copy = not a.contig
+    for k in range(n):
+        if _raw_tuple_int(rdims_t, k) != a.rank - n + k:
+            needs_copy = True
+
+    oshape = IndexList[MAX_RANK](1)
+    if _raw_int(keepdim_o) != 0:
+        out_rank = a.rank
+        for i in range(MAX_RANK - a.rank, MAX_RANK):
+            if is_red[i] == 0:
+                oshape[i] = a.shape[i]
+    else:
+        out_rank = a.rank - n
+        var w2 = MAX_RANK - out_rank
+        for i in range(MAX_RANK - a.rank, MAX_RANK):
+            if is_red[i] == 0:
+                oshape[w2] = a.shape[i]
+                w2 += 1

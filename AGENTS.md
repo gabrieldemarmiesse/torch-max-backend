@@ -6,6 +6,10 @@ This file provides guidance to AI agents when working with code in this reposito
 
 This is a PyTorch backend implementation using Modular's MAX framework. The project demonstrates how to create custom PyTorch compilation backends that bridge PyTorch operations to MAX/Mojo implementations. It also has support for eager mode.
 
+## Setup
+
+Make sure a copy of the repository https://github.com/modular/modular and https://github.com/pytorch/pytorch is available for you to grep things and explore. If you cannot find them locally, clone them in `/tmp`, checkout to the right branch/commit (the same as the one in the pyproject.toml).
+
 ## Common Commands
 
 ```bash
@@ -134,9 +138,9 @@ register_aten_op("aten::_log_softmax")(
 ```
 
 Place the registration in alphabetical order within the file. The `wrap_for_max_device` wrapper automatically:
-- Converts `TorchMaxTensor` inputs to `MaxEagerTensor`
+- Converts `TorchMojoTensor` inputs to `MaxEagerTensor`
 - Executes the operation
-- Converts results back to `TorchMaxTensor`
+- Converts results back to `TorchMojoTensor`
 
 **Note**: For operations requiring custom device handling (like `aten::_copy_from`), you can implement a custom function directly instead of using `wrap_for_max_device`.
 
@@ -148,7 +152,7 @@ uv run pytest tests/test_aten_functions.py::test_your_new_op -v
 
 Test both execution modes if applicable:
 - Graph mode via `torch.compile(backend=max_backend)`
-- Eager mode via tensors on `torch.device("max_device")`
+- Eager mode via tensors on `torch.device("mojo")`
 
 ### Step 9: Run Linter
 Make sure to run the linter:
@@ -163,7 +167,7 @@ When adding an operation, you need to update **two files**:
 1. **`aten_functions.py`**: Core implementation (works for both modes)
 2. **`max_device_aten_ops.py`**: Registration for eager mode execution
 
-This ensures the operation works in both `torch.compile()` and on the `max_device`.
+This ensures the operation works in both `torch.compile()` and on the `mojo` device.
 
 
 ## To find the correct type hints for a function

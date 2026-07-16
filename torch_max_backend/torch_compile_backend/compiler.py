@@ -1,5 +1,6 @@
 import time
 import traceback
+import weakref
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -10,12 +11,13 @@ import max.graph.value
 import torch
 from functorch.compile import make_boxed_func
 from max import engine
-from max.experimental.torch.torch import max_device_ref, torch_dtype_to_max
+from max.experimental.torch.torch import torch_dtype_to_max
 from max.graph import DeviceRef, Graph, KernelLibrary
 from max.graph import ops as max_ops
 from torch._dynamo.backends.common import aot_autograd
 
 from torch_max_backend.aten_functions import (
+    CURRENT_FX_NODE,
     DECOMPOSITION_TABLE,
     torch_device_to_max_device,
 )
@@ -75,19 +77,6 @@ def gather_stats_on_graph(gm: torch.fx.GraphModule):
     print("Function call counts:")
     for name, count in sorted_counts:
         print(f"{name}: {count}")
-
-
-def keep_only_tensors(
-    inputs: list[int | float | torch.Tensor] | tuple[int | float | torch.Tensor, ...],
-    detach: bool = False,
-) -> list[torch.Tensor]:
-    result = []
-    for x in inputs:
-        if isinstance(x, torch.Tensor):
-            if detach:
-                x = x.detach()
-            result.append(x)
-    return result
 
 
 class TensorsBook:
@@ -223,7 +212,8 @@ class _GraphFactory:
     def get_max_device(self, tensor: torch.Tensor) -> DeviceRef:
         if self.force_device is not None:
             return self.force_device
-        return max_device_ref(tensor.device)
+        # torch_device_to_max_device also handles the eager "mojo" device.
+        return torch_device_to_max_device(tensor.device)
 
     def handle_placeholder(self, node: torch.fx.Node):
         if node.name in self.replace_inputs:
@@ -302,7 +292,11 @@ class _GraphFactory:
             )
         try:
             mapping_func = MAPPING_TORCH_ATEN_TO_MAX[key]
-            func_output = mapping_func(*func_args, **func_kwargs)
+            token = CURRENT_FX_NODE.set(node)
+            try:
+                func_output = mapping_func(*func_args, **func_kwargs)
+            finally:
+                CURRENT_FX_NODE.reset(token)
         except Exception as e:
             raise MaxCompilerError(
                 get_error_message(node, node_idx, func_args, func_kwargs)
@@ -315,7 +309,21 @@ class _GraphFactory:
         self.tensor_book[node.name] = func_output
 
     def handle_get_attr(self, node: torch.fx.Node):
-        attr_value = fetch_attr(self.graph, node.target)
+        attr_value = fetch_attr(node.graph.owning_module, node.target)
+        if isinstance(attr_value, torch.Tensor):
+            # A tensor constant embedded in the graph (e.g. dynamo's
+            # lift_fresh of a torch.tensor(...) created inside the traced
+            # function). Bake it into the MAX graph as a constant. The
+            # compiler runs under AOTAutograd's fake mode, which must not
+            # intercept the reads of the real constant.
+            from torch._subclasses.fake_tensor import unset_fake_temporarily
+
+            device = self.get_max_device(attr_value)
+            with unset_fake_temporarily():
+                host = attr_value.detach().cpu()
+                attr_value = max_ops.constant(
+                    host, dtype=torch_dtype_to_max(host.dtype), device=device
+                )
         self.tensor_book[node.name] = attr_value
 
     def handle_output(
@@ -395,9 +403,59 @@ class _GraphFactory:
         return self.graph, output_blueprint
 
 
+def _graph_uses_mojo_device(gm: torch.fx.GraphModule, example_inputs: list) -> bool:
+    """Whether this graph computes on the eager "mojo" device.
+
+    Checked at compile time (inputs may be fake tensors; factory-only graphs
+    have no tensor inputs, so node metas are scanned too) to decide how the
+    MAX output buffers must be wrapped at runtime.
+    """
+    for t in example_inputs:
+        if isinstance(t, torch.Tensor) and t.device.type == "mojo":
+            return True
+    for node in gm.graph.nodes:
+        val = node.meta.get("val", node.meta.get("example_value"))
+        if isinstance(val, torch.Tensor) and val.device.type == "mojo":
+            return True
+    return False
+
+
+def _mojo_tensor_from_buffer(buffer: max.driver.Buffer) -> torch.Tensor:
+    """Zero-copy wrap of a MAX output buffer as an eager mojo tensor.
+
+    The buffer itself becomes the wrapper's ownership token (`_holder`):
+    MAX buffers release their device memory when the last Python reference
+    drops, exactly like the eager TensorHolder.
+    """
+    from torch_max_backend.max_device.torch_max_tensor import (
+        TorchMojoTensor,
+        _row_major_strides,
+    )
+
+    shape = tuple(buffer.shape)
+    return TorchMojoTensor._make(
+        buffer,
+        buffer._data_ptr(),
+        shape,
+        _row_major_strides(shape),
+        0,
+        buffer.dtype,
+        buffer.device,
+        contiguous=True,
+    )
+
+
+def _dim_buffer_to_cpu_tensor(buffer: max.driver.Buffer) -> torch.Tensor:
+    """A DIM output as a CPU torch tensor (works without a CUDA-enabled torch)."""
+    if buffer.device.label != "cpu":
+        buffer = buffer.to(max.driver.CPU())
+    return torch.from_dlpack(buffer)
+
+
 class BaseMaxCompiler:
     def __init__(self, gm: torch.fx.GraphModule, example_inputs: list, mode=None):
         self.gm = gm
+        self.mojo_outputs = _graph_uses_mojo_device(gm, example_inputs)
         if profiling_enabled():
             compiler_start = time.time_ns()
         if verbose_enabled():
@@ -439,11 +497,27 @@ class BaseMaxCompiler:
         # Detach tensors to avoid gradient tracking issues with DLpack
         if profiling_enabled():
             start_inference_time = time.time_ns()
-        input_tensors = keep_only_tensors(args, detach=True)
-        # convert to max tensors
-        input_tensors = [fast_from_dlpack(x) for x in input_tensors]
+        input_tensors = [
+            _cached_buffer_for(x) for x in args if isinstance(x, torch.Tensor)
+        ]
         outputs = self.model.execute(*input_tensors)
-        tensor_outputs = [torch.from_dlpack(x) for x in outputs]
+        if self.mojo_outputs:
+            # The graph computes on the mojo device: adopt the MAX output
+            # buffers zero-copy as eager mojo tensors (DIM outputs become
+            # CPU tensors, `.item()`-ed in reconstruct_from_blueprint).
+            dim_indices = {
+                index
+                for kind, index in self.output_blueprint
+                if kind is OutputBlueprintKind.DIM
+            }
+            tensor_outputs = [
+                _dim_buffer_to_cpu_tensor(x)
+                if i in dim_indices
+                else _mojo_tensor_from_buffer(x)
+                for i, x in enumerate(outputs)
+            ]
+        else:
+            tensor_outputs = [torch.from_dlpack(x) for x in outputs]
 
         debug.debug_graph_if_required(self.gm, args)
 
@@ -456,6 +530,40 @@ class BaseMaxCompiler:
             )
             print(f"Running the Max graph in {inference_duration}")
         return result
+
+
+# Cross-call Buffer cache. Graph inputs are dominated by parameters, which
+# are the SAME tensor objects on every call of a compiled graph; converting
+# each of them through DLPack every call costs ~10-20us per tensor. Cache
+# the imported Buffer keyed by tensor identity, guarded by the data pointer
+# (catches storage reallocation, e.g. `param.data = ...`), evicted when the
+# tensor dies. Buffers alias the tensor memory, so in-place updates
+# (optimizer steps) are seen without invalidation.
+_buffer_cache: dict[int, tuple] = {}
+
+
+def _evict_buffer(tensor_id: int) -> None:
+    _buffer_cache.pop(tensor_id, None)
+
+
+def _data_ptr_of(t: torch.Tensor) -> int:
+    ptr = getattr(t, "_ptr", None)  # TorchMojoTensor
+    if ptr is not None:
+        return ptr
+    return t.data_ptr()
+
+
+def _cached_buffer_for(t: torch.Tensor):
+    key = id(t)
+    entry = _buffer_cache.get(key)
+    if entry is not None:
+        buffer, ptr, _finalizer = entry
+        if ptr == _data_ptr_of(t):
+            return buffer
+    buffer = fast_from_dlpack(t.detach())
+    finalizer = weakref.finalize(t, _evict_buffer, key)
+    _buffer_cache[key] = (buffer, _data_ptr_of(t), finalizer)
+    return buffer
 
 
 def boxed_func(*args, **kwargs):

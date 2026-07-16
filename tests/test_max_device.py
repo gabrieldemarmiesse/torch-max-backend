@@ -1,9 +1,11 @@
 """Unit tests for basic max_device functionality"""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
-from torch_max_backend import TorchMaxTensor, max_backend, register_max_devices
+from torch_max_backend import TorchMojoTensor, max_backend, register_max_devices
 from torch_max_backend.max_device.torch_max_tensor import (
     find_equivalent_max_device,
     get_ordered_accelerators,
@@ -27,7 +29,7 @@ def test_tensor_to_max_device(max_device):
     max_tensor = cpu_tensor.to(max_device)
 
     # Check type and properties
-    assert isinstance(max_tensor, TorchMaxTensor)
+    assert isinstance(max_tensor, TorchMojoTensor)
     assert max_tensor.shape == (3,)
     assert max_tensor.dtype == torch.float32
 
@@ -50,7 +52,7 @@ def test_factory_arange(max_device):
     """Test torch.arange with max_device"""
     tensor = torch.arange(5, device=max_device)
 
-    assert isinstance(tensor, TorchMaxTensor)
+    assert isinstance(tensor, TorchMojoTensor)
     assert tensor.shape == (5,)
 
     # Convert to CPU to check values
@@ -64,7 +66,7 @@ def test_factory_rand(max_device):
     """Test torch.rand with max_device"""
     tensor = torch.rand(3, 4, device=max_device)
 
-    assert isinstance(tensor, TorchMaxTensor)
+    assert isinstance(tensor, TorchMojoTensor)
     assert tensor.shape == (3, 4)
 
     # Check that values are in [0, 1] range when converted to CPU
@@ -77,19 +79,19 @@ def test_factory_empty(max_device):
     """Test torch.empty with max_device"""
     tensor = torch.empty(2, 3, device=max_device)
 
-    assert isinstance(tensor, TorchMaxTensor)
+    assert isinstance(tensor, TorchMojoTensor)
     assert tensor.shape == (2, 3)
 
 
 def test_device_string_variations():
-    """Test different max_device string formats"""
-    # Basic max_device
-    t1 = torch.tensor([1.0]).to("max_device")
-    assert isinstance(t1, TorchMaxTensor)
+    """Test different mojo device string formats"""
+    # Basic mojo device
+    t1 = torch.tensor([1.0]).to("mojo")
+    assert isinstance(t1, TorchMojoTensor)
 
     # With index (should also work)
-    t2 = torch.tensor([1.0]).to("max_device:0")
-    assert isinstance(t2, TorchMaxTensor)
+    t2 = torch.tensor([1.0]).to("mojo:0")
+    assert isinstance(t2, TorchMojoTensor)
 
 
 @pytest.mark.xfail(reason="TODO: add pretty repr and str")
@@ -136,8 +138,8 @@ def test_multiple_conversions():
     tensor = torch.tensor([1.0, 2.0])
 
     # Multiple conversions should work
-    max1 = tensor.to("max_device")
-    max2 = max1.to("max_device")  # Should return same tensor
+    max1 = tensor.to("mojo")
+    max2 = max1.to("mojo")  # Should return same tensor
     cpu1 = max2.to("cpu")
     cpu2 = cpu1.to("cpu")  # Should work normally
 
@@ -150,6 +152,78 @@ def test_multiple_conversions():
     assert result_value == 0
 
     torch.testing.assert_close(cpu2, tensor)
+
+
+def test_transformers_new_gelu_uses_fused_op_only_for_mojo(
+    max_gpu_available: bool, monkeypatch: pytest.MonkeyPatch
+):
+    if not max_gpu_available:
+        pytest.skip("No MAX GPU available")
+
+    from transformers.activations import NewGELUActivation
+
+    from torch_max_backend.max_device.apple_optimizations import (
+        _patch_transformers_new_gelu,
+    )
+
+    current_forward = NewGELUActivation.forward
+    original_forward = getattr(current_forward, "__wrapped__", current_forward)
+    # Restore the process-global class method when this test exits.
+    monkeypatch.setattr(NewGELUActivation, "forward", original_forward)
+    assert _patch_transformers_new_gelu()
+    assert not _patch_transformers_new_gelu()  # idempotent
+
+    activation = NewGELUActivation()
+    x = torch.linspace(-5, 5, 257)
+
+    # Non-mojo tensors still execute the exact original implementation.
+    torch.testing.assert_close(
+        activation(x), original_forward(activation, x), rtol=0, atol=0
+    )
+
+    calls = []
+    original_gelu = torch.nn.functional.gelu
+
+    def gelu_spy(input, *args, **kwargs):
+        calls.append((args, kwargs))
+        return original_gelu(input, *args, **kwargs)
+
+    monkeypatch.setattr(torch.nn.functional, "gelu", gelu_spy)
+    result = activation(x.to("mojo:0")).cpu()
+    assert calls == [((), {"approximate": "tanh"})]
+    torch.testing.assert_close(
+        result, original_forward(activation, x), rtol=1e-5, atol=1e-5
+    )
+
+
+def test_apple_optimizations_are_only_registered_for_metal(monkeypatch):
+    from torch_max_backend.max_device import apple_optimizations
+
+    calls = []
+    monkeypatch.setattr(
+        apple_optimizations,
+        "_patch_transformers_new_gelu",
+        lambda: calls.append("gelu"),
+    )
+    monkeypatch.setattr(
+        apple_optimizations, "_enable_apple_fast_add", lambda: calls.append("add")
+    )
+
+    monkeypatch.setattr(
+        apple_optimizations,
+        "get_accelerators",
+        lambda: [SimpleNamespace(api="cuda"), SimpleNamespace(api="cpu")],
+    )
+    apple_optimizations.register_apple_optimizations()
+    assert calls == []
+
+    monkeypatch.setattr(
+        apple_optimizations,
+        "get_accelerators",
+        lambda: [SimpleNamespace(api="metal"), SimpleNamespace(api="cpu")],
+    )
+    apple_optimizations.register_apple_optimizations()
+    assert calls == ["gelu", "add"]
 
 
 def test_device_ordering():
@@ -209,14 +283,14 @@ def test_gpu_first_cpu_last_convention():
         # Last device should be CPU
         assert ordered_accelerators[-1].label == "cpu"
 
-        # Test that max_device (index 0) goes to GPU
-        t_gpu = torch.tensor([1.0]).to("max_device")
-        assert isinstance(t_gpu, TorchMaxTensor)
+        # Test that mojo (index 0) goes to GPU
+        t_gpu = torch.tensor([1.0]).to("mojo")
+        assert isinstance(t_gpu, TorchMojoTensor)
 
         # Test that highest index goes to CPU
         cpu_index = len(ordered_accelerators) - 1
-        t_cpu = torch.tensor([1.0]).to(f"max_device:{cpu_index}")
-        assert isinstance(t_cpu, TorchMaxTensor)
+        t_cpu = torch.tensor([1.0]).to(f"mojo:{cpu_index}")
+        assert isinstance(t_cpu, TorchMojoTensor)
 
 
 # Original tests from the existing file
@@ -351,7 +425,6 @@ def test_custom_module_with_seqential(max_device):
     function_equivalent_on_both_devices(run_module, max_device, rtol=1e-3, atol=1e-3)
 
 
-@pytest.mark.xfail(reason="Fixme")
 def test_compile_with_max_device(max_device):
     @torch.compile(backend=max_backend)
     def do_sqrt(device):

@@ -39,9 +39,9 @@ def disable_interpreter():
 
 
 @pytest.fixture(params=["cpu", "cuda"])
-def device(request, gpu_available: bool):
+def device(request, cuda_available: bool):
     device_name = request.param
-    if not gpu_available and device_name == "cuda":
+    if not cuda_available and device_name == "cuda":
         pytest.skip("CUDA not available")
     return device_name
 
@@ -49,27 +49,27 @@ def device(request, gpu_available: bool):
 @pytest.fixture(
     params=[
         # Enable when pytorch supports it
-        # Conf("max_device:cpu", True),
-        # Conf("max_device:gpu", True),
-        Conf("max_device:cpu", False)
-        # Conf("max_device:gpu", False),
+        # Conf("mojo:cpu", True),
+        # Conf("mojo:gpu", True),
+        Conf("mojo:cpu", False)
+        # Conf("mojo:gpu", False),
         # Conf("cpu", True),
         # Conf("cuda", True),
     ]
 )
 def conf(request, max_gpu_available: bool, cuda_available: bool):
     conf = request.param
-    # to use max_device:gpu, we need to have a max supported gpu
-    if conf.device == "max_device:gpu" and not max_gpu_available:
+    # to use mojo:gpu, we need to have a max supported gpu
+    if conf.device == "mojo:gpu" and not max_gpu_available:
         pytest.skip("You do not have a GPU supported by Max")
     if conf.device == "cuda" and not cuda_available:
         pytest.skip("Pytorch CUDA not available")
 
     # known issues:
-    if conf.device.startswith("max_device") and conf.compile:
-        pytest.xfail("Known issue: max_device with compilation is not supported yet")
+    if conf.device.startswith("mojo") and conf.compile:
+        pytest.xfail("Known issue: mojo device with compilation is not supported yet")
 
-    if conf.device.startswith("max_device"):
+    if conf.device.startswith("mojo"):
         conf.device = conf.device.replace("gpu", "0")
         conf.device = conf.device.replace("cpu", str(len(list(get_accelerators())) - 1))
         # Make sure the device is initialized
@@ -108,8 +108,8 @@ def reset_compiler():
 
 
 @pytest.fixture
-def cuda_device(gpu_available: bool):
-    if not gpu_available:
+def cuda_device(cuda_available: bool):
+    if not cuda_available:
         pytest.skip("CUDA not available")
     return "cuda"
 
@@ -117,11 +117,11 @@ def cuda_device(gpu_available: bool):
 @pytest.fixture(params=["cpu", "gpu"])
 def max_device(request, max_gpu_available: bool):
     if request.param == "cpu":
-        yield (f"max_device:{len(get_accelerators()) - 1}")
+        yield (f"mojo:{len(get_accelerators()) - 1}")
     else:
         if not max_gpu_available:
             pytest.skip("You do not have a GPU supported by Max")
-        yield ("max_device:0")
+        yield ("mojo:0")
 
 
 def pytest_sessionfinish(session, exitstatus):

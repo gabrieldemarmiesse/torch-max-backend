@@ -585,6 +585,105 @@ def test_bug_keyerror_input(device: str):
     check_functions_are_equivalent(fn, device, [x])
 
 
+def test_symint_scalar_arithmetic(device: str):
+    """A symbolic dim used as a scalar in tensor arithmetic (dynamic shapes)."""
+
+    def fn(x):
+        return torch.relu(x) + x.shape[0]
+
+    fn_compiled = torch.compile(backend=max_backend)(fn)
+    for n in (4, 5, 6):
+        x = torch.randn(n, 3)
+        check_functions_are_equivalent(fn, device, [x], fn_compiled=fn_compiled)
+
+
+def test_sdpa_with_attention_mask(device: str):
+    """An explicit float mask makes cuda pick the mem-efficient sdpa overload."""
+
+    def fn(q, k, v, mask):
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+
+    q = torch.randn(1, 4, 8, 16)
+    k = torch.randn(1, 4, 8, 16)
+    v = torch.randn(1, 4, 8, 16)
+    mask = torch.zeros(1, 4, 8, 8).masked_fill(
+        torch.rand(1, 4, 8, 8) > 0.7, float("-inf")
+    )
+
+    check_functions_are_equivalent(fn, device, [q, k, v, mask], rtol=1e-2, atol=1e-3)
+
+
+def test_sdpa_decode_gpt2_mask(device: str):
+    """GPT-2 decode shape exercises the fused Mojo graph custom op on GPU."""
+
+    def fn(q, k, v, mask):
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=0.125)
+
+    q = torch.randn(4, 12, 1, 64)
+    k = torch.randn(4, 12, 128, 64)
+    v = torch.randn(4, 12, 128, 64)
+    mask = torch.zeros(4, 1, 1, 128)
+    mask[..., -7:] = float("-inf")
+    check_functions_are_equivalent(fn, device, [q, k, v, mask], rtol=1e-2, atol=1e-3)
+
+
+def test_constant_pad_nd(device: str):
+    def fn(x):
+        return F.pad(x, (1, 2, 0, 3), mode="constant", value=1.5)
+
+    x = torch.randn(2, 3, 4)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_lifted_tensor_constant(device: str):
+    """A tensor constant created inside the compiled function (dynamo lifts
+    it as a graph get_attr + lift_fresh_copy)."""
+
+    def fn(x):
+        return x + torch.tensor([1.0, 2.0, 3.0], device=x.device)
+
+    x = torch.randn(2, 3)
+    check_functions_are_equivalent(fn, device, [x])
+
+
+def test_compiled_input_buffer_cache(device: str):
+    """Compiled graph inputs are converted to MAX buffers once and cached
+    by tensor identity. In-place updates alias the same memory and must be
+    visible; swapping the storage (`t.data = ...`) must invalidate."""
+
+    def fn(x, w):
+        return x @ w
+
+    compiled = torch.compile(fn, backend=max_backend, fullgraph=True)
+    x = torch.randn(2, 3, device=device)
+    w = torch.randn(3, 4, device=device)
+    torch.testing.assert_close(
+        compiled(x, w).cpu(), x.cpu() @ w.cpu(), rtol=1e-2, atol=1e-3
+    )
+
+    # Same tensor objects, mutated in place: the cached buffer aliases them.
+    with torch.no_grad():
+        w += 1.0
+    torch.testing.assert_close(
+        compiled(x, w).cpu(), x.cpu() @ w.cpu(), rtol=1e-2, atol=1e-3
+    )
+
+    # Storage swap: the data pointer guard must drop the cached buffer.
+    w.data = torch.randn(3, 4, device=device)
+    torch.testing.assert_close(
+        compiled(x, w).cpu(), x.cpu() @ w.cpu(), rtol=1e-2, atol=1e-3
+    )
+
+
+def test_bitwise_and_0d_operand(device: str):
+    def fn(a, b):
+        return a & b
+
+    a = torch.tensor(True)
+    b = torch.tensor([True, False, True])
+    check_functions_are_equivalent(fn, device, [a, b])
+
+
 def test_scalar_as_input():
     def fn(x):
         y = torch.arange(0, x[0], 1, dtype=x.dtype, device=x.device)
