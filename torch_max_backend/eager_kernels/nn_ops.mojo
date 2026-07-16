@@ -30,7 +30,12 @@ from std.math import sqrt, exp, floor
 from std.memory import alloc, stack_allocation
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator, has_apple_gpu_accelerator, size_of
+from std.sys.info import (
+    _accelerator_arch,
+    has_accelerator,
+    has_apple_gpu_accelerator,
+    size_of,
+)
 from std.utils.coord import Coord
 from std.utils.index import IndexList
 from std.utils.numerics import min_or_neg_inf
@@ -578,7 +583,7 @@ def _attn_decode_kernel[
 ):
     """out is (BH, 1, head_dim) contiguous. Q/K/V have unit head-dimension
     stride and explicit batch/head/sequence strides; this consumes both the
-    fused-qkv transpose views and capacity-backed KV caches without a gather.
+    fused-QKV transpose views and padded strided K/V storage without a gather.
     Scores for the block's row are staged in shared memory (hence the
     ATTN_MAX_KV cap), softmax uses f32 max/sum shared-memory tree reductions,
     and the V pass has lane d accumulate output element d so V reads coalesce
@@ -669,7 +674,9 @@ def _attn_decode_kernel[
             for j in range(wave, kv_len, 4):
                 acc += (
                     s_smem[j]
-                    * v_ptr[v_base + j * v_s_stride + lane].cast[DType.float32]()
+                    * v_ptr[v_base + j * v_s_stride + lane].cast[
+                        DType.float32
+                    ]()
                 )
             red[tid] = acc
             barrier()
@@ -865,6 +872,12 @@ def _attn_decode[
                     heads,
                     q_b_stride,
                     q_h_stride,
+                    k_b_stride,
+                    k_h_stride,
+                    k_s_stride,
+                    v_b_stride,
+                    v_h_stride,
+                    v_s_stride,
                 )
                 return
         _enqueue_cached[_attn_decode_kernel[dtype]](

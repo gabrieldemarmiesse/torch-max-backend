@@ -115,107 +115,18 @@ _BCAST_DTYPES = _FLOAT_DTYPES + (
 )
 
 
-# Hugging Face GPT-2 spells its tanh GELU out as seven eager ATen ops:
-#
-#   0.5*x*(1 + tanh(sqrt(2/pi) * (x + 0.044715*x**3)))
-#
-# On a large decode batch, dispatching and allocating those intermediates is
-# substantially slower than the single GeluTanhSpec kernel.  The small state
-# machine below delays only that exact, gfx942 FP32, rank-3/width-3072 chain.
-# A value consumed by anything other than the next expected operation is
-# materialized through the ordinary kernels, so this remains a transparent
-# eager optimization rather than a model-specific API requirement.
-_GELU_POW3 = 1
-_GELU_CUBE_SCALE = 2
-_GELU_INNER = 3
-_GELU_INNER_SCALE = 4
-_GELU_TANH = 5
-_GELU_TANH_PLUS_ONE = 6
-_GELU_HALF_X = 7
-_GELU_CUBE_COEFF = 0.044715
-_GELU_INNER_COEFF = math.sqrt(2.0 / math.pi)
-_materializing_deferred_gelu = False
-
-
-@no_type_check
-def _deferred_gelu_marker(x):
-    if isinstance(x, TorchMojoTensor):
-        return x.__dict__.get("_deferred_gpt2_gelu")
-    return None
-
-
-@no_type_check
-def _looks_like_gpt2_gelu_input(x):
-    return (
-        isinstance(x, TorchMojoTensor)
-        and _deferred_gelu_marker(x) is None
-        and x._dtype == DType.float32
-        and len(x._shape) == 3
-        and x._shape[-1] == 3072
-        and x._device.architecture_name == "gfx942"
-    )
-
-
-@no_type_check
-def _deferred_gelu_view(base, stage):
-    out = TorchMojoTensor._view_of(
-        base, base._shape, base._strides, base._offset, base._is_contiguous
-    )
-    out._deferred_gpt2_gelu = (stage, base)
-    return out
-
-
-@no_type_check
-def _materialize_deferred_gelu(x):
-    cached = x.__dict__.get("_deferred_gpt2_gelu_value")
-    if cached is not None:
-        return cached
-
-    stage, base = x._deferred_gpt2_gelu
-    global _materializing_deferred_gelu
-    old = _materializing_deferred_gelu
-    _materializing_deferred_gelu = True
-    try:
-        half_x = fast_aten_mul(base, 0.5)
-        pow3 = fast_aten_pow(base, 3.0)
-        cube_scale = fast_aten_mul(pow3, _GELU_CUBE_COEFF)
-        inner = fast_aten_add(base, cube_scale)
-        inner_scale = fast_aten_mul(inner, _GELU_INNER_COEFF)
-        tanh_value = fast_aten_tanh(inner_scale)
-        tanh_plus_one = fast_aten_add(tanh_value, 1.0)
-        values = {
-            _GELU_POW3: pow3,
-            _GELU_CUBE_SCALE: cube_scale,
-            _GELU_INNER: inner,
-            _GELU_INNER_SCALE: inner_scale,
-            _GELU_TANH: tanh_value,
-            _GELU_TANH_PLUS_ONE: tanh_plus_one,
-            _GELU_HALF_X: half_x,
-        }
-        result = values[stage]
-    finally:
-        _materializing_deferred_gelu = old
-    x._deferred_gpt2_gelu_value = result
-    return result
-
-
 @no_type_check
 def _t(x) -> TorchMojoTensor | None:
     """x as a TorchMojoTensor (any layout), or None."""
-    if not isinstance(x, TorchMojoTensor):
-        return None
-    if _deferred_gelu_marker(x) is not None:
-        return _materialize_deferred_gelu(x)
-    return x
+    return x if isinstance(x, TorchMojoTensor) else None
 
 
 @no_type_check
 def _tc(x) -> TorchMojoTensor | None:
     """x as a *contiguous* TorchMojoTensor (materializing views), or None."""
-    x = _t(x)
-    if x is None:
-        return None
-    return x if x._is_contiguous else x._materialize_contiguous()
+    if isinstance(x, TorchMojoTensor):
+        return x if x._is_contiguous else x._materialize_contiguous()
+    return None
 
 
 _alloc = TorchMojoTensor._alloc
@@ -647,28 +558,7 @@ def _scaled_operand(other, alpha):
 
 
 @no_type_check
-def _matches_float(value, expected):
-    return (
-        isinstance(value, int | float)
-        and not isinstance(value, bool)
-        and math.isclose(float(value), expected, rel_tol=0.0, abs_tol=1e-12)
-    )
-
-
-@no_type_check
 def fast_aten_add(input, other, alpha=1):
-    if not _materializing_deferred_gelu and alpha == 1:
-        input_marker = _deferred_gelu_marker(input)
-        other_marker = _deferred_gelu_marker(other)
-        for marker, plain in ((input_marker, other), (other_marker, input)):
-            if marker is None:
-                continue
-            stage, base = marker
-            if stage == _GELU_CUBE_SCALE and plain is base:
-                return _deferred_gelu_view(base, _GELU_INNER)
-            if stage == _GELU_TANH and _matches_float(plain, 1.0):
-                return _deferred_gelu_view(base, _GELU_TANH_PLUS_ONE)
-
     if alpha != 1:
         other = _scaled_operand(other, alpha)
         if other is None:
@@ -773,34 +663,6 @@ def fast_aten_sub(input, other, alpha=1):
 
 @no_type_check
 def fast_aten_mul(input, other):
-    if not _materializing_deferred_gelu:
-        input_marker = _deferred_gelu_marker(input)
-        other_marker = _deferred_gelu_marker(other)
-        if input_marker is not None and other_marker is not None:
-            input_stage, input_base = input_marker
-            other_stage, other_base = other_marker
-            if input_base is other_base and {input_stage, other_stage} == {
-                _GELU_HALF_X,
-                _GELU_TANH_PLUS_ONE,
-            }:
-                return fast_aten_gelu(input_base, approximate="tanh")
-
-        for marker, scalar in ((input_marker, other), (other_marker, input)):
-            if marker is None:
-                continue
-            stage, base = marker
-            if stage == _GELU_POW3 and _matches_float(scalar, _GELU_CUBE_COEFF):
-                return _deferred_gelu_view(base, _GELU_CUBE_SCALE)
-            if stage == _GELU_INNER and _matches_float(scalar, _GELU_INNER_COEFF):
-                return _deferred_gelu_view(base, _GELU_INNER_SCALE)
-
-        if isinstance(input, TorchMojoTensor) and _matches_float(other, 0.5):
-            if _looks_like_gpt2_gelu_input(input):
-                return _deferred_gelu_view(input, _GELU_HALF_X)
-        if isinstance(other, TorchMojoTensor) and _matches_float(input, 0.5):
-            if _looks_like_gpt2_gelu_input(other):
-                return _deferred_gelu_view(other, _GELU_HALF_X)
-
     result = _try_spec_scalar("MulScalarSpec", input, other)
     if result is None:
         result = _try_spec_int_scalar("MulScalarIntSpec", input, other)
@@ -899,23 +761,11 @@ def fast_aten_exp(input):
 
 @no_type_check
 def fast_aten_tanh(x):
-    if not _materializing_deferred_gelu:
-        marker = _deferred_gelu_marker(x)
-        if marker is not None:
-            stage, base = marker
-            if stage == _GELU_INNER_SCALE:
-                return _deferred_gelu_view(base, _GELU_TANH)
     return _unary_spec_op("TanhSpec", x)
 
 
 @no_type_check
 def fast_aten_pow(x, y):
-    if (
-        not _materializing_deferred_gelu
-        and _matches_float(y, 3.0)
-        and _looks_like_gpt2_gelu_input(x)
-    ):
-        return _deferred_gelu_view(x, _GELU_POW3)
     result = _try_spec_scalar("PowScalarSpec", x, y)
     return result if result is not None else NOT_HANDLED
 
@@ -1840,68 +1690,6 @@ def _is_legacy_empty(t) -> bool:
 
 
 @no_type_check
-def _is_gpt2_kv_append(first, second, dim):
-    return (
-        first is not None
-        and second is not None
-        and dim == 2
-        and first._dtype == second._dtype == DType.float32
-        and first._device == second._device
-        and first._device.architecture_name == "gfx942"
-        and len(first._shape) == len(second._shape) == 4
-        and first._shape[0] == second._shape[0]
-        and first._shape[0] >= 64
-        and first._shape[1] == second._shape[1] == 12
-        and first._shape[3] == second._shape[3] == 64
-        and second._shape[2] == 1
-    )
-
-
-@no_type_check
-def _gpt2_kv_append(first, second):
-    """Append one GPT-2 K/V token into a branch-safe reserved allocation.
-
-    The previous logical tensor is never overwritten. Only bytes beyond its
-    shape are touched, and consuming its append token invalidates that token;
-    reusing an older cache branch therefore allocates/copies instead of
-    clobbering the newer branch.
-    """
-    old_len = first._shape[2]
-    new_len = old_len + 1
-    capacity = first.__dict__.get("_gpt2_kv_capacity", 0)
-    appendable = first.__dict__.get("_gpt2_kv_appendable", False)
-
-    if appendable and new_len <= capacity:
-        first._gpt2_kv_appendable = False
-        out_shape = first._shape[:2] + (new_len,) + first._shape[3:]
-        out = _view_of(
-            first, out_shape, first._strides, first._offset, contiguous=False
-        )
-        out._gpt2_kv_capacity = capacity
-        out._gpt2_kv_appendable = True
-        slot_offset = out._offset + old_len * out._strides[2]
-        slot = _view_of(out, second._shape, out._strides, slot_offset)
-        _copy_strided_into(slot, second)
-        return out
-
-    # Reserve through the normal 200-token benchmark on the first append;
-    # double after that for longer generation without quadratic recopying.
-    capacity = max(256, capacity * 2, new_len)
-    storage_shape = first._shape[:2] + (capacity,) + first._shape[3:]
-    storage = _alloc(storage_shape, first._dtype, first._device)
-    storage_strides = storage._strides
-    out_shape = first._shape[:2] + (new_len,) + first._shape[3:]
-    out = _view_of(storage, out_shape, storage_strides, 0, contiguous=False)
-    old_slot = _view_of(out, first._shape, out._strides, 0)
-    new_slot = _view_of(out, second._shape, out._strides, old_len * out._strides[2])
-    _copy_strided_into(old_slot, first)
-    _copy_strided_into(new_slot, second)
-    out._gpt2_kv_capacity = capacity
-    out._gpt2_kv_appendable = True
-    return out
-
-
-@no_type_check
 def fast_aten_cat(tensors, dim=0):
     # PyTorch's cat skips legacy "empty" (1-D, size-0) tensors, e.g.
     # uninitialized KV-caches.
@@ -1925,8 +1713,6 @@ def fast_aten_cat(tensors, dim=0):
             or any(i != dim and b._shape[i] != first._shape[i] for i in range(rank))
         ):
             return NOT_HANDLED
-    if len(ins) == 2 and _is_gpt2_kv_append(ins[0], ins[1], dim):
-        return _gpt2_kv_append(ins[0], ins[1])
     out_shape = list(first._shape)
     out_shape[dim] = sum(b._shape[dim] for b in ins)
     inner = math.prod(out_shape[dim + 1 :])
