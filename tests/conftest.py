@@ -2,26 +2,26 @@ import os
 
 os.environ["MODULAR_TELEMETRY_ENABLED"] = "0"
 os.environ["MAX_USE_EAGER_INTERPRETER"] = "1"
-os.environ["TORCH_MAX_BACKEND_TESTING"] = "1"
+os.environ["TORCH_MOJO_BACKEND_TESTING"] = "1"
 import pytest
 
-# must be called before importing torch_max_backend
-pytest.register_assert_rewrite("torch_max_backend.testing")
+# must be called before importing torch_mojo_backend
+pytest.register_assert_rewrite("torch_mojo_backend.testing")
 
 
 import torch
 from mojo.paths import _build_mojo_source_package
 
-from torch_max_backend import get_accelerators, register_max_devices
-from torch_max_backend.profiler import profile
-from torch_max_backend.testing import CallChecker, Conf
-from torch_max_backend.torch_compile_backend import compiler
+from torch_mojo_backend import get_accelerators, register_mojo_devices
+from torch_mojo_backend.profiler import profile
+from torch_mojo_backend.testing import CallChecker, Conf
+from torch_mojo_backend.torch_compile_backend import compiler
 
-# from torch_max_backend.max_device.log_aten_calls import log_aten_calls
+# from torch_mojo_backend.mojo_device.log_aten_calls import log_aten_calls
 
 # log_aten_calls()
 
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "1"
+os.environ["TORCH_MOJO_BACKEND_VERBOSE"] = "1"
 
 # TODO: remove this when
 # https://github.com/modular/modular/issues/5495 is fixed
@@ -57,11 +57,11 @@ def device(request, cuda_available: bool):
         # Conf("cuda", True),
     ]
 )
-def conf(request, max_gpu_available: bool, cuda_available: bool):
+def conf(request, mojo_gpu_available: bool, cuda_available: bool):
     conf = request.param
     # to use mojo:gpu, we need to have a max supported gpu
-    if conf.device == "mojo:gpu" and not max_gpu_available:
-        pytest.skip("You do not have a GPU supported by Max")
+    if conf.device == "mojo:gpu" and not mojo_gpu_available:
+        pytest.skip("You do not have a GPU supported by MAX")
     if conf.device == "cuda" and not cuda_available:
         pytest.skip("Pytorch CUDA not available")
 
@@ -73,7 +73,7 @@ def conf(request, max_gpu_available: bool, cuda_available: bool):
         conf.device = conf.device.replace("gpu", "0")
         conf.device = conf.device.replace("cpu", str(len(list(get_accelerators())) - 1))
         # Make sure the device is initialized
-        register_max_devices()
+        register_mojo_devices()
 
     if conf.device == "cuda":
         conf.device += ":0"
@@ -92,7 +92,7 @@ def cuda_available() -> bool:
 
 
 @pytest.fixture
-def max_gpu_available() -> bool:
+def mojo_gpu_available() -> bool:
     return len(list(get_accelerators())) > 1
 
 
@@ -115,12 +115,12 @@ def cuda_device(cuda_available: bool):
 
 
 @pytest.fixture(params=["cpu", "gpu"])
-def max_device(request, max_gpu_available: bool):
+def mojo_device(request, mojo_gpu_available: bool):
     if request.param == "cpu":
         yield (f"mojo:{len(get_accelerators()) - 1}")
     else:
-        if not max_gpu_available:
-            pytest.skip("You do not have a GPU supported by Max")
+        if not mojo_gpu_available:
+            pytest.skip("You do not have a GPU supported by MAX")
         yield ("mojo:0")
 
 

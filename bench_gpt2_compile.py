@@ -7,10 +7,10 @@ Usage: uv run python bench_gpt2_compile.py <device> <mode> [n_new_tokens] [batch
   device: mojo | cuda
   mode:
     eager            no compilation
-    compile-max      model.forward compiled with max_backend
+    compile-max      model.forward compiled with mojo_backend
     compile-default  model.forward compiled with the default backend (inductor)
     compile-max-eager-attn
-                     max_backend with attn_implementation="eager". On cuda,
+                     mojo_backend with attn_implementation="eager". On cuda,
                      HF's default sdpa route pads the mask with symbolic-dim
                      modulo arithmetic that MAX dims don't support; explicit
                      matmul attention sidesteps it (the mojo route decomposes
@@ -32,9 +32,9 @@ WARMUP = 2  # first warmup pays compilation, second settles dynamic shapes
 ITERS = 3
 
 if DEVICE == "mojo" or MODE.startswith("compile-max"):
-    from torch_max_backend import max_backend, register_max_devices
+    from torch_mojo_backend import mojo_backend, register_mojo_devices
 
-    register_max_devices()
+    register_mojo_devices()
 
 
 def main():
@@ -50,7 +50,7 @@ def main():
     x = tok(PROMPT, return_tensors="pt").input_ids.repeat(BATCH, 1).to(DEVICE)
 
     if MODE in ("compile-max", "compile-max-eager-attn"):
-        model.forward = torch.compile(model.forward, backend=max_backend)
+        model.forward = torch.compile(model.forward, backend=mojo_backend)
     elif MODE == "compile-default":
         model.forward = torch.compile(model.forward)
     elif MODE != "eager":

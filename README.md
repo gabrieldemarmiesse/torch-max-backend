@@ -1,11 +1,11 @@
-# Torch's MAX Backend
+# Torch Mojo Backend
 
-Simply use [`torch.compile`](https://docs.pytorch.org/tutorials/intermediate/torch_compile_tutorial.html), but with Modular's MAX backend.
+Simply use [`torch.compile`](https://docs.pytorch.org/tutorials/intermediate/torch_compile_tutorial.html), but with a backend powered by Mojo kernels and Modular's MAX framework.
 
 ## Installation
 
 ```bash
-pip install torch-max-backend
+pip install torch-mojo-backend
 ```
 
 ## Quick Start
@@ -13,14 +13,14 @@ pip install torch-max-backend
 ### Basic Usage
 
 ```python
-from torch_max_backend import max_backend
+from torch_mojo_backend import mojo_backend
 import torch
 
-# Compile your model with MAX backend
+# Compile your model with the Mojo backend
 model = YourModel()
-compiled_model = torch.compile(model, backend=max_backend)
+compiled_model = torch.compile(model, backend=mojo_backend)
 
-# Use normally - now accelerated by MAX
+# Use normally - now accelerated by Mojo
 output = compiled_model(input_tensor)
 ```
 
@@ -28,9 +28,9 @@ output = compiled_model(input_tensor)
 
 ```python
 import torch
-from torch_max_backend import max_backend
+from torch_mojo_backend import mojo_backend
 
-@torch.compile(backend=max_backend)
+@torch.compile(backend=mojo_backend)
 def simple_math(x, y):
     return x + y * 2
 
@@ -45,7 +45,7 @@ print(simple_math(a, b))  # Accelerated execution
 Training works as expected 
 
 ```python
-from torch_max_backend import max_backend
+from torch_mojo_backend import mojo_backend
 import torch
 import torch.nn
 import torch.optim
@@ -63,7 +63,7 @@ device = "cuda"
 model = MyModel().to(device)
 optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
-@torch.compile(backend=max_backend)
+@torch.compile(backend=mojo_backend)
 def train_step(x, y):
     model.train()
     optimizer.zero_grad()
@@ -81,12 +81,12 @@ print(train_step(a, b).cpu().detach().numpy())
 
 ### Device Selection
 
-Note that currently the MAX backend does not support some older nvidia/amd gpus.
-So you'll need to ask MAX first if your GPU is supported before 
-using the gpu.
+Note that Modular's MAX framework (which powers this backend) does not support
+some older nvidia/amd gpus. So you'll need to check first if your GPU is
+supported before using the gpu.
 
 ```python
-from torch_max_backend import get_accelerators
+from torch_mojo_backend import get_accelerators
 
 # Check available accelerators
 # The CPU is necessarily included in the list of accelerators
@@ -98,29 +98,29 @@ model = model.to(device)
 
 ## Supported Operations
 
-The backend currently supports operations defined in [`aten_functions.py`](https://github.com/gabrieldemarmiesse/max-torch-backend/blob/main/torch_max_backend/aten_functions.py). You can view the mapping dictionary by importing `MAPPING_TORCH_ATEN_TO_MAX`.
+The backend currently supports operations defined in [`aten_functions.py`](https://github.com/gabrieldemarmiesse/torch-mojo-backend/blob/main/torch_mojo_backend/aten_functions.py). You can view the mapping dictionary by importing `MAPPING_TORCH_ATEN_TO_MOJO`.
 
 ## Extending the Backend
 
 You can add support for new PyTorch operations without cloning the repository by creating custom mappings:
 
 ```python
-from torch_max_backend import MAPPING_TORCH_ATEN_TO_MAX
+from torch_mojo_backend import MAPPING_TORCH_ATEN_TO_MOJO
 from torch.ops import aten
-import max_ops
+from max.graph import ops as max_ops
 
 # Example: Add support for a new operation
 def my_custom_tanh(x):
     return max_ops.tanh(x)
 
 # Register the operation
-MAPPING_TORCH_ATEN_TO_MAX[aten.tanh] = my_custom_tanh
+MAPPING_TORCH_ATEN_TO_MOJO[aten.tanh] = my_custom_tanh
 
 # Now you can use it with torch.compile
 import torch
-from torch_max_backend import max_backend
+from torch_mojo_backend import mojo_backend
 
-@torch.compile(backend=max_backend)
+@torch.compile(backend=mojo_backend)
 def my_function(x):
     return torch.tanh(x)  # Will now use your custom implementation
 ```
@@ -128,7 +128,7 @@ def my_function(x):
 This approach allows you to:
 - Add missing operations your models need
 - Override existing implementations with optimized versions
-- Prototype new MAX operations before contributing them back
+- Prototype new operations before contributing them back
 
 ## Performance Tips
 
@@ -151,9 +151,9 @@ You can find more information about dynamic shapes in the [PyTorch documentation
 
 ### Debugging
 You can get various information with the following environement variables:
-* `TORCH_MAX_BACKEND_PROFILE=1` to get various information about timing (time to compile, time to run, ...)
-* `TORCH_MAX_BACKEND_VERBOSE=1` to display the graph(s) made by pytorch and various other information.
-* `TORCH_MAX_BACKEND_BEARTYPE=0` to disable type checking. By default, everything in the package is type-checked at runtime. But it may lead to errors when actually the code is valid (and the type hint is wrong). You can try disabling the type-checking then to see if the bug goes away. Feel free to open a bug report in any case! Type errors should never happen and are a sign of an internal bug.
+* `TORCH_MOJO_BACKEND_PROFILE=1` to get various information about timing (time to compile, time to run, ...)
+* `TORCH_MOJO_BACKEND_VERBOSE=1` to display the graph(s) made by pytorch and various other information.
+* `TORCH_MOJO_BACKEND_BEARTYPE=0` to disable type checking. By default, everything in the package is type-checked at runtime. But it may lead to errors when actually the code is valid (and the type hint is wrong). You can try disabling the type-checking then to see if the bug goes away. Feel free to open a bug report in any case! Type errors should never happen and are a sign of an internal bug.
 
 ## Running the unit tests
 

@@ -3,6 +3,7 @@ from std.testing import assert_equal
 from layout import TileTensor, row_major
 from linalg.gemv import gemv_gpu
 
+
 def main() raises:
     comptime N = 64
     comptime K = 64

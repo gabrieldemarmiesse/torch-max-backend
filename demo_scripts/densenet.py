@@ -6,16 +6,16 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.models import densenet121
 
-from torch_max_backend import get_accelerators, max_backend
+from torch_mojo_backend import get_accelerators, mojo_backend
 
-os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
+os.environ["TORCH_MOJO_BACKEND_PROFILE"] = "1"
 
 device = "cuda" if len(list(get_accelerators())) >= 2 else "cpu"
 
 model = densenet121(pretrained=True).to(torch.float32).to(device)
 model.eval()
 
-model = torch.compile(model, backend=max_backend, fullgraph=True)
+model = torch.compile(model, backend=mojo_backend, fullgraph=True)
 
 preprocess = transforms.Compose(
     [

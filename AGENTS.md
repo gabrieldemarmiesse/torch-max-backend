@@ -20,10 +20,10 @@ uv run pytest -n 15
 uv run pytest tests/test_compiler.py
 
 # Run with profiling enabled
-TORCH_MAX_BACKEND_PROFILE=1 uv run pytest tests/test_compiler.py
+TORCH_MOJO_BACKEND_PROFILE=1 uv run pytest tests/test_compiler.py
 
 # Run with verbose output (shows graph structures)
-TORCH_MAX_BACKEND_VERBOSE=1 uv run pytest tests/test_compiler.py
+TORCH_MOJO_BACKEND_VERBOSE=1 uv run pytest tests/test_compiler.py
 
 # Run linter/formatter
 uv run ruff check .
@@ -40,7 +40,7 @@ Always use uv to run commands to ensure the correct environment is activated. Ne
 - **Code Quality**: Uses Ruff for linting/formatting with Python 3.11+ target and pyupgrade rules
 - **Debugging Tools**:
   - Environment variables for profiling and verbose output
-  - Graph visualization when `TORCH_MAX_BACKEND_VERBOSE=1`
+  - Graph visualization when `TORCH_MOJO_BACKEND_VERBOSE=1`
 - **Model Examples**: `demo_scripts/` contains examples showing real-world usage:
   - GPT-2, Gemma3 (LLM models)
   - VGG, DenseNet (vision models)
@@ -125,17 +125,17 @@ def aten__log_softmax(
 ```
 
 ### Step 7: Register for Eager Mode Execution
-Add the operation to `torch_max_backend/max_device/max_device_aten_ops.py`:
+Add the operation to `torch_mojo_backend/mojo_device/mojo_device_aten_ops.py`:
 
 You'll likely need to write mojo code, even if it's only to import `from nn import ...`. If a fully dynamic function to handle the aten op is not available in the modular repo, write it yourself.
 If you have access to multiple gpus, the aten function should work on all those gpus.
 
-Place the registration in alphabetical order within the file. The `wrap_for_max_device` wrapper automatically:
+Place the registration in alphabetical order within the file. The `wrap_for_mojo_device` wrapper automatically:
 - Converts `TorchMojoTensor` inputs to `MaxEagerTensor`
 - Executes the operation
 - Converts results back to `TorchMojoTensor`
 
-**Note**: For operations requiring custom device handling (like `aten::_copy_from`), you can implement a custom function directly instead of using `wrap_for_max_device`.
+**Note**: For operations requiring custom device handling (like `aten::_copy_from`), you can implement a custom function directly instead of using `wrap_for_mojo_device`.
 
 ### Step 8: Re-run Tests
 Run the unit tests again and verify they pass:
@@ -144,7 +144,7 @@ uv run pytest tests/test_aten_functions.py::test_your_new_op -v
 ```
 
 Test both execution modes if applicable:
-- Graph mode via `torch.compile(backend=max_backend)`
+- Graph mode via `torch.compile(backend=mojo_backend)`
 - Eager mode via tensors on `torch.device("mojo")`
 
 ### Step 9: Run Linter
@@ -158,7 +158,7 @@ uvx pre-commit run --all-files
 ### Summary: Two-Part Implementation
 When adding an operation, you need to update **two files**:
 1. **`aten_functions.py`**: Core implementation (works for both modes)
-2. **`max_device_aten_ops.py`**: Registration for eager mode execution
+2. **`mojo_device_aten_ops.py`**: Registration for eager mode execution
 
 This ensures the operation works in both `torch.compile()` and on the `mojo` device.
 

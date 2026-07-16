@@ -10,14 +10,14 @@ from torch._dynamo import mark_dynamic
 from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
-import torch_max_backend
-import torch_max_backend.torch_compile_backend.compiler
-from torch_max_backend import (
-    MAPPING_TORCH_ATEN_TO_MAX,
+import torch_mojo_backend
+import torch_mojo_backend.torch_compile_backend.compiler
+from torch_mojo_backend import (
+    MAPPING_TORCH_ATEN_TO_MOJO,
     make_torch_op_from_mojo,
-    max_backend,
+    mojo_backend,
 )
-from torch_max_backend.testing import check_functions_are_equivalent
+from torch_mojo_backend.testing import check_functions_are_equivalent
 
 
 def test_basic_training(device: str):
@@ -75,7 +75,7 @@ def test_basic_training(device: str):
     model.linear.bias.data.fill_(0.01)
 
     loss_compiled = (
-        torch.compile(backend=max_backend)(train_step)(a, b).cpu().detach().numpy()
+        torch.compile(backend=mojo_backend)(train_step)(a, b).cpu().detach().numpy()
     )
     weight_compiled = model.linear.weight.data.cpu().numpy()
     bias_compiled = model.linear.bias.data.cpu().numpy()
@@ -407,7 +407,7 @@ def test_graph_break_with_python_loop_over_tensor_complexe_dtypes(device: str):
     x = torch.randint(1, 3, (3, 2)).to(torch.int32)
     explanation = torch._dynamo.explain(fn_with_python_loop)(x)
     # In theory there should be only one graph break, but for some reason
-    # because of the max_device we get one per loop. Worth investigating.
+    # because of the mojo_device we get one per loop. Worth investigating.
     assert explanation.graph_break_count >= 1
     assert explanation.graph_count >= 2
     check_functions_are_equivalent(fn_with_python_loop, device, [x])
@@ -471,7 +471,7 @@ def test_no_graph_breaks_with_supported_operations(device: str):
     check_functions_are_equivalent(well_supported_fn, device, [x, y])
 
 
-class max_backendCallCount:
+class mojo_backendCallCount:
     def __init__(self, compiler):
         self.call_count = 0
         self.compiler = compiler
@@ -487,7 +487,7 @@ def test_dynamic_shapes(device: str):
     def fn(x, y):
         return x + y
 
-    counter = max_backendCallCount(max_backend)
+    counter = mojo_backendCallCount(mojo_backend)
     fn_compiled = torch.compile(backend=counter)(fn)
 
     a = torch.randn(20, 2).to(device)
@@ -503,7 +503,7 @@ def test_dynamic_shapes(device: str):
         mark_dynamic(a, 0)
 
         check_functions_are_equivalent(fn, None, [a, b], fn_compiled)
-        # Ensure only one instance of the max_backend is created
+        # Ensure only one instance of the mojo_backend is created
     assert counter.call_count == 1
 
 
@@ -513,7 +513,7 @@ def test_recompilation(device: str):
     def fn(x, y):
         return x + y
 
-    counter = max_backendCallCount(max_backend)
+    counter = mojo_backendCallCount(mojo_backend)
     fn_compiled = torch.compile(backend=counter)(fn)
 
     a = torch.randn(20, 2).to(device)
@@ -525,7 +525,7 @@ def test_recompilation(device: str):
     b = torch.randn(2).to(device)
 
     check_functions_are_equivalent(fn, None, [a, b], fn_compiled)
-    # Ensure a second instance of the max_backend is created
+    # Ensure a second instance of the mojo_backend is created
     assert counter.call_count == 2
 
     # TODO: Make it work if called with more shapes (dynamo doesn't recompile)
@@ -535,35 +535,35 @@ def test_error_message_exception_in_op(monkeypatch):
     def not_working_add(x, y):
         raise RuntimeError("Ho no crash!")
 
-    monkeypatch.setitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add, not_working_add)
+    monkeypatch.setitem(MAPPING_TORCH_ATEN_TO_MOJO, aten.add, not_working_add)
 
     def fn(x, y):
         return x + y
 
     with pytest.raises(RuntimeError) as exc_info:
-        torch.compile(backend=max_backend)(fn)(torch.randn(2, 3), torch.randn(2, 3))
+        torch.compile(backend=mojo_backend)(fn)(torch.randn(2, 3), torch.randn(2, 3))
 
     assert "return x + y" in str(exc_info.value)
     assert "Ho no crash!" in str(exc_info.value)
     assert "torch._ops.aten.aten::add" in str(exc_info.value)
-    assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
+    assert "https://github.com/gabrieldemarmiesse/torch-mojo-backend/issues" in str(
         exc_info.value
     )
     assert "not_working_add" in str(exc_info.value)
 
 
 def test_error_message_op_not_supported(monkeypatch):
-    monkeypatch.delitem(MAPPING_TORCH_ATEN_TO_MAX, aten.add)
+    monkeypatch.delitem(MAPPING_TORCH_ATEN_TO_MOJO, aten.add)
 
     def fn(x, y):
         return x + y
 
     with pytest.raises(BackendCompilerFailed) as exc_info:
-        torch.compile(backend=max_backend)(fn)(torch.randn(2, 3), torch.randn(2, 3))
+        torch.compile(backend=mojo_backend)(fn)(torch.randn(2, 3), torch.randn(2, 3))
 
     assert "return x + y" in str(exc_info.value)
     assert "torch._ops.aten.aten::add" in str(exc_info.value)
-    assert "https://github.com/gabrieldemarmiesse/torch-max-backend/issues" in str(
+    assert "https://github.com/gabrieldemarmiesse/torch-mojo-backend/issues" in str(
         exc_info.value
     )
     assert "is not supported" in str(exc_info.value)
@@ -591,7 +591,7 @@ def test_symint_scalar_arithmetic(device: str):
     def fn(x):
         return torch.relu(x) + x.shape[0]
 
-    fn_compiled = torch.compile(backend=max_backend)(fn)
+    fn_compiled = torch.compile(backend=mojo_backend)(fn)
     for n in (4, 5, 6):
         x = torch.randn(n, 3)
         check_functions_are_equivalent(fn, device, [x], fn_compiled=fn_compiled)
@@ -654,7 +654,7 @@ def test_compiled_input_buffer_cache(device: str):
     def fn(x, w):
         return x @ w
 
-    compiled = torch.compile(fn, backend=max_backend, fullgraph=True)
+    compiled = torch.compile(fn, backend=mojo_backend, fullgraph=True)
     x = torch.randn(2, 3, device=device)
     w = torch.randn(3, 4, device=device)
     torch.testing.assert_close(
@@ -710,7 +710,7 @@ def test_decomposition_overload(monkeypatch):
     # grab the input of init_compiler
     input_gm = None
     init_compiler = (
-        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler.__init__
+        torch_mojo_backend.torch_compile_backend.compiler.BaseMaxCompiler.__init__
     )
 
     def fake_init_compiler(self, gm, *args, **kwargs):
@@ -719,12 +719,12 @@ def test_decomposition_overload(monkeypatch):
         return init_compiler(self, gm, *args, **kwargs)
 
     monkeypatch.setattr(
-        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler,
+        torch_mojo_backend.torch_compile_backend.compiler.BaseMaxCompiler,
         "__init__",
         fake_init_compiler,
     )
 
-    a = torch.compile(backend=max_backend)(fn)
+    a = torch.compile(backend=mojo_backend)(fn)
     a(torch.randn(2, 3))
 
     # it's normally decomposed. We check that it's not the case since we
@@ -744,7 +744,7 @@ def test_decomposition_overload_packet(monkeypatch):
     # grab the input of init_compiler
     input_gm = None
     init_compiler = (
-        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler.__init__
+        torch_mojo_backend.torch_compile_backend.compiler.BaseMaxCompiler.__init__
     )
 
     def fake_init_compiler(self, gm, *args, **kwargs):
@@ -753,12 +753,12 @@ def test_decomposition_overload_packet(monkeypatch):
         return init_compiler(self, gm, *args, **kwargs)
 
     monkeypatch.setattr(
-        torch_max_backend.torch_compile_backend.compiler.BaseMaxCompiler,
+        torch_mojo_backend.torch_compile_backend.compiler.BaseMaxCompiler,
         "__init__",
         fake_init_compiler,
     )
 
-    a = torch.compile(backend=max_backend)(fn)
+    a = torch.compile(backend=mojo_backend)(fn)
     a(torch.randn(2, 3))
 
     # it's normally decomposed. We check that it's not the case since we
@@ -809,7 +809,7 @@ def test_mojo_custom_op(device: str):
     x = more_complexe_graph(img)
     y = more_complexe_graph_eager(img)
 
-    complexe_graph_compiled = torch.compile(backend=max_backend, fullgraph=True)(
+    complexe_graph_compiled = torch.compile(backend=mojo_backend, fullgraph=True)(
         more_complexe_graph
     )
     z = complexe_graph_compiled(img)
@@ -880,7 +880,7 @@ def test_mojo_custom_op_multi(device: str):
     x1, x2 = more_complexe_graph(img, noise)
     y1, y2 = more_complexe_graph_eager(img, noise)
 
-    complexe_graph_compiled = torch.compile(backend=max_backend, fullgraph=True)(
+    complexe_graph_compiled = torch.compile(backend=mojo_backend, fullgraph=True)(
         more_complexe_graph
     )
     z1, z2 = complexe_graph_compiled(img, noise)
@@ -943,7 +943,7 @@ def test_mojo_custom_op_multi_dynamic_dims(device: str):
     x1, x2 = more_complexe_graph(img, noise)
     y1, y2 = more_complexe_graph_eager(img, noise)
 
-    complexe_graph_compiled = torch.compile(backend=max_backend, fullgraph=True)(
+    complexe_graph_compiled = torch.compile(backend=mojo_backend, fullgraph=True)(
         more_complexe_graph
     )
     z1, z2 = complexe_graph_compiled(img, noise)

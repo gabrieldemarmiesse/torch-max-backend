@@ -6,10 +6,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch._dynamo import mark_dynamic
 
-from torch_max_backend import get_accelerators, max_backend
+from torch_mojo_backend import get_accelerators, mojo_backend
 
-os.environ["TORCH_MAX_BACKEND_PROFILE"] = "1"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
+os.environ["TORCH_MOJO_BACKEND_PROFILE"] = "1"
+os.environ["TORCH_MOJO_BACKEND_VERBOSE"] = "0"
 
 
 class CausalSelfAttention(nn.Module):
@@ -325,7 +325,9 @@ def main():
     print("=" * 50)
 
     # Compile just the forward pass, not the full generation loop
-    compiled_forward = torch.compile(model.forward, fullgraph=True, backend=max_backend)
+    compiled_forward = torch.compile(
+        model.forward, fullgraph=True, backend=mojo_backend
+    )
 
     @torch.no_grad()
     def generate_with_compiled_step(idx, max_new_tokens, temperature=1.0, top_k=None):

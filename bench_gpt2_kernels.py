@@ -17,9 +17,9 @@ import time
 import torch
 import torch.nn.functional as F
 
-from torch_max_backend import get_accelerators, register_max_devices
+from torch_mojo_backend import get_accelerators, register_mojo_devices
 
-register_max_devices()
+register_mojo_devices()
 
 DEVICE = sys.argv[1]
 BATCH = int(sys.argv[2]) if len(sys.argv) > 2 else 256

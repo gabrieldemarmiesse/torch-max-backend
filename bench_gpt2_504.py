@@ -14,9 +14,9 @@ import time
 
 import torch
 
-from torch_max_backend import register_max_devices
+from torch_mojo_backend import register_mojo_devices
 
-register_max_devices()
+register_mojo_devices()
 
 N_NEW_TOKENS = int(sys.argv[1]) if len(sys.argv) > 1 else 500
 PROMPT = "In a shocking finding, scientists discovered a herd of unicorns"

@@ -2,7 +2,7 @@
 
 ## Why
 
-The max_device eager mode routes every ATen op through
+The mojo_device eager mode routes every ATen op through
 `max.experimental.tensor`: each call builds a fresh MLIR graph, runs
 MLIR cleanup passes, then interprets or compiles it. Measured on an
 RTX 2000 Ada (WSL2), that costs **~2,200 µs per op call** regardless of
@@ -21,7 +21,7 @@ with a content-addressed disk cache — in the productized form that MAX
 itself already uses internally for its eager interpreter
 (`max/_interpreter_ops/*.mojo` + `mojo.importer`):
 
-- `torch_max_backend/eager_kernels/elementwise_ops.mojo` implements
+- `torch_mojo_backend/eager_kernels/elementwise_ops.mojo` implements
   Add/Sub/Mul/Div/Max/Min/Relu/Exp as Mojo kernels over **contiguous
   buffers with fully dynamic shapes**. Dtype dispatch happens at
   **runtime inside Mojo** (every dtype specialization is compiled into
@@ -31,9 +31,9 @@ itself already uses internally for its eager interpreter
   hook): first import runs `mojo build --emit shared-lib`, caches under
   `__mojocache__/elementwise_ops.hash-<h>.so`, and every later import
   (any process) just dlopens it. The import itself is **deferred to the
-  first fast-path op call** (`_eager_impl` in `max_device_aten_ops.py`),
-  so `import torch_max_backend` and torch.compile-only workloads never
-  pay the compile; a process that never touches max_device eager mode
+  first fast-path op call** (`_eager_impl` in `mojo_device_aten_ops.py`),
+  so `import torch_mojo_backend` and torch.compile-only workloads never
+  pay the compile; a process that never touches mojo_device eager mode
   compiles nothing.
 - Python-visible functions receive the `max.driver.Buffer` objects
   directly plus `device._device_context_ptr()`. The kernel is enqueued
@@ -46,14 +46,14 @@ itself already uses internally for its eager interpreter
   extension call; otherwise it **falls back to the existing
   `aten_functions` implementation**, so behavior is unchanged for
   everything the fast path doesn't cover.
-- `max_device_aten_ops.py` registers the fast versions for
+- `mojo_device_aten_ops.py` registers the fast versions for
   add/sub/mul/div/maximum/minimum/relu/exp, gated by
-  `TORCH_MAX_BACKEND_FAST_EAGER` (default on).
+  `TORCH_MOJO_BACKEND_FAST_EAGER` (default on).
   **The torch.compile backend is untouched.**
 
 ## Measured results (RTX 2000 Ada, WSL2)
 
-Per-op call, (64, 64) float32 on the GPU max_device:
+Per-op call, (64, 64) float32 on the GPU mojo_device:
 
 | path | µs/call |
 |---|---|
@@ -64,7 +64,7 @@ Per-op call, (64, 64) float32 on the GPU max_device:
 | torch native CUDA eager (reference) | ~21 |
 
 End-to-end speedup today: **~50×**; the remaining ~24 µs over the bare
-call is the PyTorch dispatcher + `TorchMaxTensor` wrapping + beartype,
+call is the PyTorch dispatcher + `TorchMojoTensor` wrapping + beartype,
 which can be shaved independently.
 
 ## Scaling analysis ("how many extensions is too many?")
@@ -151,7 +151,7 @@ remaining gap is per-op Python cost plus materializing copies where CUDA
 uses free strided views (transpose/split/kv-cat) — closing it needs
 stride-aware tensors or C++-level registrations, not faster kernels.
 
-Both models pass `run_hf_max.py`'s comparison against CPU with argmax
+Both models pass `run_hf_mojo.py`'s comparison against CPU with argmax
 agreement. Numerics for float32: matmul/conv call cuBLAS with
 `use_tf32=False` (full fp32, matching torch's CUDA matmul default and
 *more* precise than the graph path, whose matmul dispatch hardcodes TF32).
@@ -215,10 +215,10 @@ Some ops need no kernel at all (Python-only fast paths):
 
 Three structural changes, in order of impact:
 
-1. **Fast ops receive `TorchMaxTensor` arguments directly** and return
+1. **Fast ops receive `TorchMojoTensor` arguments directly** and return
    wrapped results (`aten_fast.NOT_HANDLED` sentinel triggers the generic
    fallback), skipping the recursive argument-conversion walk both ways.
-2. **`TorchMaxTensor` stores the raw driver buffer** (`_from_buffer`) and
+2. **`TorchMojoTensor` stores the raw driver buffer** (`_from_buffer`) and
    only builds the `MaxEagerTensor` wrapper lazily on first `_max_data`
    access. Fast-path tensors that only ever feed other fast ops (the vast
    majority) never construct one (~1.7 µs + a sharding-mesh init each);
@@ -438,5 +438,5 @@ extension has no rocBLAS/hipBLAS dependency.
 - First-import compile UX for the test suite: `mojo.importer` has no
   cross-process lock; warm the cache once (e.g. in
   `scripts/populate_cache_for_tests.py`) before `pytest -n`.
-- Shave the remaining per-call overhead (TorchMaxTensor creation goes
+- Shave the remaining per-call overhead (TorchMojoTensor creation goes
   through a meta tensor + `__init__` per op; beartype on hot wrappers).

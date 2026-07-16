@@ -7,8 +7,8 @@ from torch._dynamo import mark_dynamic
 from torch._dynamo.exc import BackendCompilerFailed
 from torch.ops import aten
 
-from torch_max_backend import aten_functions
-from torch_max_backend.testing import (
+from torch_mojo_backend import aten_functions
+from torch_mojo_backend.testing import (
     CallChecker,
     Conf,
     check_functions_are_equivalent,
@@ -336,7 +336,7 @@ def test_native_batch_norm_legit_no_training_2d_input(device: str):
 
 def test_aten_native_batch_norm_inference(conf: Conf, call_checker: CallChecker):
     """Test aten.native_batch_norm in inference mode (training=False)."""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten_native_batch_norm, aten_fast.fast_aten_native_batch_norm
@@ -381,7 +381,7 @@ def test_aten_native_layer_norm_basic(
     conf: Conf, dtype: torch.dtype, call_checker: CallChecker
 ):
     """Test aten.native_layer_norm returns (output, mean, rstd)"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten_native_layer_norm, aten_fast.fast_aten_native_layer_norm
@@ -428,7 +428,7 @@ def test_aten_native_layer_norm_different_eps(
     conf: Conf, eps: float, call_checker: CallChecker
 ):
     """Test aten.native_layer_norm with different epsilon values"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten_native_layer_norm, aten_fast.fast_aten_native_layer_norm
@@ -3095,7 +3095,7 @@ def test_aten_sum_integral_dtypes(
 @pytest.mark.parametrize("with_bias", [True, False])
 def test_aten_linear(conf: Conf, with_bias: bool, call_checker: CallChecker):
     """Test aten.linear (input @ weight^T + bias) with 2D input"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(aten_functions.aten_linear, aten_fast.fast_aten_linear)
 
@@ -3116,7 +3116,7 @@ def test_aten_linear(conf: Conf, with_bias: bool, call_checker: CallChecker):
 
 def test_aten_linear_3d_input(conf: Conf, call_checker: CallChecker):
     """Test aten.linear with batched (3D) input, as transformers call it"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(aten_functions.aten_linear, aten_fast.fast_aten_linear)
 
@@ -3218,7 +3218,7 @@ def test_fill_scalar_basic(
     call_checker: CallChecker,
 ):
     """Test basic fill.Scalar functionality with different dtypes, shapes, and values"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten_fill_scalar, aten_fast.fast_aten_fill_scalar
@@ -3240,7 +3240,7 @@ def test_fill_scalar_integer_dtypes(
     conf: Conf, dtype: torch.dtype, shape: tuple, value: int, call_checker: CallChecker
 ):
     """Test fill.Scalar functionality with integer dtypes"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten_fill_scalar, aten_fast.fast_aten_fill_scalar
@@ -3258,7 +3258,7 @@ def test_fill_scalar_integer_dtypes(
 @pytest.mark.parametrize("value", [-5, 100])
 def test_fill_scalar_integer_values(conf: Conf, value: int, call_checker: CallChecker):
     """Test fill.Scalar with integer values"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten_fill_scalar, aten_fast.fast_aten_fill_scalar
@@ -3275,7 +3275,7 @@ def test_fill_scalar_integer_values(conf: Conf, value: int, call_checker: CallCh
 
 def test_fill_scalar_single_element(conf: Conf, call_checker: CallChecker):
     """Test fill.Scalar with single element tensor"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten_fill_scalar, aten_fast.fast_aten_fill_scalar
@@ -3304,7 +3304,7 @@ def test_fill_scalar_zero_dim(conf: Conf):
 
 def test_fill__scalar_inplace(conf: Conf, call_checker: CallChecker):
     """Test fill_.Scalar fills tensor in-place"""
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten_fill__scalar, aten_fast.fast_aten_fill__scalar
@@ -3430,7 +3430,7 @@ def test_aten_erf_basic(conf: Conf, dtype: torch.dtype):
 
 
 def test_aten__unsafe_view(conf: Conf, call_checker: CallChecker):
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten__unsafe_view, aten_fast.fast_aten__unsafe_view
@@ -3447,7 +3447,7 @@ def test_aten__unsafe_view(conf: Conf, call_checker: CallChecker):
 def test_aten__unsafe_view_dtypes(
     conf: Conf, dtype: torch.dtype, call_checker: CallChecker
 ):
-    from torch_max_backend.eager_kernels import aten_fast
+    from torch_mojo_backend.eager_kernels import aten_fast
 
     call_checker.register(
         aten_functions.aten__unsafe_view, aten_fast.fast_aten__unsafe_view

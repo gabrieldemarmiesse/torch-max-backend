@@ -15,10 +15,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-from torch_max_backend import max_backend
+from torch_mojo_backend import mojo_backend
 
-os.environ["TORCH_MAX_BACKEND_PROFILE"] = "0"
-os.environ["TORCH_MAX_BACKEND_VERBOSE"] = "0"
+os.environ["TORCH_MOJO_BACKEND_PROFILE"] = "0"
+os.environ["TORCH_MOJO_BACKEND_VERBOSE"] = "0"
 
 
 class SimpleNet(nn.Module):
@@ -140,8 +140,8 @@ def main():
     # Model, loss, and optimizer
     model = SimpleNet().to(device)
 
-    # Compile the model with max_backend
-    model = torch.compile(model, backend=max_backend, fullgraph=True)
+    # Compile the model with mojo_backend
+    model = torch.compile(model, backend=mojo_backend, fullgraph=True)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=momentum)
