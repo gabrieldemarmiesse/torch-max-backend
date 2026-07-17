@@ -1,0 +1,51 @@
+{
+  "environment": {
+    "torch": "2.11.0+rocm7.2",
+    "hip": "7.2.26015",
+    "hardware": "AMD Instinct MI300X VF",
+    "execution_backend": "PyTorch ROCm",
+    "torch_device": "cuda",
+    "transformers": "5.4.0"
+  },
+  "workload": {
+    "model": "gpt2",
+    "batch_size": 512,
+    "prompt_len": 8,
+    "new_tokens": 200,
+    "cached_decode_steps": 199,
+    "dtype": "bf16",
+    "sampling": "greedy",
+    "prompt": "Here is how quantum computing works: "
+  },
+  "unprofiled": {
+    "wall_seconds": 1.4959752570139244,
+    "generated_tokens": 102400,
+    "tokens_per_second": 68450.32999034881
+  },
+  "profile": {
+    "prefill_self_gpu_us": 8643.777000000002,
+    "decode_self_gpu_us": 1418594.0099999942,
+    "decode_ms_per_cached_step": 7.12861311557786,
+    "combined_ms_per_generated_token": 7.1361889349999705,
+    "prefill_gpu_trace": {
+      "gpu_activity_count": 333,
+      "span_us": 9720.955,
+      "busy_us": 8643.777000000002,
+      "idle_us": 1077.177999999998,
+      "idle_pct": 11.080989470684703,
+      "gap_count": 332,
+      "gaps_over_50us": 6,
+      "max_gap_us": 115.625
+    },
+    "decode_gpu_trace": {
+      "gpu_activity_count": 55762,
+      "span_us": 1612670.674,
+      "busy_us": 1418584.7979999944,
+      "idle_us": 194085.87600000575,
+      "idle_pct": 12.035059552400947,
+      "gap_count": 55750,
+      "gaps_over_50us": 938,
+      "max_gap_us": 621.0140000000247
+    }
+  }
+}

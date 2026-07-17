@@ -1,0 +1,7 @@
+metric,rocm,mojo,mojo_over_rocm
+unprofiled_wall_seconds,1.495975,1.773537,1.185539
+aggregate_tokens_per_second,68450.329990,57737.735834,0.843498
+prefill_self_gpu_ms,8.643777,17.552574,2.030660
+decode_self_gpu_ms,1418.594010,1502.680966,1.059275
+decode_self_gpu_ms_per_step,7.128613,7.551161,1.059275
+decode_trace_idle_pct,12.035060,27.543683,2.288620
