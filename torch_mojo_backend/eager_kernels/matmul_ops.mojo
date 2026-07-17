@@ -6,9 +6,6 @@
 # the fast path works with only the NVIDIA driver — no cuBLAS. All kernels
 # accumulate in float32 and handle dynamic shapes with edge guards.
 #
-# `MatmulVendor` / `BmmVendor` keep the previous vendor BLAS (cuBLAS) path
-# available for A/B benchmarking; nothing in the backend calls them.
-#
 # `Matmul` / `MatmulBias` / `Bmm` also run on the CPU MAX device, via
 # modular's production CPU matmul (`linalg.matmul.matmul` target="cpu"; see
 # `_cpu_gemm` below), since there is no graph fallback to lean on anymore.
@@ -49,11 +46,9 @@ from std.algorithm.functional import elementwise, parallelize
 from layout import Coord, Idx, TileTensor, row_major
 from layout.tensor_core import get_mma_shape
 
-from linalg.bmm import batched_matmul
 from linalg.gemv import gemv_gpu
 from linalg.matmul import matmul as cpu_lib_matmul
 from linalg.matmul.gpu import multistage_gemm, multistage_gemm_kernel
-from linalg.matmul.vendor.blas import matmul as vendor_matmul
 from linalg.utils import elementwise_epilogue_type
 from linalg.utils_gpu import MatmulConfig
 from std.sys import llvm_intrinsic
@@ -1398,10 +1393,18 @@ def _gemm_enqueue[
         comptime if dtype == DType.float32:
             comptime if transpose_b:
                 # Apple M1-M4's stock 8x8 simdgroup-matrix kernel uses a
-                # 64-row tile. Specialize it to 32 rows for GPT-2's
-                # batch-32 lm_head so all four simdgroups do useful work.
+                # 64-row tile. The 32-row variant keeps all four simdgroups
+                # doing useful work on skinny-M projections (decode-step
+                # lm_head), for any m in the skinny band — the kernel edge-
+                # masks partial tiles.
                 comptime if has_apple_gpu_accelerator():
-                    if batch == 1 and m == 32 and n >= 8192 and k % 16 == 0:
+                    if (
+                        batch == 1
+                        and m > SMALLM_MR
+                        and m <= 32
+                        and n >= 8192
+                        and k % 16 == 0
+                    ):
                         _apple8_enqueue[False, True](
                             c_addr, a_addr, b_addr, 0, m, n, k, ctx
                         )
@@ -2892,128 +2895,6 @@ def _bmm_go(
 
 
 # ---------------------------------------------------------------------------
-# Vendor BLAS (cuBLAS) reference path — benchmarking only, never called by
-# the backend. Calling these loads the vendor library into the process.
-# ---------------------------------------------------------------------------
-
-
-@always_inline
-def _matmul_vendor[
-    dtype: DType, transpose_b: Bool
-](
-    c_addr: Int,
-    a_addr: Int,
-    b_addr: Int,
-    m: Int,
-    n: Int,
-    k: Int,
-    ctx: DeviceContext,
-) raises:
-    comptime if has_accelerator():
-        # use_tf32=False: full-precision fp32 GEMM, matching torch's CUDA
-        # matmul default. The higher-level dispatchers hardcode TF32 on.
-        var c = TileTensor(_make_ptr[dtype](c_addr), row_major(m, n))
-        var a = TileTensor(_make_ptr[dtype](a_addr), row_major(m, k))
-        comptime if transpose_b:
-            var b = TileTensor(_make_ptr[dtype](b_addr), row_major(n, k))
-            vendor_matmul(ctx, c, a, b, c_row_major=True, transpose_b=True)
-        else:
-            var b = TileTensor(_make_ptr[dtype](b_addr), row_major(k, n))
-            vendor_matmul(ctx, c, a, b, c_row_major=True, transpose_b=False)
-    else:
-        raise Error("no GPU accelerator available at compile time")
-
-
-def _matmul_vendor_dispatcher(
-    c_buffer: PythonObject,
-    a_buffer: PythonObject,
-    b_buffer: PythonObject,
-    params: PythonObject,  # (m, n, k, transpose_b)
-    device_context_ptr: PythonObject,
-) raises:
-    var dtype = _get_dtype(a_buffer)
-    var c_addr = Int(py=c_buffer._data_ptr())
-    var a_addr = Int(py=a_buffer._data_ptr())
-    var b_addr = Int(py=b_buffer._data_ptr())
-    var m = Int(py=params[0])
-    var n = Int(py=params[1])
-    var k = Int(py=params[2])
-    var transpose_b = Int(py=params[3])
-    var ctx = _get_ctx(device_context_ptr)
-
-    if dtype == DType.float32:
-        if transpose_b != 0:
-            _matmul_vendor[DType.float32, True](
-                c_addr, a_addr, b_addr, m, n, k, ctx
-            )
-        else:
-            _matmul_vendor[DType.float32, False](
-                c_addr, a_addr, b_addr, m, n, k, ctx
-            )
-    else:
-        raise Error("vendor matmul benchmark path only supports float32")
-
-
-@always_inline
-def _bmm_vendor[
-    dtype: DType, transpose_b: Bool
-](
-    c_addr: Int,
-    a_addr: Int,
-    b_addr: Int,
-    batch: Int,
-    m: Int,
-    n: Int,
-    k: Int,
-    ctx: DeviceContext,
-) raises:
-    comptime if has_accelerator():
-        var c = TileTensor(_make_ptr[dtype](c_addr), row_major(batch, m, n))
-        var a = TileTensor(_make_ptr[dtype](a_addr), row_major(batch, m, k))
-        comptime if transpose_b:
-            var b = TileTensor(_make_ptr[dtype](b_addr), row_major(batch, n, k))
-            batched_matmul[transpose_b=True, target="gpu"](c, a, b, context=ctx)
-        else:
-            var b = TileTensor(_make_ptr[dtype](b_addr), row_major(batch, k, n))
-            batched_matmul[transpose_b=False, target="gpu"](
-                c, a, b, context=ctx
-            )
-    else:
-        raise Error("no GPU accelerator available at compile time")
-
-
-def _bmm_vendor_dispatcher(
-    c_buffer: PythonObject,
-    a_buffer: PythonObject,
-    b_buffer: PythonObject,
-    params: PythonObject,  # (batch, m, n, k, transpose_b)
-    device_context_ptr: PythonObject,
-) raises:
-    var dtype = _get_dtype(a_buffer)
-    var c_addr = Int(py=c_buffer._data_ptr())
-    var a_addr = Int(py=a_buffer._data_ptr())
-    var b_addr = Int(py=b_buffer._data_ptr())
-    var batch = Int(py=params[0])
-    var m = Int(py=params[1])
-    var n = Int(py=params[2])
-    var k = Int(py=params[3])
-    var transpose_b = Int(py=params[4])
-    var ctx = _get_ctx(device_context_ptr)
-
-    if dtype == DType.float32:
-        if transpose_b != 0:
-            _bmm_vendor[DType.float32, True](
-                c_addr, a_addr, b_addr, batch, m, n, k, ctx
-            )
-        else:
-            _bmm_vendor[DType.float32, False](
-                c_addr, a_addr, b_addr, batch, m, n, k, ctx
-            )
-    else:
-        raise Error("vendor bmm benchmark path only supports float32")
-
-
-# ---------------------------------------------------------------------------
 # In-place row-broadcast bias add: out[i] += bias[i % cols]. Used as the
 # addmm / conv-bias epilogue.
 # ---------------------------------------------------------------------------
@@ -3695,19 +3576,11 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
                 " tiled kernels on GPU, modular's linalg matmul on CPU"
             ),
         )
-        b.def_function[_matmul_vendor_dispatcher](
-            "MatmulVendor",
-            docstring="vendor BLAS (cuBLAS) matmul — benchmarking only",
-        )
         b.def_function[_matmul_tune_dispatcher](
             "MatmulTune",
             docstring=(
                 "GEMM with explicit tile cfg + split-K floor — tuning only"
             ),
-        )
-        b.def_function[_bmm_vendor_dispatcher](
-            "BmmVendor",
-            docstring="vendor BLAS batched matmul — benchmarking only",
         )
         b.def_function[_bias_add_row_dispatcher](
             "BiasAddRow", docstring="in-place out[i] += bias[i % cols]"
