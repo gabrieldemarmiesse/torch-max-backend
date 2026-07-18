@@ -1,0 +1,11 @@
+function,rocm_aten_ops,rocm_self_gpu_ms,rocm_decode_pct,mojo_aten_ops,mojo_self_gpu_ms,mojo_decode_pct,mojo_over_rocm_gpu_time
+Transformer projections / MLP GEMMs,aten::addmm,162.324,11.44,aten::addmm,363.094,24.16,2.237
+Attention over KV cache,aten::_flash_attention_forward,308.916,21.78,aten::scaled_dot_product_attention,412.067,27.42,1.334
+KV-cache and sequence concat,aten::cat,647.694,45.66,aten::cat,248.566,16.54,0.384
+LM-head GEMM,aten::mm,24.514,1.73,aten::linear,117.585,7.82,4.797
+Elementwise GELU / residual,aten::add+aten::mul+aten::pow+aten::tanh,149.515,10.54,aten::add+aten::mul+aten::pow+aten::tanh,210.022,13.98,1.405
+Tensor/logits copies,aten::copy_,32.380,2.28,aten::_to_copy+aten::clone,33.548,2.23,1.036
+Layer normalization,aten::native_layer_norm,28.994,2.04,aten::native_layer_norm,41.722,2.78,1.439
+Logits processing,aten::where,22.059,1.55,aten::where,27.571,1.83,1.250
+Greedy sampling,aten::argmax,8.592,0.61,aten::argmax,8.240,0.55,0.959
+Other generation/control ops,remaining ATen ops,33.607,2.37,remaining ATen ops,40.266,2.68,1.198

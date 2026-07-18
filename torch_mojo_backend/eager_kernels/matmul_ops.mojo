@@ -904,14 +904,14 @@ def _gemm_smallm_kernel[
 @__llvm_metadata(
     MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256))
 )
-@__name(t"amd_dynamic_mfma_edge_tb{transpose_b}_bias{fuse_bias}")
+@__name(t"amd_dynamic_mfma_edge_{dtype}_tb{transpose_b}_bias{fuse_bias}")
 def _amd_dynamic_mfma_edge_kernel[
-    transpose_b: Bool, fuse_bias: Bool
+    dtype: DType, transpose_b: Bool, fuse_bias: Bool
 ](
-    c: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
-    a: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
-    b: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
-    bias: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    c: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    a: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    b: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    bias: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
     m: Int,
     n: Int,
     k: Int,
@@ -937,17 +937,22 @@ def _amd_dynamic_mfma_edge_kernel[
             var bv = b[col * k + kk + u] if transpose_b else b[
                 (kk + u) * n + col
             ]
-            acc = a[row * k + kk + u].fma(bv, acc)
+            acc = a[row * k + kk + u].cast[DType.float32]().fma(
+                bv.cast[DType.float32](), acc
+            )
     for kk in range(k4, k):
         var bv = b[col * k + kk] if transpose_b else b[kk * n + col]
-        acc = a[row * k + kk].fma(bv, acc)
+        acc = a[row * k + kk].cast[DType.float32]().fma(
+            bv.cast[DType.float32](), acc
+        )
     comptime if fuse_bias:
-        acc += bias[col]
-    c[row * n + col] = acc
+        acc += bias[col].cast[DType.float32]()
+    c[row * n + col] = acc.cast[dtype]()
 
 
 @always_inline
 def _amd_dynamic_mfma_gemm[
+    dtype: DType,
     BM: Int,
     BN: Int,
     WM: Int,
@@ -956,6 +961,7 @@ def _amd_dynamic_mfma_gemm[
     fuse_bias: Bool,
     BLOCK_K: Int = 32,
     WARP_K_PARTITIONS: Int = 1,
+    K_GROUP_SIZE: Int = 1,
 ](
     c_addr: Int,
     a_addr: Int,
@@ -967,60 +973,66 @@ def _amd_dynamic_mfma_gemm[
     ctx: DeviceContext,
 ) raises:
     comptime F32 = DType.float32
-    var c_ptr = _make_ptr[F32](c_addr)
+    var c_ptr = _make_ptr[dtype](c_addr)
     var c = TileTensor(c_ptr, row_major(Coord(m, n)))
     var a = TileTensor(
-        _make_ptr[F32](a_addr).as_immutable(), row_major(Coord(m, k))
+        _make_ptr[dtype](a_addr).as_immutable(), row_major(Coord(m, k))
     )
 
     @always_inline
     @parameter
     @__copy_capture(c_ptr, n)
     def _edge_store[
-        dtype: DType, width: SIMDSize, *, alignment: Int = 1
-    ](coords: IndexList[2], value: SIMD[dtype, width]):
+        value_dtype: DType, width: SIMDSize, *, alignment: Int = 1
+    ](coords: IndexList[2], value: SIMD[value_dtype, width]):
         var row = Int(coords[0])
         var col = Int(coords[1])
         var off = row * n + col
         if col + width <= n:
-            c_ptr.store[width=width, alignment=4](off, value.cast[F32]())
+            c_ptr.store[width=width, alignment=4](off, value.cast[dtype]())
         else:
             comptime for i in range(width):
                 if col + i < n:
-                    c_ptr[off + i] = value[i].cast[F32]()
+                    c_ptr[off + i] = value[i].cast[dtype]()
 
     comptime edge_epilogue = Optional[elementwise_epilogue_type](_edge_store)
 
-    var bias_ptr = _make_ptr[F32](bias_addr).as_immutable()
+    var bias_ptr = _make_ptr[dtype](bias_addr).as_immutable()
 
     @always_inline
     @parameter
     @__copy_capture(c_ptr, bias_ptr, n)
     def _bias_store[
-        dtype: DType, width: SIMDSize, *, alignment: Int = 1
-    ](coords: IndexList[2], value: SIMD[dtype, width]):
+        value_dtype: DType, width: SIMDSize, *, alignment: Int = 1
+    ](coords: IndexList[2], value: SIMD[value_dtype, width]):
         var row = Int(coords[0])
         var col = Int(coords[1])
         var off = row * n + col
         if col + width <= n:
-            var result = value.cast[F32]() + bias_ptr.load[width=width](col)
-            c_ptr.store[width=width, alignment=4](off, result)
+            var result = value.cast[F32]() + bias_ptr.load[width=width](
+                col
+            ).cast[F32]()
+            c_ptr.store[width=width, alignment=4](off, result.cast[dtype]())
         else:
             comptime for i in range(width):
                 if col + i < n:
-                    c_ptr[off + i] = value[i].cast[F32]() + bias_ptr[col + i]
+                    c_ptr[off + i] = (
+                        value[i].cast[F32]()
+                        + bias_ptr[col + i].cast[F32]()
+                    ).cast[dtype]()
 
     comptime bias_epilogue = Optional[elementwise_epilogue_type](_bias_store)
 
-    comptime config = MatmulConfig[F32, F32, F32, transpose_b](
+    comptime config = MatmulConfig[dtype, dtype, dtype, transpose_b](
         block_tile_shape=Index(BM, BN, BLOCK_K),
         warp_tile_shape=Index(WM, WN, BLOCK_K),
-        mma_shape=get_mma_shape[F32, F32](),
+        mma_shape=get_mma_shape[dtype, DType.float32](),
         num_pipeline_stages=2,
         num_warp_k_partitions=WARP_K_PARTITIONS,
+        k_group_size=K_GROUP_SIZE,
     )
     var b = TileTensor(
-        _make_ptr[F32](b_addr).as_immutable(),
+        _make_ptr[dtype](b_addr).as_immutable(),
         row_major(Coord(n, k)) if transpose_b else row_major(Coord(k, n)),
     )
 
@@ -1048,13 +1060,17 @@ def _amd_dynamic_mfma_gemm[
             ),
         )
     var c_raw = c_ptr.as_unsafe_any_origin()
-    var a_raw = _make_ptr[F32](a_addr).as_unsafe_any_origin().as_immutable()
-    var b_raw = _make_ptr[F32](b_addr).as_unsafe_any_origin().as_immutable()
+    var a_raw = _make_ptr[dtype](a_addr).as_unsafe_any_origin().as_immutable()
+    var b_raw = _make_ptr[dtype](b_addr).as_unsafe_any_origin().as_immutable()
     if n_full < n:
         var col_count = n - n_full
-        _enqueue_cached[_amd_dynamic_mfma_edge_kernel[transpose_b, fuse_bias]](
+        _enqueue_cached[
+            _amd_dynamic_mfma_edge_kernel[dtype, transpose_b, fuse_bias]
+        ](
             ctx,
-            String(t"amd_dynamic_mfma_edge_tb{transpose_b}_bias{fuse_bias}"),
+            String(
+                t"amd_dynamic_mfma_edge_{dtype}_tb{transpose_b}_bias{fuse_bias}"
+            ),
             ceildiv(m * col_count, 256),
             1,
             1,
@@ -1075,7 +1091,7 @@ def _amd_dynamic_mfma_gemm[
 
 @always_inline
 def _amd_dynamic_mfma_dispatch[
-    transpose_b: Bool, fuse_bias: Bool = False
+    dtype: DType, transpose_b: Bool, fuse_bias: Bool = False
 ](
     c_addr: Int,
     a_addr: Int,
@@ -1092,31 +1108,178 @@ def _amd_dynamic_mfma_dispatch[
     # stay runtime-dynamic inside every selected kernel.
     if batch != 1 or a_bstride == 0 or m < 64 or k % 32 != 0:
         return False
-    if m >= 128 and n >= 8192 and k >= 128:
-        _amd_dynamic_mfma_gemm[128, 128, 64, 64, transpose_b, fuse_bias](
-            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
-        )
-    elif k >= 2048 and k >= 2 * n:
-        comptime if transpose_b:
+    comptime if dtype == DType.bfloat16:
+        comptime if not transpose_b:
+            if m >= 1024:
+                if n >= 1536:
+                    _amd_dynamic_mfma_gemm[
+                        dtype, 64, 128, 32, 64, transpose_b, fuse_bias
+                    ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+                else:
+                    _amd_dynamic_mfma_gemm[
+                        dtype, 32, 128, 32, 64, transpose_b, fuse_bias
+                    ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+                return True
+        if k >= 2048 and k >= 2 * n:
             _amd_dynamic_mfma_gemm[
+                dtype,
                 32,
                 32,
                 32,
                 32,
                 transpose_b,
                 fuse_bias,
-                16,
-                4,
+                32,
+                2,
             ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+            return True
+        comptime if not transpose_b:
+            if n >= 512 and n <= 2304 and k >= 512 and k % 64 == 0:
+                _amd_dynamic_mfma_gemm[
+                    dtype, 32, 32, 32, 32, transpose_b, fuse_bias, 32, 2
+                ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+                return True
+            if n > 2304 and n < 8192 and k >= 512:
+                _amd_dynamic_mfma_gemm[
+                    dtype, 64, 32, 32, 32, transpose_b, fuse_bias
+                ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+                return True
+    if m >= 128 and n >= 8192 and k >= 128:
+        _amd_dynamic_mfma_gemm[
+            dtype, 128, 128, 64, 64, transpose_b, fuse_bias
+        ](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
+    elif k >= 2048 and k >= 2 * n:
+        comptime if transpose_b:
+            comptime if dtype == DType.float32:
+                _amd_dynamic_mfma_gemm[
+                    dtype,
+                    32,
+                    32,
+                    32,
+                    32,
+                    transpose_b,
+                    fuse_bias,
+                    16,
+                    4,
+                ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+            else:
+                _amd_dynamic_mfma_gemm[
+                    dtype, 32, 32, 16, 16, transpose_b, fuse_bias
+                ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
         else:
-            _amd_dynamic_mfma_gemm[32, 32, 16, 16, transpose_b, fuse_bias](
+            _amd_dynamic_mfma_gemm[
+                dtype, 32, 32, 16, 16, transpose_b, fuse_bias
+            ](
                 c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
             )
     else:
-        _amd_dynamic_mfma_gemm[32, 64, 16, 32, transpose_b, fuse_bias](
+        _amd_dynamic_mfma_gemm[
+            dtype, 32, 64, 16, 32, transpose_b, fuse_bias
+        ](
             c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
         )
     return True
+
+
+# Benchmark-only MFMA configuration sweep. This is deliberately not called by
+# eager dispatch: it allows reusable runtime-shape schedules to be compared in
+# one extension build before a single winning hypothesis changes production.
+def _amd_bf16_tune_dispatcher(
+    c_obj: PythonObject,
+    a_obj: PythonObject,
+    b_obj: PythonObject,
+    bias_obj: PythonObject,
+    # (m, n, k, config_id)
+    params: PythonObject,
+    device_context_ptr: PythonObject,
+) raises:
+    var c_addr = Int(py=c_obj)
+    var a_addr = Int(py=a_obj)
+    var b_addr = Int(py=b_obj)
+    var bias_addr = Int(py=bias_obj)
+    var m = Int(py=params[0])
+    var n = Int(py=params[1])
+    var k = Int(py=params[2])
+    var cfg = Int(py=params[3])
+    var ctx = _get_ctx(device_context_ptr)
+
+    if cfg == 0:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 64, 16, 32, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 1:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 128, 16, 64, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 2:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 128, 32, 64, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 3:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 64, 64, 32, 32, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 4:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 64, 128, 32, 64, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 5:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 96, 64, 48, 32, False, True, 64
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 6:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 128, 64, 64, 32, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 7:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 32, 32, 32, False, True, 64, 2
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 8:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 64, 32, 32, False, True, 64, 2
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 9:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 64, 32, 32, 32, False, True, 64, 2
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 15:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 32, 32, 32, False, True, 32, 2
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 16:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 32, 32, 32, False, True, 64, 4
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 17:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 32, 32, 32, False, True, 64, 2, 2
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 21:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 32, 64, 16, 32, False, True, 64, 1, 2
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 18:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 16, 32, 16, 32, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 19:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 16, 64, 16, 32, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 20:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 64, 32, 32, 32, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    elif cfg == 22:
+        _amd_dynamic_mfma_gemm[
+            DType.bfloat16, 128, 32, 64, 32, False, True
+        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+    else:
+        raise Error("unknown AMD BF16 MFMA tune config")
+
 
 
 # ---------------------------------------------------------------------------
@@ -1366,9 +1529,10 @@ def _gemm_enqueue[
 ) raises:
     comptime if has_accelerator():
         comptime if (
-            dtype == DType.float32 and _accelerator_arch() == "amdgpu:gfx942"
+            dtype in (DType.float32, DType.bfloat16)
+            and _accelerator_arch() == "amdgpu:gfx942"
         ):
-            if _amd_dynamic_mfma_dispatch[transpose_b](
+            if _amd_dynamic_mfma_dispatch[dtype, transpose_b](
                 c_addr,
                 a_addr,
                 b_addr,
@@ -3049,9 +3213,25 @@ def _matmul_bias_run(
     # precedes the portable SIMT fused-bias route below.
     comptime if _accelerator_arch() == "amdgpu:gfx942":
         if dtype == DType.float32:
-            var used_mfma = _amd_dynamic_mfma_dispatch[True, True](
+            var used_mfma = _amd_dynamic_mfma_dispatch[
+                DType.float32, True, True
+            ](
                 c_addr, a_addr, b_addr, 1, m, n, k, m * k, bias_addr, ctx
-            ) if transpose_b != 0 else _amd_dynamic_mfma_dispatch[False, True](
+            ) if transpose_b != 0 else _amd_dynamic_mfma_dispatch[
+                DType.float32, False, True
+            ](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, bias_addr, ctx
+            )
+            if used_mfma:
+                return
+        if dtype == DType.bfloat16:
+            var used_mfma = _amd_dynamic_mfma_dispatch[
+                DType.bfloat16, True, True
+            ](
+                c_addr, a_addr, b_addr, 1, m, n, k, m * k, bias_addr, ctx
+            ) if transpose_b != 0 else _amd_dynamic_mfma_dispatch[
+                DType.bfloat16, False, True
+            ](
                 c_addr, a_addr, b_addr, 1, m, n, k, m * k, bias_addr, ctx
             )
             if used_mfma:
@@ -3581,6 +3761,10 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
             docstring=(
                 "GEMM with explicit tile cfg + split-K floor — tuning only"
             ),
+        )
+        b.def_function[_amd_bf16_tune_dispatcher](
+            "AmdBf16Tune",
+            docstring="BF16 MFMA tile sweep — benchmarking only",
         )
         b.def_function[_bias_add_row_dispatcher](
             "BiasAddRow", docstring="in-place out[i] += bias[i % cols]"
