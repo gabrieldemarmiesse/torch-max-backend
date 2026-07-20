@@ -1,9 +1,9 @@
 """Thin eager bridge for runtime-dynamic multi-tensor optimizer kernels.
 
 The Python boundary validates the full mutable ATen contract and passes one
-flat tuple of raw tensor metadata. This module packs at most 32 descriptors per
-by-value launch and enqueues on the tensors' existing DeviceContext. It does no
-allocation, host read, synchronization, or vendor-library call.
+flat tuple of raw tensor metadata. This module packs a bounded descriptor array
+per by-value launch and enqueues on the tensors' existing DeviceContext. It does
+no allocation, host read, synchronization, or vendor-library call.
 """
 
 from std.collections import InlineArray
@@ -29,9 +29,21 @@ from optimizer_contract import (
     empty_adamw_desc,
 )
 from optimizer_kernels import enqueue_fused_adamw_f32
+from foreach_clip_contract import (
+    FOREACH_CHUNK_ELEMENTS,
+    FOREACH_DESC_CAP,
+    ForeachDesc,
+    empty_foreach_desc,
+)
+from foreach_clip_kernels import (
+    enqueue_foreach_l2_norm_f32,
+    enqueue_foreach_mul_tensor_f32,
+)
 
 
 comptime _ADAMW_RECORD_FIELDS = 7
+comptime _FOREACH_NORM_RECORD_FIELDS = 3
+comptime _FOREACH_MUL_RECORD_FIELDS = 2
 
 
 def _fused_adamw_go(
@@ -141,6 +153,157 @@ def _fused_adamw_dispatcher(
         return _spec_unsupported(e)
 
 
+def _foreach_l2_norm_go(
+    metadata_obj: PyObjectPtr,
+    partials_ptr_obj: PyObjectPtr,
+    partials_numel_obj: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
+) raises:
+    var value_count = _raw_tuple_len(metadata_obj)
+    if value_count == 0:
+        raise Error("foreach norm requires a nonempty TensorList")
+    if value_count % _FOREACH_NORM_RECORD_FIELDS != 0:
+        raise Error("invalid foreach norm metadata field count")
+    var record_count = value_count // _FOREACH_NORM_RECORD_FIELDS
+    var required_partials = 0
+    for validation_record in range(record_count):
+        var base = validation_record * _FOREACH_NORM_RECORD_FIELDS
+        var input_ptr = _raw_tuple_int(metadata_obj, base + 0)
+        var output_ptr = _raw_tuple_int(metadata_obj, base + 1)
+        var numel = _raw_tuple_int(metadata_obj, base + 2)
+        if numel < 0:
+            raise Error("foreach norm tensor numel must be nonnegative")
+        if numel > 0 and input_ptr == 0:
+            raise Error("foreach norm nonempty input pointer must be nonzero")
+        if output_ptr == 0:
+            raise Error("foreach norm output pointer must be nonzero")
+        if numel > 0:
+            required_partials += ceildiv(numel, FOREACH_CHUNK_ELEMENTS)
+    var partials_numel = _raw_int(partials_numel_obj)
+    if partials_numel < required_partials:
+        raise Error("foreach norm scratch is smaller than required partials")
+    var partials_ptr = _raw_int(partials_ptr_obj)
+    if required_partials > 0 and partials_ptr == 0:
+        raise Error("foreach norm scratch pointer must be nonzero")
+
+    var ctx = _raw_ctx(device_context_ptr)
+    if ctx.api() == "cpu":
+        raise Error("foreach norm fast path requires a Mojo accelerator device")
+    var partial_offset = 0
+    var record = 0
+    while record < record_count:
+        var descs = InlineArray[ForeachDesc, FOREACH_DESC_CAP](
+            fill=empty_foreach_desc()
+        )
+        var desc_count = 0
+        var total_chunks = 0
+        while record < record_count and desc_count < FOREACH_DESC_CAP:
+            var base = record * _FOREACH_NORM_RECORD_FIELDS
+            var numel = _raw_tuple_int(metadata_obj, base + 2)
+            if numel > 0:
+                total_chunks += ceildiv(numel, FOREACH_CHUNK_ELEMENTS)
+            descs[desc_count] = ForeachDesc(
+                _raw_tuple_int(metadata_obj, base + 0),
+                _raw_tuple_int(metadata_obj, base + 1),
+                numel,
+                total_chunks,
+            )
+            record += 1
+            desc_count += 1
+
+        enqueue_foreach_l2_norm_f32(
+            descs,
+            desc_count,
+            total_chunks,
+            partials_ptr + partial_offset * 4,
+            ctx,
+        )
+        partial_offset += total_chunks
+
+
+def _foreach_mul_tensor_go(
+    metadata_obj: PyObjectPtr,
+    scalar_ptr_obj: PyObjectPtr,
+    device_context_ptr: PyObjectPtr,
+) raises:
+    var value_count = _raw_tuple_len(metadata_obj)
+    if value_count == 0:
+        raise Error("foreach multiply requires a nonempty TensorList")
+    if value_count % _FOREACH_MUL_RECORD_FIELDS != 0:
+        raise Error("invalid foreach multiply metadata field count")
+    var record_count = value_count // _FOREACH_MUL_RECORD_FIELDS
+    for validation_record in range(record_count):
+        var base = validation_record * _FOREACH_MUL_RECORD_FIELDS
+        var tensor_ptr = _raw_tuple_int(metadata_obj, base + 0)
+        var numel = _raw_tuple_int(metadata_obj, base + 1)
+        if numel < 0:
+            raise Error("foreach multiply tensor numel must be nonnegative")
+        if numel > 0 and tensor_ptr == 0:
+            raise Error("foreach multiply nonempty pointer must be nonzero")
+
+    var ctx = _raw_ctx(device_context_ptr)
+    if ctx.api() == "cpu":
+        raise Error(
+            "foreach multiply fast path requires a Mojo accelerator device"
+        )
+    var scalar_ptr = _raw_int(scalar_ptr_obj)
+    if scalar_ptr == 0:
+        raise Error("foreach multiply scalar pointer must be nonzero")
+
+    var record = 0
+    while record < record_count:
+        var descs = InlineArray[ForeachDesc, FOREACH_DESC_CAP](
+            fill=empty_foreach_desc()
+        )
+        var desc_count = 0
+        var total_chunks = 0
+        while record < record_count and desc_count < FOREACH_DESC_CAP:
+            var base = record * _FOREACH_MUL_RECORD_FIELDS
+            var numel = _raw_tuple_int(metadata_obj, base + 1)
+            if numel > 0:
+                total_chunks += ceildiv(numel, FOREACH_CHUNK_ELEMENTS)
+            descs[desc_count] = ForeachDesc(
+                _raw_tuple_int(metadata_obj, base + 0),
+                0,
+                numel,
+                total_chunks,
+            )
+            record += 1
+            desc_count += 1
+
+        enqueue_foreach_mul_tensor_f32(
+            descs, desc_count, total_chunks, scalar_ptr, ctx
+        )
+
+
+def _foreach_l2_norm_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        if nargs != 4:
+            raise Error("ForeachL2Norm expects exactly four arguments")
+        _foreach_l2_norm_go(args[0], args[1], args[2], args[3])
+        return _raw_ret_none()
+    except e:
+        return _spec_unsupported(e)
+
+
+def _foreach_mul_tensor_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        if nargs != 3:
+            raise Error("ForeachMulTensor expects exactly three arguments")
+        _foreach_mul_tensor_go(args[0], args[1], args[2])
+        return _raw_ret_none()
+    except e:
+        return _spec_unsupported(e)
+
+
 @export
 def PyInit_optimizer_ops() abi("C") -> PythonObject:
     try:
@@ -151,6 +314,22 @@ def PyInit_optimizer_ops() abi("C") -> PythonObject:
             docstring=(
                 "(metadata, scalars, dtype_mode, flags, lr_ptr, "
                 "grad_scale_ptr, found_inf_ptr, context_ptr); fused FP32 AdamW"
+            ),
+        )
+        builder.def_py_c_function(
+            _foreach_l2_norm_dispatcher,
+            "ForeachL2Norm",
+            docstring=(
+                "(metadata, partials_ptr, partials_numel, context_ptr); "
+                "runtime-dynamic FP32 foreach L2 norms"
+            ),
+        )
+        builder.def_py_c_function(
+            _foreach_mul_tensor_dispatcher,
+            "ForeachMulTensor",
+            docstring=(
+                "(metadata, scalar_ptr, context_ptr); runtime-dynamic FP32 "
+                "foreach in-place device-scalar multiply"
             ),
         )
         return builder.finalize()

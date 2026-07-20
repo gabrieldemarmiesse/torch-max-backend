@@ -34,6 +34,12 @@ _aten_ops_registry: list[tuple[str, Callable]] = []
 # torch_mojo_backend/testing.py). Keyed by the aten op name.
 EAGER_CALL_COUNTERS: dict[str, Callable] = {}
 
+# Unsupported foreach regimes must reach ATen's exact sequential semantics
+# without redispatching to this PrivateUse1 registration again.
+_COMPOSITE_EXPLICIT_AUTOGRAD = torch._C.DispatchKeySet(
+    torch._C.DispatchKey.CompositeExplicitAutograd
+)
+
 
 def register_aten_op(op_name: str):
     """Decorator to mark a function for aten op registration.
@@ -837,6 +843,38 @@ def mojo_device_min_dim_min(
 # ----------------------------------------------------------------------------------
 
 _register_fast("aten::_adaptive_avg_pool2d", "fast_aten__adaptive_avg_pool2d")
+
+
+@register_aten_op("aten::_foreach_mul_.Tensor")
+@no_type_check
+def mojo_device__foreach_mul__tensor(self, other):
+    aten_fast = _fast()
+    result = aten_fast.fast_aten__foreach_mul__tensor(self, other)
+    if result is aten_fast.NOT_HANDLED:
+        return torch.ops.aten._foreach_mul_.Tensor.redispatch(
+            _COMPOSITE_EXPLICIT_AUTOGRAD, self, other
+        )
+
+    # Mutable TensorList schemas returning () do not receive an automatic
+    # version bump. Match CUDA, including empty and duplicate list entries.
+    torch.autograd.graph.increment_version(self)
+    return None
+
+
+@register_aten_op("aten::_foreach_norm.Scalar")
+@no_type_check
+def mojo_device__foreach_norm_scalar(self, ord=2, dtype=None):
+    aten_fast = _fast()
+    result = aten_fast.fast_aten__foreach_norm(self, ord, dtype=dtype)
+    if result is aten_fast.NOT_HANDLED:
+        result = aten_fast.foreach_norm_sequential_fallback(self, ord, dtype=dtype)
+        if result is aten_fast.NOT_HANDLED:
+            return torch.ops.aten._foreach_norm.Scalar.redispatch(
+                _COMPOSITE_EXPLICIT_AUTOGRAD, self, ord, dtype=dtype
+            )
+    return result
+
+
 _register_fast("aten::_fused_adamw_", "fast_aten__fused_adamw")
 _register_fast("aten::_fused_adamw_.tensor_lr", "fast_aten__fused_adamw")
 _register_fast("aten::_local_scalar_dense", "fast_aten__local_scalar_dense")

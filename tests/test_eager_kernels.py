@@ -982,6 +982,292 @@ def test_fast_l2_norm_out_and_mul_inplace_alias(mojo_gpu):
     torch.testing.assert_close(observer.cpu().reshape(-1), expected_base)
 
 
+def _eager_registration_snapshot(op_name):
+    from torch_mojo_backend.mojo_device.mojo_device_aten_ops import EAGER_CALL_COUNTERS
+
+    assert op_name in EAGER_CALL_COUNTERS, f"missing eager registration for {op_name}"
+    counter = EAGER_CALL_COUNTERS[op_name]
+    return counter, counter.call_count
+
+
+@pytest.mark.parametrize("dtype", [None, torch.float32], ids=["default", "float32"])
+def test_fast_foreach_norm_l2_order_empty_nonfinite_and_chunk_boundary(mojo_gpu, dtype):
+    """The fused route returns one independently owned scalar per input.
+
+    Sixty-five inputs cross the descriptor cap used by the multi-tensor
+    kernel.  Empty and non-finite tensors also pin the L2-norm semantics.
+    """
+    counter, calls_before = _eager_registration_snapshot("aten::_foreach_norm.Scalar")
+    host_inputs = [
+        torch.empty(0),
+        torch.tensor([float("inf"), 1.0]),
+        torch.tensor([float("nan"), 2.0]),
+    ]
+    host_inputs.extend(
+        torch.tensor([3.0 * index, -4.0 * index]) for index in range(1, 62)
+    )
+    host_inputs.append(torch.linspace(-3.0, 4.0, 65_537))
+    assert len(host_inputs) == 65
+    device_inputs = [tensor.to(mojo_gpu) for tensor in host_inputs]
+
+    actual = torch.ops.aten._foreach_norm.Scalar(device_inputs, 2, dtype=dtype)
+    expected = torch.ops.aten._foreach_norm.Scalar(host_inputs, 2, dtype=dtype)
+
+    assert counter.call_count == calls_before + 1
+    assert len(actual) == len(device_inputs)
+    for actual_scalar, expected_scalar in zip(actual, expected, strict=True):
+        assert actual_scalar.device == torch.device(mojo_gpu)
+        assert actual_scalar.shape == torch.Size([])
+        assert actual_scalar.dtype == torch.float32
+        torch.testing.assert_close(
+            actual_scalar.cpu(), expected_scalar, equal_nan=True, rtol=2e-5, atol=1e-6
+        )
+    for index, output in enumerate(actual):
+        for other in actual[index + 1 :]:
+            assert output._holder is not other._holder
+            assert output._ptr != other._ptr
+
+
+def test_fast_foreach_norm_preserves_strided_fallback(mojo_gpu):
+    counter, calls_before = _eager_registration_snapshot("aten::_foreach_norm.Scalar")
+    host_bases = [
+        torch.arange(24, dtype=torch.float32).reshape(4, 6),
+        torch.linspace(-2.0, 3.0, 35).reshape(5, 7),
+    ]
+    host_inputs = [tensor.t() for tensor in host_bases]
+    assert all(not tensor.is_contiguous() for tensor in host_inputs)
+    device_inputs = [tensor.to(mojo_gpu).t() for tensor in host_bases]
+    assert all(not tensor.is_contiguous() for tensor in device_inputs)
+
+    actual = torch.ops.aten._foreach_norm.Scalar(device_inputs, 2)
+    expected = torch.ops.aten._foreach_norm.Scalar(host_inputs, 2)
+
+    assert counter.call_count == calls_before + 1
+    for actual_scalar, expected_scalar in zip(actual, expected, strict=True):
+        torch.testing.assert_close(actual_scalar.cpu(), expected_scalar)
+
+
+def test_fast_foreach_mul_tensor_inplace_chunk_boundary(mojo_gpu):
+    """Every input keeps its allocation and receives exactly one mutation."""
+    counter, calls_before = _eager_registration_snapshot("aten::_foreach_mul_.Tensor")
+    host_inputs = [torch.empty(0)] + [
+        torch.tensor([float(index), -float(index)]) for index in range(1, 64)
+    ]
+    host_inputs.append(torch.linspace(-3.0, 4.0, 65_537))
+    device_inputs = [tensor.to(mojo_gpu) for tensor in host_inputs]
+    allocation_state = [
+        (tensor._holder, tensor._ptr, tensor._version) for tensor in device_inputs
+    ]
+    coefficient = torch.tensor(0.25, dtype=torch.float32).to(mojo_gpu)
+
+    returned = torch.ops.aten._foreach_mul_.Tensor(device_inputs, coefficient)
+
+    assert returned is None
+    assert counter.call_count == calls_before + 1
+    for actual, expected, (holder, ptr, version) in zip(
+        device_inputs, host_inputs, allocation_state, strict=True
+    ):
+        assert actual._holder is holder
+        assert actual._ptr == ptr
+        assert actual._version == version + 1
+        torch.testing.assert_close(actual.cpu(), expected * 0.25, rtol=0, atol=0)
+
+
+def test_fast_foreach_norm_and_mul_all_empty_batches(mojo_gpu):
+    """Zero-work batches still return outputs and record in-place mutations."""
+    inputs = [torch.empty(0, dtype=torch.float32).to(mojo_gpu) for _ in range(65)]
+
+    norms = torch.ops.aten._foreach_norm.Scalar(inputs, 2)
+
+    assert len(norms) == len(inputs)
+    assert all(norm.shape == torch.Size([]) for norm in norms)
+    assert all(norm.item() == 0.0 for norm in norms)
+    versions = [tensor._version for tensor in inputs]
+    scalar = torch.tensor(0.25, dtype=torch.float32).to(mojo_gpu)
+
+    returned = torch.ops.aten._foreach_mul_.Tensor(inputs, scalar)
+
+    assert returned is None
+    assert [tensor._version for tensor in inputs] == [
+        version + 1 for version in versions
+    ]
+
+
+def test_fast_foreach_mul_tensor_duplicate_is_sequential(mojo_gpu):
+    """A duplicate entry is multiplied twice and bumps its version twice."""
+    counter, calls_before = _eager_registration_snapshot("aten::_foreach_mul_.Tensor")
+    input = torch.tensor([2.0, -3.0, 5.0]).to(mojo_gpu)
+    holder, ptr, version = input._holder, input._ptr, input._version
+    coefficient = torch.tensor(0.5, dtype=torch.float32).to(mojo_gpu)
+
+    torch.ops.aten._foreach_mul_.Tensor([input, input], coefficient)
+
+    assert counter.call_count == calls_before + 1
+    assert input._holder is holder
+    assert input._ptr == ptr
+    assert input._version == version + 2
+    torch.testing.assert_close(
+        input.cpu(), torch.tensor([0.5, -0.75, 1.25]), rtol=0, atol=0
+    )
+
+
+def test_fast_foreach_mul_tensor_validates_scalar_before_writes(mojo_gpu):
+    counter, calls_before = _eager_registration_snapshot("aten::_foreach_mul_.Tensor")
+    inputs = [
+        torch.tensor([1.0, 2.0]).to(mojo_gpu),
+        torch.tensor([-3.0, 4.0]).to(mojo_gpu),
+    ]
+    allocation_state = [
+        (tensor._holder, tensor._ptr, tensor._version, tensor.cpu())
+        for tensor in inputs
+    ]
+    invalid_scalar = torch.tensor([0.25], dtype=torch.float32).to(mojo_gpu)
+
+    with pytest.raises(RuntimeError, match="scalar tensor|0 dim"):
+        torch.ops.aten._foreach_mul_.Tensor(inputs, invalid_scalar)
+
+    assert counter.call_count == calls_before + 1
+    for actual, (holder, ptr, version, expected) in zip(
+        inputs, allocation_state, strict=True
+    ):
+        assert actual._holder is holder
+        assert actual._ptr == ptr
+        assert actual._version == version
+        torch.testing.assert_close(actual.cpu(), expected, rtol=0, atol=0)
+
+
+def test_fast_foreach_mul_tensor_preserves_strided_fallback(mojo_gpu):
+    counter, calls_before = _eager_registration_snapshot("aten::_foreach_mul_.Tensor")
+    base = torch.arange(12, dtype=torch.float32).to(mojo_gpu)
+    input = base[::2]
+    assert not input.is_contiguous()
+    holder, ptr, version = input._holder, input._ptr, input._version
+    coefficient = torch.tensor(0.25, dtype=torch.float32).to(mojo_gpu)
+
+    torch.ops.aten._foreach_mul_.Tensor([input], coefficient)
+
+    expected = torch.arange(12, dtype=torch.float32)
+    expected[::2] *= 0.25
+    assert counter.call_count == calls_before + 1
+    assert input._holder is holder
+    assert input._ptr == ptr
+    assert input._version == version + 1
+    torch.testing.assert_close(base.cpu(), expected, rtol=0, atol=0)
+
+
+def test_fast_foreach_mul_tensor_overlapping_views_are_sequential(mojo_gpu):
+    counter, calls_before = _eager_registration_snapshot("aten::_foreach_mul_.Tensor")
+    base = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]).to(mojo_gpu)
+    left = base[:4]
+    right = base[1:]
+    coefficient = torch.tensor(2.0).to(mojo_gpu)
+    version = base._version
+
+    torch.ops.aten._foreach_mul_.Tensor([left, right], coefficient)
+
+    assert counter.call_count == calls_before + 1
+    assert base._version == left._version == right._version == version + 2
+    torch.testing.assert_close(
+        base.cpu(), torch.tensor([2.0, 8.0, 12.0, 16.0, 10.0]), rtol=0, atol=0
+    )
+
+
+def test_fast_foreach_mul_tensor_rejects_scalar_alias_before_writes(mojo_gpu):
+    counter, calls_before = _eager_registration_snapshot("aten::_foreach_mul_.Tensor")
+    input = torch.tensor([2.0, 3.0, 4.0]).to(mojo_gpu)
+    scalar_alias = input[0]
+    holder, ptr, version = input._holder, input._ptr, input._version
+
+    with pytest.raises(RuntimeError, match="single memory location|clone"):
+        torch.ops.aten._foreach_mul_.Tensor([input], scalar_alias)
+
+    assert counter.call_count == calls_before + 1
+    assert input._holder is holder
+    assert input._ptr == ptr
+    assert input._version == version
+    torch.testing.assert_close(
+        input.cpu(), torch.tensor([2.0, 3.0, 4.0]), rtol=0, atol=0
+    )
+
+
+def test_fast_foreach_mul_tensor_rejects_dense_transpose_scalar_alias(mojo_gpu):
+    base = torch.arange(1.0, 7.0).to(mojo_gpu)
+    input = base.reshape(2, 3).t()
+    scalar_alias = base[1]
+    version = base._version
+
+    with pytest.raises(RuntimeError, match="single memory location|clone"):
+        torch.ops.aten._foreach_mul_.Tensor([input], scalar_alias)
+
+    assert base._version == input._version == version
+    torch.testing.assert_close(base.cpu(), torch.arange(1.0, 7.0), rtol=0, atol=0)
+
+
+def test_fast_foreach_mul_tensor_allows_full_scalar_self_alias(mojo_gpu):
+    input = torch.tensor(3.0).to(mojo_gpu)
+    version = input._version
+
+    torch.ops.aten._foreach_mul_.Tensor([input], input)
+
+    assert input._version == version + 1
+    torch.testing.assert_close(input.cpu(), torch.tensor(9.0), rtol=0, atol=0)
+
+
+def test_fast_foreach_mul_tensor_allows_scalar_in_strided_hole(mojo_gpu):
+    base = torch.arange(1.0, 7.0).to(mojo_gpu)
+    input = base[::2]
+    scalar_in_hole = base[1]
+    version = base._version
+
+    torch.ops.aten._foreach_mul_.Tensor([input], scalar_in_hole)
+
+    assert base._version == input._version == version + 1
+    torch.testing.assert_close(
+        base.cpu(), torch.tensor([2.0, 2.0, 6.0, 4.0, 10.0, 6.0]), rtol=0, atol=0
+    )
+
+
+@pytest.mark.parametrize("foreach", [None, True, False])
+def test_fast_clip_grad_norm_foreach_routing(mojo_gpu, foreach):
+    norm_counter, norm_calls_before = _eager_registration_snapshot(
+        "aten::_foreach_norm.Scalar"
+    )
+    mul_counter, mul_calls_before = _eager_registration_snapshot(
+        "aten::_foreach_mul_.Tensor"
+    )
+    host_parameters = [
+        torch.nn.Parameter(torch.zeros(3)),
+        torch.nn.Parameter(torch.zeros(2, 2)),
+    ]
+    device_parameters = [
+        torch.nn.Parameter(parameter.detach().to(mojo_gpu))
+        for parameter in host_parameters
+    ]
+    gradients = (
+        torch.tensor([3.0, 4.0, -2.0]),
+        torch.tensor([[1.0, -2.0], [2.0, -1.0]]),
+    )
+    for host_parameter, device_parameter, gradient in zip(
+        host_parameters, device_parameters, gradients, strict=True
+    ):
+        host_parameter.grad = gradient.clone()
+        device_parameter.grad = gradient.to(mojo_gpu)
+
+    expected_norm = torch.nn.utils.clip_grad_norm_(
+        host_parameters, 1.25, foreach=foreach
+    )
+    actual_norm = torch.nn.utils.clip_grad_norm_(
+        device_parameters, 1.25, foreach=foreach
+    )
+
+    expected_foreach_calls = int(foreach is not False)
+    assert norm_counter.call_count == norm_calls_before + expected_foreach_calls
+    assert mul_counter.call_count == mul_calls_before + expected_foreach_calls
+    torch.testing.assert_close(actual_norm.cpu(), expected_norm)
+    for actual, expected in zip(device_parameters, host_parameters, strict=True):
+        torch.testing.assert_close(actual.grad.cpu(), expected.grad)
+
+
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_fast_mean_trailing_dims(mojo_device, keepdim):
     x = torch.randn(1, 512, 7, 7)

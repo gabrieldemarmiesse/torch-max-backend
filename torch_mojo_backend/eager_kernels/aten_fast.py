@@ -160,6 +160,9 @@ _BCAST_DTYPES = _FLOAT_DTYPES + (
 )
 
 _FUSED_ADAMW_RECORD_FIELDS = 7
+_FOREACH_CHUNK_ELEMENTS = 65_536
+_FOREACH_NORM_RECORD_FIELDS = 3
+_FOREACH_MUL_RECORD_FIELDS = 2
 
 
 @no_type_check
@@ -178,6 +181,189 @@ def _tc(x) -> TorchMojoTensor | None:
 
 _alloc = TorchMojoTensor._alloc
 _view_of = TorchMojoTensor._view_of
+
+
+@no_type_check
+def fast_aten__foreach_norm(self, ord=2, dtype=None):
+    """Fast homogeneous FP32 L2 norms with one independent scalar output.
+
+    The Mojo bridge batches runtime descriptors and uses an ordinary eager
+    tensor as reduction scratch.  Destroying that local tensor enqueues its
+    stream-ordered free after the kernels, so the call remains asynchronous.
+    """
+    if len(self) == 0:
+        raise RuntimeError("Tensor list must have at least one tensor.")
+    if (
+        isinstance(ord, bool)
+        or not isinstance(ord, int | float)
+        or ord != 2
+        or dtype not in (None, torch.float32)
+    ):
+        return NOT_HANDLED
+
+    tensors = [_t(tensor) for tensor in self]
+    if any(tensor is None for tensor in tensors):
+        return NOT_HANDLED
+    device = tensors[0]._device
+    if device.api == "cpu" or any(
+        tensor._device != device
+        or tensor._dtype != DType.float32
+        or not tensor._is_contiguous
+        for tensor in tensors
+    ):
+        return NOT_HANDLED
+
+    outputs = [_alloc((), DType.float32, device) for _ in tensors]
+    metadata = tuple(
+        value
+        for tensor, output in zip(tensors, outputs, strict=True)
+        for value in (tensor._ptr, output._ptr, tensor._numel)
+    )
+    if len(metadata) != len(tensors) * _FOREACH_NORM_RECORD_FIELDS:
+        raise AssertionError("invalid foreach norm metadata packing")
+    total_chunks = sum(
+        (tensor._numel + _FOREACH_CHUNK_ELEMENTS - 1) // _FOREACH_CHUNK_ELEMENTS
+        for tensor in tensors
+    )
+    partials = _alloc((max(total_chunks, 1),), DType.float32, device)
+    eager_kernels.optimizer_ops.ForeachL2Norm(
+        metadata, partials._ptr, partials._numel, _ctx_ptr(device)
+    )
+    return outputs
+
+
+@no_type_check
+def foreach_norm_sequential_fallback(self, ord=2, dtype=None):
+    """Device-index-correct L2 fallback using existing scalar eager ops.
+
+    ATen's generic foreach decomposition synthesizes functional norm outputs
+    from the out= overload. On PrivateUse1 that can allocate on the phantom
+    default device rather than the input's real MAX context. Allocate through
+    each tensor's scalar eager path instead; other norm regimes still use CEA.
+    """
+    if (
+        isinstance(ord, bool)
+        or not isinstance(ord, int | float)
+        or ord != 2
+        or dtype not in (None, torch.float32)
+    ):
+        return NOT_HANDLED
+    tensors = [_t(tensor) for tensor in self]
+    if any(tensor is None or tensor._dtype != DType.float32 for tensor in tensors):
+        return NOT_HANDLED
+
+    outputs = []
+    for tensor in tensors:
+        output = fast_aten_linalg_vector_norm(tensor, ord, None, False, dtype=None)
+        if output is NOT_HANDLED:
+            return NOT_HANDLED
+        outputs.append(output)
+    return outputs
+
+
+@no_type_check
+def _foreach_tensors_overlap(tensors) -> bool:
+    """Whether contiguous mutable tensor byte intervals overlap."""
+    intervals = sorted(
+        (tensor._ptr, tensor._ptr + tensor._numel * tensor._itemsize)
+        for tensor in tensors
+        if tensor._numel > 0
+    )
+    return any(
+        current_start < previous_end
+        for (_, previous_end), (current_start, _) in zip(intervals, intervals[1:])
+    )
+
+
+@no_type_check
+def _is_non_overlapping_and_dense(shape, strides) -> bool:
+    """Match TensorImpl's sorted-stride dense-layout classification."""
+    required_stride = 1
+    dimensions = sorted(
+        (stride, size) for size, stride in zip(shape, strides, strict=True) if size >= 2
+    )
+    for stride, size in dimensions:
+        if stride != required_stride:
+            return False
+        required_stride *= size
+    return True
+
+
+@no_type_check
+def _foreach_scalar_overlap_kind(tensor, scalar) -> str:
+    """Classify scalar overlap as none, full, or forbidden partial overlap.
+
+    PyTorch reports overlap as ``TooHard`` for non-dense layouts, so those
+    must reach its sequential fallback rather than using a storage envelope.
+    """
+    if (
+        tensor._device != scalar._device
+        or tensor._numel == 0
+        or not _is_non_overlapping_and_dense(tensor._shape, tensor._strides)
+    ):
+        return "none"
+    tensor_begin = tensor._ptr
+    tensor_end = tensor_begin + tensor._numel * tensor._itemsize
+    scalar_begin = scalar._ptr
+    scalar_end = scalar_begin + scalar._itemsize
+    if scalar_begin >= tensor_end or tensor_begin >= scalar_end:
+        return "none"
+    if (
+        tensor_begin == scalar_begin
+        and tensor_end == scalar_end
+        and tensor._strides == scalar._strides
+    ):
+        return "full"
+    return "partial"
+
+
+@no_type_check
+def fast_aten__foreach_mul__tensor(self, other):
+    """Fast homogeneous FP32 in-place multiply by a device scalar tensor."""
+    if len(self) == 0:
+        raise RuntimeError("Tensor list must have at least one tensor.")
+    scalar = _t(other)
+    tensors = [_t(tensor) for tensor in self]
+    if scalar is None or any(tensor is None for tensor in tensors):
+        return NOT_HANDLED
+    device = tensors[0]._device
+    if scalar._shape == ():
+        overlap_kinds = [
+            _foreach_scalar_overlap_kind(tensor, scalar) for tensor in tensors
+        ]
+        if "partial" in overlap_kinds:
+            raise RuntimeError(
+                "unsupported operation: some elements of the input tensor and "
+                "the written-to tensor refer to a single memory location. "
+                "Please clone() the tensor before performing the operation."
+            )
+        if "full" in overlap_kinds:
+            return NOT_HANDLED
+    if (
+        device.api == "cpu"
+        or scalar._device != device
+        or scalar._dtype != DType.float32
+        or scalar._shape != ()
+        or not scalar._is_contiguous
+        or any(
+            tensor._device != device
+            or tensor._dtype != DType.float32
+            or not tensor._is_contiguous
+            for tensor in tensors
+        )
+        or _foreach_tensors_overlap(tensors)
+    ):
+        return NOT_HANDLED
+
+    metadata = tuple(
+        value for tensor in tensors for value in (tensor._ptr, tensor._numel)
+    )
+    if len(metadata) != len(tensors) * _FOREACH_MUL_RECORD_FIELDS:
+        raise AssertionError("invalid foreach multiply metadata packing")
+    eager_kernels.optimizer_ops.ForeachMulTensor(
+        metadata, scalar._ptr, _ctx_ptr(device)
+    )
+    return None
 
 
 @no_type_check
