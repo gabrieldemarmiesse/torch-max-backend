@@ -2876,15 +2876,12 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
 
     # Materialize only after all metadata has been validated, so a rejected
     # cross-device or wrong-shape call cannot enqueue partial work.
+    eps_value = float(eps)
     a = _tc(a)
     if weight is not None:
         gamma = _tc(gamma)
-    else:
-        gamma = fast_filled((cols,), 1.0, a._dtype, a._device)
     if bias is not None:
         beta = _tc(beta)
-    else:
-        beta = fast_filled((cols,), 0.0, a._dtype, a._device)
     # Not spec-converted: the classic prologue here is already thin, and
     # building three (holder, spec, shape, ptr) result groups measurably
     # costs more than the removed Python work (+4us/call measured A/B on
@@ -2894,6 +2891,31 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
     stat_shape = tuple(a._shape[:-k]) + (1,) * k
     mean = _alloc(stat_shape, DType.float32, a._device)
     rstd = _alloc(stat_shape, DType.float32, a._device)
+
+    # The training-hot FP32 GPU route has a direct optional-affine ABI.  A
+    # zero pointer is safe because the runtime flags prevent any corresponding
+    # device load; this avoids allocating and filling synthetic ones/zeros.
+    if a._dtype == DType.float32 and _on_gpu(a):
+        eager_kernels.normalization_forward_ops.LayerNormForwardF32(
+            out._ptr,
+            mean._ptr,
+            rstd._ptr,
+            a._ptr,
+            gamma._ptr if weight is not None else 0,
+            beta._ptr if bias is not None else 0,
+            rows,
+            cols,
+            eps_value,
+            int(weight is not None),
+            int(bias is not None),
+            _ctx_ptr(a._device),
+        )
+        return out, mean, rstd
+
+    if weight is None:
+        gamma = fast_filled((cols,), 1.0, a._dtype, a._device)
+    if bias is None:
+        beta = fast_filled((cols,), 0.0, a._dtype, a._device)
     eager_kernels.nn_ops.LayerNorm(
         out._ptr,
         mean._ptr,
@@ -2901,7 +2923,7 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
         a._ptr,
         gamma._ptr,
         beta._ptr,
-        (float(eps), rows, cols),
+        (eps_value, rows, cols),
         a._dtype.value,
         _ctx_ptr(a._device),
     )

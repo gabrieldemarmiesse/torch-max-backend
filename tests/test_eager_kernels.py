@@ -410,6 +410,149 @@ def test_fast_native_layer_norm_stats(mojo_device):
     torch.testing.assert_close(rstd.cpu(), ref_rstd, atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.parametrize(
+    ("has_weight", "has_bias"),
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+@pytest.mark.parametrize(
+    ("input_shape", "normalized_shape", "eps"),
+    [((3, 7), (7,), 1e-5), ((2, 3, 4), (3, 4), 0.5)],
+)
+def test_fast_native_layer_norm_fp32_gpu_optional_affine_without_fill(
+    mojo_gpu, monkeypatch, has_weight, has_bias, input_shape, normalized_shape, eps
+):
+    """The direct GPU ABI handles optional affine tensors without stand-ins."""
+    from torch_mojo_backend.eager_kernels import aten_fast
+
+    generator = torch.Generator().manual_seed(20260720)
+    numel = math.prod(input_shape)
+    cols = math.prod(normalized_shape)
+    input_storage = torch.randn(numel + 1, generator=generator)
+    input = input_storage[1:].view(input_shape)
+    device_storage = input_storage.to(mojo_gpu)
+    device_input = device_storage[1:].view(input_shape)
+
+    weight_storage = torch.randn(cols + 1, generator=generator)
+    bias_storage = torch.randn(cols + 1, generator=generator)
+    weight = weight_storage[1:].view(normalized_shape) if has_weight else None
+    bias = bias_storage[1:].view(normalized_shape) if has_bias else None
+    device_weight = (
+        weight_storage.to(mojo_gpu)[1:].view(normalized_shape) if has_weight else None
+    )
+    device_bias = (
+        bias_storage.to(mojo_gpu)[1:].view(normalized_shape) if has_bias else None
+    )
+    expected = torch.native_layer_norm(input, normalized_shape, weight, bias, eps)
+
+    def reject_affine_stand_in(*_args, **_kwargs):
+        raise AssertionError("optional LayerNorm affine tensor was materialized")
+
+    monkeypatch.setattr(aten_fast, "fast_filled", reject_affine_stand_in)
+    actual = aten_fast.fast_aten_native_layer_norm(
+        device_input, normalized_shape, device_weight, device_bias, eps
+    )
+
+    assert actual is not aten_fast.NOT_HANDLED
+    for got, want, tolerance in zip(actual, expected, (1e-5, 1e-5, 1e-4), strict=True):
+        torch.testing.assert_close(got.cpu(), want, atol=tolerance, rtol=tolerance)
+    torch.testing.assert_close(device_storage.cpu(), input_storage, rtol=0, atol=0)
+
+
+def test_fast_native_layer_norm_fp32_gpu_noncontiguous_inputs(mojo_gpu):
+    input_base = torch.randn(3, 2, 4)
+    weight_base = torch.randn(4, 3)
+    bias_base = torch.randn(4, 3)
+    input = input_base.transpose(0, 1)
+    weight = weight_base.t()
+    bias = bias_base.t()
+    assert not input.is_contiguous()
+    assert not weight.is_contiguous()
+    assert not bias.is_contiguous()
+    expected = torch.native_layer_norm(input, (3, 4), weight, bias, 1e-5)
+
+    device_input = input_base.to(mojo_gpu).transpose(0, 1)
+    device_weight = weight_base.to(mojo_gpu).t()
+    device_bias = bias_base.to(mojo_gpu).t()
+    actual = torch.native_layer_norm(
+        device_input, (3, 4), device_weight, device_bias, 1e-5
+    )
+
+    assert actual[0].is_contiguous()
+    assert actual[1].is_contiguous()
+    assert actual[2].is_contiguous()
+    assert actual[1].shape == actual[2].shape == torch.Size([2, 1, 1])
+    for got, want, tolerance in zip(actual, expected, (1e-5, 1e-5, 1e-4), strict=True):
+        torch.testing.assert_close(got.cpu(), want, atol=tolerance, rtol=tolerance)
+
+
+@pytest.mark.parametrize("cols", [768, 769])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_fast_native_layer_norm_fp32_gpu_nonfinite_rows(mojo_gpu, cols, value):
+    input = torch.full((2, cols), value, dtype=torch.float32).to(mojo_gpu)
+
+    output, mean, rstd = torch.native_layer_norm(input, (cols,), None, None, 1e-5)
+
+    assert torch.isnan(output.cpu()).all()
+    assert torch.isnan(mean.cpu()).all()
+    assert torch.isnan(rstd.cpu()).all()
+
+
+def test_fast_native_layer_norm_bf16_gpu_preserves_generic_path(mojo_gpu):
+    input = torch.randn(3, 65).bfloat16()
+    weight = torch.randn(65).bfloat16()
+    bias = torch.randn(65).bfloat16()
+    expected = torch.native_layer_norm(input, (65,), weight, bias, 1e-5)
+
+    actual = torch.native_layer_norm(
+        input.to(mojo_gpu), (65,), weight.to(mojo_gpu), bias.to(mojo_gpu), 1e-5
+    )
+
+    assert actual[0].dtype == torch.bfloat16
+    assert actual[1].dtype == actual[2].dtype == torch.float32
+    for got, want in zip(actual, expected, strict=True):
+        got_cpu = got.cpu()
+        torch.testing.assert_close(
+            got_cpu, want.to(got_cpu.dtype), atol=2e-2, rtol=2e-2
+        )
+
+
+def test_fast_native_layer_norm_weight_only_autograd(mojo_gpu):
+    host_input = torch.randn(4, 65, requires_grad=True)
+    host_weight = torch.randn(65, requires_grad=True)
+    device_input = host_input.detach().to(mojo_gpu).requires_grad_()
+    device_weight = host_weight.detach().to(mojo_gpu).requires_grad_()
+    input_version = device_input._version
+    weight_version = device_weight._version
+
+    expected, expected_mean, expected_rstd = torch.native_layer_norm(
+        host_input, (65,), host_weight, None, 1e-5
+    )
+    actual, mean, rstd = torch.native_layer_norm(
+        device_input, (65,), device_weight, None, 1e-5
+    )
+
+    assert actual.requires_grad
+    assert not mean.requires_grad and not rstd.requires_grad
+    assert device_input._version == input_version
+    assert device_weight._version == weight_version
+    torch.testing.assert_close(actual.cpu(), expected.detach(), atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(mean.cpu(), expected_mean, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(rstd.cpu(), expected_rstd, atol=1e-4, rtol=1e-4)
+
+    grad_output = torch.randn_like(host_input)
+    expected.backward(grad_output)
+    actual.backward(grad_output.to(mojo_gpu))
+
+    assert device_input._version == input_version
+    assert device_weight._version == weight_version
+    torch.testing.assert_close(
+        device_input.grad.cpu(), host_input.grad, atol=2e-3, rtol=2e-3
+    )
+    torch.testing.assert_close(
+        device_weight.grad.cpu(), host_weight.grad, atol=2e-3, rtol=2e-3
+    )
+
+
 @pytest.mark.parametrize(("rows", "cols", "storage_offset"), [(3, 7, 1), (257, 65, 0)])
 @pytest.mark.parametrize(
     "output_mask",
@@ -648,12 +791,18 @@ def test_fast_layer_norm_backward_allows_mutated_forward_output(mojo_gpu):
     assert input.grad is not None
 
 
-def test_fast_native_layer_norm_rejects_wrong_affine_shape(mojo_gpu):
+def test_fast_native_layer_norm_rejects_wrong_affine_shape(mojo_gpu, monkeypatch):
     from torch_mojo_backend.eager_kernels import aten_fast
 
     input = torch.randn(2, 2, 3).to(mojo_gpu)
     wrong_shape_same_numel = torch.randn(6).to(mojo_gpu)
     bias = torch.randn(2, 3).to(mojo_gpu)
+
+    def reject_materialization(*_args, **_kwargs):
+        raise AssertionError("invalid LayerNorm call materialized a tensor")
+
+    monkeypatch.setattr(aten_fast, "_tc", reject_materialization)
+    monkeypatch.setattr(aten_fast, "_alloc", reject_materialization)
 
     assert (
         aten_fast.fast_aten_native_layer_norm(
