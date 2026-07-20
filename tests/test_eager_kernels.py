@@ -989,6 +989,51 @@ def test_fast_mean_trailing_dims(mojo_device, keepdim):
     torch.testing.assert_close(result, x.mean([-1, -2], keepdim=keepdim))
 
 
+@pytest.mark.parametrize(
+    ("shape", "dims", "keepdim"),
+    [
+        ((3, 5, 7), (0,), False),
+        ((3, 5, 7), (0,), True),
+        ((5, 3, 17), (0, 1), False),
+        ((7, 17, 65), (0,), False),
+        ((2, 3, 5, 7), (1, 2), False),
+        ((2, 3, 5, 7), (1, 2), True),
+        ((2, 257, 17), (1,), False),
+    ],
+)
+def test_fast_sum_contiguous_adjacent_dims(mojo_device, shape, dims, keepdim):
+    """Adjacent reductions operate directly on contiguous storage, including
+    a nonzero storage offset, and preserve the input view and its guards."""
+    elements = math.prod(shape)
+    host_storage = torch.arange(elements + 2, dtype=torch.float32)
+    expected_input = host_storage[1:-1].reshape(shape)
+    device_storage = host_storage.to(mojo_device)
+    device_input = device_storage[1:-1].view(shape)
+    holder, ptr = device_input._holder, device_input._ptr
+
+    actual = device_input.sum(dim=dims, keepdim=keepdim)
+    expected = expected_input.sum(dim=dims, keepdim=keepdim)
+
+    torch.testing.assert_close(actual.cpu(), expected, rtol=2e-6, atol=2e-6)
+    assert device_input._holder is holder
+    assert device_input._ptr == ptr
+    torch.testing.assert_close(device_storage.cpu(), host_storage, rtol=0, atol=0)
+
+
+def test_fast_sum_nonadjacent_or_strided_fallback(mojo_device):
+    """Layouts outside the direct adjacent-dimension regime remain correct."""
+    host = torch.randn(2, 3, 5, 7)
+    device = host.to(mojo_device)
+
+    torch.testing.assert_close(device.sum(dim=(0, 2)).cpu(), host.sum(dim=(0, 2)))
+
+    host_strided = host.transpose(1, 2)
+    device_strided = device.transpose(1, 2)
+    torch.testing.assert_close(
+        device_strided.sum(dim=(0, 2)).cpu(), host_strided.sum(dim=(0, 2))
+    )
+
+
 def test_fast_reduction_library_tier(mojo_device):
     """Huge-col reductions route to the stdlib reduction library (GPU: rows <=
     128 and cols >= 2**20; MAX-CPU: always) — exercise that tier, which no other

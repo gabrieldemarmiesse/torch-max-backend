@@ -1,10 +1,11 @@
 # ===----------------------------------------------------------------------=== #
 # Fast eager-mode reduction kernels for mojo_device: row-wise sum / max /
 # min / prod / argmin / min-with-index / variance / log-softmax / any / all
-# over the trailing dimension of a contiguous tensor. Reductions over other
-# dim sets are handled on the Python side by a zero-copy permute + materialize
-# into a row-major (rows, cols) layout, so every kernel here only ever sees a
-# contiguous (rows, cols) buffer and reduces each row to one output element.
+# over the trailing dimension of a contiguous tensor. Contiguous FP32 sums over
+# one adjacent, non-trailing dimension interval use a direct runtime
+# (outer, reduce, inner) kernel. Other dim sets are materialized into a
+# row-major (rows, cols) layout, so the generic kernels only ever see a
+# contiguous buffer and reduce each row to one output element.
 #
 # Raw-pointer calling convention (see elementwise_ops.mojo / nn_ops.mojo):
 # tensor operands arrive as element-aligned int addresses, sizes and dtypes as
@@ -28,6 +29,7 @@ from std.gpu import (
     thread_idx,
 )
 from std.gpu.host import DeviceContext
+from std.gpu.primitives import block
 from std.math import exp, log
 from std.memory import stack_allocation
 from std.python import PythonObject
@@ -48,6 +50,7 @@ from std.python._cpython import PyObjectPtr, Py_ssize_t
 from op_utils import (
     FLOAT_DTYPES,
     MAX_RANK,
+    TensorSpec,
     _enqueue_cached,
     _make_ptr,
     _parallel_for,
@@ -56,6 +59,8 @@ from op_utils import (
     _raw_f64,
     _raw_int,
     _raw_ret_none,
+    _raw_tuple_int,
+    _raw_tuple_len,
     _reduce_spec_geom,
     _scratch_contig,
     _scratch_copy,
@@ -259,6 +264,135 @@ def _reduce_rows[
                 )
         else:
             raise Error("no GPU accelerator available at compile time")
+
+
+# ---------------------------------------------------------------------------
+# Direct contiguous adjacent-dimension FP32 sum. Presenting a row-major input
+# as (outer, reduce, inner) lets the pinned stdlib's saturated reduction path
+# SIMD-pack adjacent inner values and read the source directly. This avoids the
+# full-tensor permutation scratch required by the generic non-trailing path.
+# All dimensions remain runtime values; unsupported layouts keep the existing
+# materialize-and-reduce fallback.
+# ---------------------------------------------------------------------------
+
+
+@__llvm_metadata(
+    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(ROWRED_THREADS))
+)
+@__name("sum_contiguous_middle_f32_few_outputs")
+def _sum_middle_few_outputs_kernel(
+    output: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    input: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    reduce_elements: Int,
+    inner_elements: Int,
+):
+    """One cooperative block per output for the stdlib's scratch regime."""
+    var output_index = Int(block_idx.x)
+    var outer_index = output_index // inner_elements
+    var inner_index = output_index % inner_elements
+    var partial = Float32(0.0)
+    for reduction_index in range(
+        Int(thread_idx.x), reduce_elements, ROWRED_THREADS
+    ):
+        partial += input[
+            (outer_index * reduce_elements + reduction_index) * inner_elements
+            + inner_index
+        ]
+    var reduced = block.sum[block_size=ROWRED_THREADS](partial)
+    if thread_idx.x == 0:
+        output[output_index] = reduced
+
+
+@always_inline
+def _sum_contiguous_middle_f32(
+    out_addr: Int,
+    in_addr: Int,
+    outer_elements: Int,
+    reduce_elements: Int,
+    inner_elements: Int,
+    ctx: DeviceContext,
+) raises:
+    var output = _make_ptr[DType.float32](out_addr)
+    var input = _make_ptr[DType.float32](in_addr)
+    var output_elements = outer_elements * inner_elements
+    comptime sm_count = ctx.default_device_info.sm_count
+    if output_elements < sm_count and reduce_elements > 128:
+        _enqueue_cached[_sum_middle_few_outputs_kernel](
+            ctx,
+            "sum_contiguous_middle_f32_few_outputs",
+            output_elements,
+            1,
+            1,
+            ROWRED_THREADS,
+            output.as_unsafe_any_origin(),
+            input.as_unsafe_any_origin().as_immutable(),
+            reduce_elements,
+            inner_elements,
+        )
+        return
+
+    @always_inline
+    @parameter
+    @__copy_capture(input, reduce_elements, inner_elements)
+    def input_fn[
+        width: Int, rank: Int
+    ](coords: IndexList[rank]) -> SIMD[DType.float32, width]:
+        var flat = (
+            coords[0] * reduce_elements + coords[1]
+        ) * inner_elements + coords[2]
+        return input.load[width=width](flat)
+
+    @always_inline
+    @parameter
+    @__copy_capture(output, inner_elements)
+    def output_fn[
+        width: SIMDSize, rank: Int
+    ](coords: IndexList[rank], value: SIMD[DType.float32, width]):
+        var flat = coords[0] * inner_elements + coords[2]
+        output.store[width=width](flat, value)
+
+    var shape = IndexList[3](outer_elements, reduce_elements, inner_elements)
+    sum[
+        DType.float32,
+        input_fn,
+        output_fn,
+        target="gpu",
+        reduce_dim=1,
+    ](Coord(shape), ctx)
+
+
+@always_inline
+def _adjacent_reduce_geom(
+    a: TensorSpec,
+    rdims_t: PyObjectPtr,
+    mut outer_elements: Int,
+    mut reduce_elements: Int,
+    mut inner_elements: Int,
+) raises -> Bool:
+    """Collapse a contiguous adjacent reduction interval into runtime
+    (outer, reduce, inner) dimensions. Empty/non-adjacent intervals reject."""
+    if not a.contig:
+        return False
+    var n = _raw_tuple_len(rdims_t)
+    if n == 0:
+        return False
+    var first = _raw_tuple_int(rdims_t, 0)
+    if first < 0 or first + n > a.rank:
+        return False
+    for k in range(n):
+        if _raw_tuple_int(rdims_t, k) != first + k:
+            return False
+
+    outer_elements = 1
+    reduce_elements = 1
+    inner_elements = 1
+    for d in range(first):
+        outer_elements *= a.dim(d)
+    for d in range(first, first + n):
+        reduce_elements *= a.dim(d)
+    for d in range(first + n, a.rank):
+        inner_elements *= a.dim(d)
+    return True
 
 
 @always_inline
@@ -942,7 +1076,32 @@ def _rowred_spec_go[
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
     var addr = Int(buf.unsafe_ptr())
     if rows > 0:
-        if needs_copy:
+        var outer_elements = 0
+        var reduce_elements = 0
+        var inner_elements = 0
+        var direct_middle_sum = False
+        comptime if op_code == RED_SUM:
+            if a.dtype == DType.float32 and needs_copy and ctx.api() != "cpu":
+                direct_middle_sum = _adjacent_reduce_geom(
+                    a,
+                    rdims_t,
+                    outer_elements,
+                    reduce_elements,
+                    inner_elements,
+                )
+        if direct_middle_sum:
+            comptime if has_accelerator():
+                _sum_contiguous_middle_f32(
+                    addr,
+                    a.ptr,
+                    outer_elements,
+                    reduce_elements,
+                    inner_elements,
+                    ctx,
+                )
+            else:
+                raise Error("no GPU accelerator available at compile time")
+        elif needs_copy:
             # Mojo-side temporary: materialize the permuted layout the
             # classic path used to build with Python permute+_tc.
             var tmp = _scratch_copy(
