@@ -334,6 +334,40 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
 
 
 @no_type_check
+def _try_spec_add_f32_bf16(lhs, rhs):
+    """One-launch contiguous FP32 + BF16 -> FP32 add, or None.
+
+    The general binary promotion path materializes its lower-precision input.
+    This hot residual-add route instead leaves both inputs in their original
+    storage and lets the Mojo kernel widen BF16 values in registers.  Shape,
+    dtype and contiguity checks are runtime metadata checks, so one compiled
+    kernel handles every eligible shape without recompilation.
+    """
+    a = _t(lhs)
+    b = _t(rhs)
+    if (
+        a is None
+        or b is None
+        or a._device != b._device
+        or a._device.api == "cpu"
+        or not a._is_contiguous
+        or not b._is_contiguous
+        or a._shape != b._shape
+        or not (
+            (a._dtype == DType.float32 and b._dtype == DType.bfloat16)
+            or (a._dtype == DType.bfloat16 and b._dtype == DType.float32)
+        )
+    ):
+        return None
+    try:
+        result = eager_kernels.logic_ops.AddF32Bf16Spec(_spec_of(a), _spec_of(b))
+    except Exception as exc:
+        _raise_if_device_oom(exc)
+        return None
+    return _wrap_spec_result(result, DType.float32, a._device)
+
+
+@no_type_check
 def _try_spec_unary(spec_fn_name, x, out_dtype=None, module_name="elementwise_ops"):
     """Contiguous unary through a spec op, or None.
 
@@ -679,7 +713,9 @@ def fast_aten_add(input, other, alpha=1):
         other = _scaled_operand(other, alpha)
         if other is None:
             return NOT_HANDLED
-    result = _try_spec_scalar("AddScalarSpec", input, other)
+    result = _try_spec_add_f32_bf16(input, other)
+    if result is None:
+        result = _try_spec_scalar("AddScalarSpec", input, other)
     if result is None:
         result = _try_spec_int_scalar("AddScalarIntSpec", input, other)
     if result is None:

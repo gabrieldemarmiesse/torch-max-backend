@@ -187,6 +187,125 @@ def test_fast_binary_promotes_mixed_precision_residual_to_float32(mojo_gpu, low_
     torch.testing.assert_close(actual.cpu(), expected, atol=1e-6, rtol=1e-6)
 
 
+@pytest.mark.parametrize("bf16_first", [False, True])
+@pytest.mark.parametrize(
+    "shape", [(), (0,), (0, 5), (1,), (7,), (17, 65), (3, 5, 7), (2, 3, 5, 7, 11)]
+)
+def test_fast_add_f32_bf16_fused_dynamic_shapes(
+    mojo_gpu, shape, bf16_first, monkeypatch
+):
+    """Mixed residual adds convert BF16 values in registers, in either order."""
+    if not fast_eager_enabled():
+        pytest.skip("fast eager path disabled")
+    from torch_mojo_backend import eager_kernels
+
+    generator = torch.Generator().manual_seed(20260720)
+    fp32 = torch.randn(shape, generator=generator)
+    bf16 = torch.randn(shape, generator=generator).to(torch.bfloat16)
+    lhs, rhs = (bf16, fp32) if bf16_first else (fp32, bf16)
+
+    fused_calls = []
+    cast_calls = []
+    original_fused = eager_kernels.logic_ops.AddF32Bf16Spec
+    original_cast = eager_kernels.data_movement_ops.CastSpec
+
+    def fused_spy(*args):
+        fused_calls.append(args)
+        return original_fused(*args)
+
+    def cast_spy(*args):
+        cast_calls.append(args)
+        return original_cast(*args)
+
+    monkeypatch.setattr(eager_kernels.logic_ops, "AddF32Bf16Spec", fused_spy)
+    monkeypatch.setattr(eager_kernels.data_movement_ops, "CastSpec", cast_spy)
+
+    actual = lhs.to(mojo_gpu) + rhs.to(mojo_gpu)
+    expected = lhs + rhs
+
+    assert actual.dtype == torch.float32
+    torch.testing.assert_close(actual.cpu(), expected, atol=0, rtol=0)
+    assert len(fused_calls) == 1
+    assert not cast_calls
+
+
+def test_fast_add_f32_bf16_fused_spec_avoids_cast_temporary(mojo_gpu):
+    """A contiguous mixed add must be one fused spec launch, even with tails."""
+    if not fast_eager_enabled():
+        pytest.skip("fast eager path disabled")
+    from torch_mojo_backend import eager_kernels
+
+    fp32_storage = torch.randn(1_106).to(mojo_gpu)
+    bf16_storage = torch.randn(1_106).to(torch.bfloat16).to(mojo_gpu)
+    fp32 = fp32_storage[1:]
+    bf16 = bf16_storage[1:]
+
+    fused_calls = []
+    cast_calls = []
+    original_fused = eager_kernels.logic_ops.AddF32Bf16Spec
+    original_cast = eager_kernels.data_movement_ops.CastSpec
+
+    def fused_spy(*args):
+        fused_calls.append(args)
+        return original_fused(*args)
+
+    def cast_spy(*args):
+        cast_calls.append(args)
+        return original_cast(*args)
+
+    eager_kernels.logic_ops.AddF32Bf16Spec = fused_spy
+    eager_kernels.data_movement_ops.CastSpec = cast_spy
+    try:
+        outputs = (fp32 + bf16, bf16 + fp32)
+    finally:
+        eager_kernels.logic_ops.AddF32Bf16Spec = original_fused
+        eager_kernels.data_movement_ops.CastSpec = original_cast
+
+    expected = fp32_storage.cpu()[1:] + bf16_storage.cpu()[1:]
+    for output in outputs:
+        assert output.dtype == torch.float32
+        torch.testing.assert_close(output.cpu(), expected, atol=0, rtol=0)
+    assert len(fused_calls) == 2
+    assert not cast_calls
+
+
+def test_fast_add_f32_bf16_strided_preserves_general_fallback(mojo_gpu):
+    """Ineligible layouts remain correct through the existing general path."""
+    if not fast_eager_enabled():
+        pytest.skip("fast eager path disabled")
+    from torch_mojo_backend import eager_kernels
+
+    fp32 = torch.randn(7, 11)
+    bf16 = torch.randn(7, 11).to(torch.bfloat16)
+    device_fp32 = fp32.to(mojo_gpu).t()
+    device_bf16 = bf16.to(mojo_gpu).t()
+
+    fused_calls = []
+    cast_calls = []
+    original_fused = eager_kernels.logic_ops.AddF32Bf16Spec
+    original_cast = eager_kernels.data_movement_ops.CastSpec
+
+    def fused_spy(*args):
+        fused_calls.append(args)
+        return original_fused(*args)
+
+    def cast_spy(*args):
+        cast_calls.append(args)
+        return original_cast(*args)
+
+    eager_kernels.logic_ops.AddF32Bf16Spec = fused_spy
+    eager_kernels.data_movement_ops.CastSpec = cast_spy
+    try:
+        actual = device_fp32 + device_bf16
+    finally:
+        eager_kernels.logic_ops.AddF32Bf16Spec = original_fused
+        eager_kernels.data_movement_ops.CastSpec = original_cast
+
+    torch.testing.assert_close(actual.cpu(), fp32.t() + bf16.t(), atol=0, rtol=0)
+    assert not fused_calls
+    assert len(cast_calls) == 1
+
+
 @pytest.fixture
 def mojo_gpu(mojo_gpu_available: bool):
     """GPU mojo device only — for ops whose fast path is GPU-gated."""
