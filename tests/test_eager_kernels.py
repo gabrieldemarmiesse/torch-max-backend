@@ -2208,13 +2208,37 @@ def test_bf16_v3_source_dependency_and_kernel_contract():
     assert "from bf16_gemm_v3_kernels import" in bridge_source
     assert "from bf16_gemm_kernels import (" in v3_source
     for kernel_name in (
-        "nanogpt_bf16_gemm_v3_nn_wgmma_tma_s2",
+        "nanogpt_bf16_gemm_v3_nn_ws_m64n128_tma_s3",
+        "nanogpt_bf16_gemm_v3_nn_ws_m128n256_tma_s3",
         "nanogpt_bf16_gemm_v3_nt_ws_m128n256_tma_s3",
         "nanogpt_bf16_gemm_v3_tn_ws_m64n128_tma_col_a_s3",
         "nanogpt_bf16_gemm_v3_tn_ws_m128n256_tma_col_a_s3",
         "nanogpt_bf16_gemm_v3_tn_wgmma_tma_transpose_s2",
     ):
         assert f'@__name("{kernel_name}")' in v3_source
+
+    for helper_name in (
+        "_v3_enqueue_nn_ws_m64n128_tma_s3",
+        "_v3_enqueue_nn_ws_m128n256_tma_s3",
+    ):
+        assert v3_source.count(f"{helper_name}(") == 2
+
+    nt_kernel_start = v3_source.index(
+        '@__name("nanogpt_bf16_gemm_v3_nt_ws_m128n256_tma_s3")'
+    )
+    nt_kernel_end = v3_source.index(
+        '@__name("nanogpt_bf16_gemm_v3_tn_ws_m64n128_tma_col_a_s3")'
+    )
+    nt_source = v3_source[nt_kernel_start:nt_kernel_end]
+    assert "b_tma.prefetch_descriptor()\n        barrier()" in nt_source
+    assert "DeviceAttribute.MULTIPROCESSOR_COUNT" in v3_source
+    for scratch_only in (
+        "nanogpt_bf16_gemm_v3_nn_wgmma_tma_s2",
+        "_v3_enqueue_nt_ws_m128n256_tma_s4",
+        "candidate_bf16_gemm_accepted_v2",
+        "GPT-5.6-SOL",
+    ):
+        assert scratch_only not in v3_source
 
     for source in (bridge_source, v3_source, fallback_source):
         for forbidden in (
@@ -3792,6 +3816,8 @@ def _assert_bf16_fp32_accumulation_close(actual, expected):
     ("m", "n", "k", "lhs_transposed", "rhs_transposed"),
     [
         (1088, 128, 192, False, False),
+        (1088, 128, 448, False, False),
+        (4352, 256, 320, False, False),
         (1088, 256, 192, False, True),
         (192, 384, 256, False, True),
         (128, 256, 256, True, False),
@@ -3800,6 +3826,8 @@ def _assert_bf16_fp32_accumulation_close(actual, expected):
     ],
     ids=[
         "nn",
+        "nn_small_five_k_tiles",
+        "nn_large_five_k_tiles",
         "nt_three_stages",
         "nt_half_tiles_stage_reuse",
         "tn_small_stage_reuse",

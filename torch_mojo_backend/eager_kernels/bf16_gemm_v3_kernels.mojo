@@ -82,6 +82,68 @@ comptime _V3_B_MN_TMA = TMATensorTile[
     Index(_V3_BK, _V3_BN),
     Index(_V3_BK, 64),
 ]
+comptime _V3_NN_BM = 128
+comptime _V3_NN_BN = 256
+comptime _V3_NN_BK = 64
+comptime _V3_NN_STAGES = 3
+comptime _V3_NN_THREADS = 384
+comptime _V3_NN_CONSUMERS = 2
+comptime _V3_NN_WGMMA_SHAPE = Index(64, 256, 16)
+comptime _V3_NN_A_LAYOUT = tile_layout_k_major[
+    _V3_BF16, _V3_NN_BM, _V3_NN_BK, _V3_SWIZZLE
+]()
+comptime _V3_NN_B_LAYOUT = tile_layout_mn_major[
+    _V3_BF16, _V3_NN_BN, _V3_NN_BK, _V3_SWIZZLE
+]()
+comptime _V3_NN_A_TMA = TMATensorTile[
+    _V3_BF16,
+    2,
+    Index(_V3_NN_BM, _V3_NN_BK),
+    Index(_V3_NN_BM, _V3_NN_BK),
+]
+comptime _V3_NN_B_TMA = TMATensorTile[
+    _V3_BF16,
+    2,
+    Index(_V3_NN_BK, _V3_NN_BN),
+    Index(_V3_NN_BK, 64),
+]
+comptime _V3_NN_A_PIPE_LAYOUT = Layout.row_major(
+    _V3_NN_STAGES, _V3_NN_BM * _V3_NN_BK
+)
+comptime _V3_NN_B_PIPE_LAYOUT = Layout.row_major(
+    _V3_NN_STAGES, _V3_NN_BN * _V3_NN_BK
+)
+comptime _V3_NN_SMALL_BM = 64
+comptime _V3_NN_SMALL_BN = 128
+comptime _V3_NN_SMALL_BK = 64
+comptime _V3_NN_SMALL_STAGES = 3
+comptime _V3_NN_SMALL_THREADS = 256
+comptime _V3_NN_SMALL_CONSUMERS = 1
+comptime _V3_NN_SMALL_WGMMA_SHAPE = Index(64, 128, 16)
+comptime _V3_NN_SMALL_A_LAYOUT = tile_layout_k_major[
+    _V3_BF16, _V3_NN_SMALL_BM, _V3_NN_SMALL_BK, _V3_SWIZZLE
+]()
+comptime _V3_NN_SMALL_B_LAYOUT = tile_layout_mn_major[
+    _V3_BF16, _V3_NN_SMALL_BN, _V3_NN_SMALL_BK, _V3_SWIZZLE
+]()
+comptime _V3_NN_SMALL_A_TMA = TMATensorTile[
+    _V3_BF16,
+    2,
+    Index(_V3_NN_SMALL_BM, _V3_NN_SMALL_BK),
+    Index(_V3_NN_SMALL_BM, _V3_NN_SMALL_BK),
+]
+comptime _V3_NN_SMALL_B_TMA = TMATensorTile[
+    _V3_BF16,
+    2,
+    Index(_V3_NN_SMALL_BK, _V3_NN_SMALL_BN),
+    Index(_V3_NN_SMALL_BK, 64),
+]
+comptime _V3_NN_SMALL_A_PIPE_LAYOUT = Layout.row_major(
+    _V3_NN_SMALL_STAGES, _V3_NN_SMALL_BM * _V3_NN_SMALL_BK
+)
+comptime _V3_NN_SMALL_B_PIPE_LAYOUT = Layout.row_major(
+    _V3_NN_SMALL_STAGES, _V3_NN_SMALL_BN * _V3_NN_SMALL_BK
+)
 comptime _V3_NT_BM = 128
 comptime _V3_NT_BN = 256
 comptime _V3_NT_BK = 64
@@ -179,152 +241,171 @@ comptime _V3_TN_SMALL_B_PIPE_LAYOUT = Layout.row_major(
 
 @__llvm_arg_metadata(a_tma, `nvvm.grid_constant`)
 @__llvm_arg_metadata(b_tma, `nvvm.grid_constant`)
-@__name("nanogpt_bf16_gemm_v3_nn_wgmma_tma_s2")
-def _v3_nn_wgmma_tma_s2(
-    a_tma: _V3_A_TMA,
-    b_tma: _V3_B_MN_TMA,
+@__llvm_metadata(
+    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(_V3_NN_THREADS))
+)
+@__name("nanogpt_bf16_gemm_v3_nn_ws_m128n256_tma_s3")
+def _v3_nn_ws_m128n256_tma_s3(
+    a_tma: _V3_NN_A_TMA,
+    b_tma: _V3_NN_B_TMA,
     output: _V3_PTR,
     m: Int,
     n: Int,
     k: Int,
 ):
     comptime if _is_sm_9x():
-        var a_smem0 = LayoutTensor[
+        var a_pipeline = LayoutTensor[
             _V3_BF16,
-            _V3_A_LAYOUT,
+            _V3_NN_A_PIPE_LAYOUT,
             MutAnyOrigin,
             address_space=AddressSpace.SHARED,
             alignment=128,
         ].stack_allocation()
-        var a_smem1 = LayoutTensor[
+        var b_pipeline = LayoutTensor[
             _V3_BF16,
-            _V3_A_LAYOUT,
+            _V3_NN_B_PIPE_LAYOUT,
             MutAnyOrigin,
             address_space=AddressSpace.SHARED,
             alignment=128,
         ].stack_allocation()
-        var b_smem0 = LayoutTensor[
-            _V3_BF16,
-            _V3_B_MN_LAYOUT,
-            MutAnyOrigin,
+        var full_barriers = stack_allocation[
+            _V3_NN_STAGES,
+            SharedMemBarrier,
             address_space=AddressSpace.SHARED,
-            alignment=128,
-        ].stack_allocation()
-        var b_smem1 = LayoutTensor[
-            _V3_BF16,
-            _V3_B_MN_LAYOUT,
-            MutAnyOrigin,
-            address_space=AddressSpace.SHARED,
-            alignment=128,
-        ].stack_allocation()
-        var mbar = stack_allocation[
-            2,
+            alignment=8,
+        ]()
+        var empty_barriers = stack_allocation[
+            _V3_NN_STAGES,
             SharedMemBarrier,
             address_space=AddressSpace.SHARED,
             alignment=8,
         ]()
         if thread_idx.x == 0:
-            mbar[0].init()
-            mbar[1].init()
+            comptime for stage in range(_V3_NN_STAGES):
+                full_barriers[stage].init()
+                empty_barriers[stage].init(Int32(_V3_NN_CONSUMERS))
+            a_tma.prefetch_descriptor()
+            b_tma.prefetch_descriptor()
+        # Publish barrier initialization before consumer warp groups mark the
+        # initially empty pipeline slots.  The second barrier publishes those
+        # arrivals before the producer starts waiting on them.
+        barrier()
 
-        comptime CFRAG = _V3_BM * _V3_BN // 128
-        var accum = LayoutTensor[
-            _V3_F32,
-            Layout.row_major(1, CFRAG),
-            MutAnyOrigin,
-            address_space=AddressSpace.LOCAL,
-        ].stack_allocation()
-        _ = accum.fill(0.0)
-
-        comptime wgmma = TensorCoreAsync[
-            _V3_F32,
-            _V3_BF16,
-            _V3_BF16,
-            _V3_WGMMA_SHAPE,
-            a_swizzle=_V3_SWIZZLE,
-            b_swizzle=_V3_SWIZZLE,
-            transpose_b=False,
-        ]()
-        var phase0: UInt32 = 0
-        var phase1: UInt32 = 0
-        var blocks_m = m // _V3_BM
-        var blocks_n = n // _V3_BN
+        comptime CFRAG = 64 * _V3_NN_BN // 128
+        var warp_group_idx = Int(thread_idx.x) // 128
+        var warp_group_thread_idx = Int(thread_idx.x) % 128
+        var blocks_m = (m + _V3_NN_BM - 1) // _V3_NN_BM
+        var blocks_n = (n + _V3_NN_BN - 1) // _V3_NN_BN
         var lin = Int(block_idx.x)
         var group_span = 8 * blocks_n
         var group = lin // group_span
         var rem = lin % group_span
         var rows_in_group = min(8, blocks_m - group * 8)
-        var m0 = (group * 8 + rem % rows_in_group) * _V3_BM
-        var n0 = (rem // rows_in_group) * _V3_BN
-        var num_tiles = k // _V3_BK
-        comptime TMA_BYTES = (_V3_BM + _V3_BN) * _V3_BK * 2
+        var m0 = (group * 8 + rem % rows_in_group) * _V3_NN_BM
+        var n0 = (rem // rows_in_group) * _V3_NN_BN
+        var num_tiles = k // _V3_NN_BK
+        comptime TMA_BYTES = (_V3_NN_BM + _V3_NN_BN) * _V3_NN_BK * 2
 
-        barrier()
-        if thread_idx.x == 0:
-            mbar[0].expect_bytes(Int32(TMA_BYTES))
-            a_tma.async_copy(a_smem0, mbar[0], (0, m0))
-            b_tma.async_copy(b_smem0, mbar[0], (n0, 0))
-            if num_tiles > 1:
-                mbar[1].expect_bytes(Int32(TMA_BYTES))
-                a_tma.async_copy(a_smem1, mbar[1], (_V3_BK, m0))
-                b_tma.async_copy(b_smem1, mbar[1], (n0, _V3_BK))
+        if warp_group_idx > 0 and warp_group_thread_idx == 0:
+            comptime for stage in range(_V3_NN_STAGES):
+                _ = empty_barriers[stage].arrive()
         barrier()
 
-        var tile = 0
-        while tile < num_tiles:
-            var stage = tile % 2
-            if stage == 0:
-                mbar[0].wait(phase0)
-                phase0 ^= 1
+        if warp_group_idx == 0:
+            warpgroup_reg_dealloc[24]()
+            if thread_idx.x == 0:
+                var tile = 0
+                while tile < num_tiles:
+                    var stage = tile % _V3_NN_STAGES
+                    var phase = UInt32((tile // _V3_NN_STAGES) % 2)
+                    empty_barriers[stage].wait(phase)
+                    full_barriers[stage].expect_bytes(Int32(TMA_BYTES))
+                    var a_tile = LayoutTensor[
+                        _V3_BF16,
+                        _V3_NN_A_LAYOUT,
+                        MutAnyOrigin,
+                        address_space=AddressSpace.SHARED,
+                        alignment=128,
+                    ](a_pipeline.ptr + stage * _V3_NN_BM * _V3_NN_BK)
+                    var b_tile = LayoutTensor[
+                        _V3_BF16,
+                        _V3_NN_B_LAYOUT,
+                        MutAnyOrigin,
+                        address_space=AddressSpace.SHARED,
+                        alignment=128,
+                    ](b_pipeline.ptr + stage * _V3_NN_BN * _V3_NN_BK)
+                    var k0 = tile * _V3_NN_BK
+                    a_tma.async_copy(a_tile, full_barriers[stage], (k0, m0))
+                    b_tma.async_copy(b_tile, full_barriers[stage], (n0, k0))
+                    tile += 1
+        else:
+            warpgroup_reg_alloc[232]()
+            var accum = LayoutTensor[
+                _V3_F32,
+                Layout.row_major(1, CFRAG),
+                MutAnyOrigin,
+                address_space=AddressSpace.LOCAL,
+            ].stack_allocation()
+            _ = accum.fill(0.0)
+            comptime wgmma = TensorCoreAsync[
+                _V3_F32,
+                _V3_BF16,
+                _V3_BF16,
+                _V3_NN_WGMMA_SHAPE,
+                a_swizzle=_V3_SWIZZLE,
+                b_swizzle=_V3_SWIZZLE,
+                transpose_b=False,
+            ]()
+
+            var tile = 0
+            while tile < num_tiles:
+                var stage = tile % _V3_NN_STAGES
+                var phase = UInt32((tile // _V3_NN_STAGES) % 2)
+                full_barriers[stage].wait(phase)
+                var a_tile = LayoutTensor[
+                    _V3_BF16,
+                    _V3_NN_A_LAYOUT,
+                    MutAnyOrigin,
+                    address_space=AddressSpace.SHARED,
+                    alignment=128,
+                ](a_pipeline.ptr + stage * _V3_NN_BM * _V3_NN_BK)
+                var b_tile = LayoutTensor[
+                    _V3_BF16,
+                    _V3_NN_B_LAYOUT,
+                    MutAnyOrigin,
+                    address_space=AddressSpace.SHARED,
+                    alignment=128,
+                ](b_pipeline.ptr + stage * _V3_NN_BN * _V3_NN_BK)
                 warpgroup_fence(accum)
                 wgmma.arrive()
-                wgmma.wgmma(a_smem0, b_smem0, accum)
+                wgmma.wgmma[_V3_NN_CONSUMERS](
+                    a_tile, b_tile, accum, warp_group_idx - 1
+                )
                 wgmma.commit_group()
                 warpgroup_fence(accum)
                 wgmma.wait_group()
-            else:
-                mbar[1].wait(phase1)
-                phase1 ^= 1
-                warpgroup_fence(accum)
-                wgmma.arrive()
-                wgmma.wgmma(a_smem1, b_smem1, accum)
-                wgmma.commit_group()
-                warpgroup_fence(accum)
-                wgmma.wait_group()
+                if warp_group_thread_idx == 0:
+                    _ = empty_barriers[stage].arrive()
+                tile += 1
 
-            barrier()
-            var future = tile + 2
-            if future < num_tiles and thread_idx.x == 0:
-                var future_k = future * _V3_BK
-                if stage == 0:
-                    mbar[0].expect_bytes(Int32(TMA_BYTES))
-                    a_tma.async_copy(a_smem0, mbar[0], (future_k, m0))
-                    b_tma.async_copy(b_smem0, mbar[0], (n0, future_k))
-                else:
-                    mbar[1].expect_bytes(Int32(TMA_BYTES))
-                    a_tma.async_copy(a_smem1, mbar[1], (future_k, m0))
-                    b_tma.async_copy(b_smem1, mbar[1], (n0, future_k))
-            tile += 1
-
-        var tid = Int(thread_idx.x)
-        var warp = tid // 32
-        var lane = tid % 32
-        var base_row = warp * 16 + lane // 4
-        var base_col = (lane % 4) * 2
-
-        @parameter
-        for q in range(CFRAG // 2):
-            var e = q * 2
-            var row = base_row + (q % 2) * 8
-            var col = base_col + (q // 2) * 8
-            var pair = SIMD[_V3_BF16, 2](
-                accum.ptr[e].cast[_V3_BF16](),
-                accum.ptr[e + 1].cast[_V3_BF16](),
-            )
-            output.store[alignment=4]((m0 + row) * n + n0 + col, pair)
+            var tid = warp_group_thread_idx
+            var warp = tid // 32
+            var lane = tid % 32
+            var base_row = warp * 16 + lane // 4
+            var base_col = (lane % 4) * 2
+            comptime for q in range(CFRAG // 2):
+                var e = q * 2
+                var row = (warp_group_idx - 1) * 64 + base_row + (q % 2) * 8
+                var col = base_col + (q // 2) * 8
+                var pair = SIMD[_V3_BF16, 2](
+                    accum.ptr[e].cast[_V3_BF16](),
+                    accum.ptr[e + 1].cast[_V3_BF16](),
+                )
+                if m0 + row < m and n0 + col + 1 < n:
+                    output.store[alignment=4]((m0 + row) * n + n0 + col, pair)
 
 
-def _v3_enqueue_nn_wgmma_tma_s2(
+def _v3_enqueue_nn_ws_m128n256_tma_s3(
     output: _V3_PTR,
     a: _V3_PTR,
     b: _V3_PTR,
@@ -343,7 +424,7 @@ def _v3_enqueue_nn_wgmma_tma_s2(
         ),
         IndexList[2](m, k),
         IndexList[2](k, 1),
-        IndexList[2](_V3_BM, _V3_BK),
+        IndexList[2](_V3_NN_BM, _V3_NN_BK),
     )
     var b_desc = create_tma_descriptor[_V3_BF16, 2, _V3_SWIZZLE](
         DeviceBuffer(
@@ -354,11 +435,11 @@ def _v3_enqueue_nn_wgmma_tma_s2(
         ),
         IndexList[2](k, n),
         IndexList[2](n, 1),
-        IndexList[2](_V3_BK, 64),
+        IndexList[2](_V3_NN_BK, 64),
     )
-    var a_tma = _V3_A_TMA(a_desc)
-    var b_tma = _V3_B_MN_TMA(b_desc)
-    ctx.enqueue_function[_v3_nn_wgmma_tma_s2](
+    var a_tma = _V3_NN_A_TMA(a_desc)
+    var b_tma = _V3_NN_B_TMA(b_desc)
+    ctx.enqueue_function[_v3_nn_ws_m128n256_tma_s3](
         a_tma,
         b_tma,
         output,
@@ -366,7 +447,226 @@ def _v3_enqueue_nn_wgmma_tma_s2(
         n,
         k,
         grid_dim=(grid_x,),
-        block_dim=(128,),
+        block_dim=(_V3_NN_THREADS,),
+    )
+
+
+@__llvm_arg_metadata(a_tma, `nvvm.grid_constant`)
+@__llvm_arg_metadata(b_tma, `nvvm.grid_constant`)
+@__llvm_metadata(
+    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](
+        Int32(_V3_NN_SMALL_THREADS)
+    )
+)
+@__name("nanogpt_bf16_gemm_v3_nn_ws_m64n128_tma_s3")
+def _v3_nn_ws_m64n128_tma_s3(
+    a_tma: _V3_NN_SMALL_A_TMA,
+    b_tma: _V3_NN_SMALL_B_TMA,
+    output: _V3_PTR,
+    m: Int,
+    n: Int,
+    k: Int,
+):
+    comptime if _is_sm_9x():
+        var a_pipeline = LayoutTensor[
+            _V3_BF16,
+            _V3_NN_SMALL_A_PIPE_LAYOUT,
+            MutAnyOrigin,
+            address_space=AddressSpace.SHARED,
+            alignment=128,
+        ].stack_allocation()
+        var b_pipeline = LayoutTensor[
+            _V3_BF16,
+            _V3_NN_SMALL_B_PIPE_LAYOUT,
+            MutAnyOrigin,
+            address_space=AddressSpace.SHARED,
+            alignment=128,
+        ].stack_allocation()
+        var full_barriers = stack_allocation[
+            _V3_NN_SMALL_STAGES,
+            SharedMemBarrier,
+            address_space=AddressSpace.SHARED,
+            alignment=8,
+        ]()
+        var empty_barriers = stack_allocation[
+            _V3_NN_SMALL_STAGES,
+            SharedMemBarrier,
+            address_space=AddressSpace.SHARED,
+            alignment=8,
+        ]()
+        if thread_idx.x == 0:
+            comptime for stage in range(_V3_NN_SMALL_STAGES):
+                full_barriers[stage].init()
+                empty_barriers[stage].init(Int32(_V3_NN_SMALL_CONSUMERS))
+            a_tma.prefetch_descriptor()
+            b_tma.prefetch_descriptor()
+        barrier()
+
+        comptime CFRAG = 64 * _V3_NN_SMALL_BN // 128
+        var warp_group_idx = Int(thread_idx.x) // 128
+        var warp_group_thread_idx = Int(thread_idx.x) % 128
+        var blocks_m = (m + _V3_NN_SMALL_BM - 1) // _V3_NN_SMALL_BM
+        var blocks_n = (n + _V3_NN_SMALL_BN - 1) // _V3_NN_SMALL_BN
+        var lin = Int(block_idx.x)
+        var group_span = 8 * blocks_n
+        var group = lin // group_span
+        var rem = lin % group_span
+        var rows_in_group = min(8, blocks_m - group * 8)
+        var m0 = (group * 8 + rem % rows_in_group) * _V3_NN_SMALL_BM
+        var n0 = (rem // rows_in_group) * _V3_NN_SMALL_BN
+        var num_tiles = k // _V3_NN_SMALL_BK
+        comptime TMA_BYTES = (
+            _V3_NN_SMALL_BM + _V3_NN_SMALL_BN
+        ) * _V3_NN_SMALL_BK * 2
+
+        if warp_group_idx > 0 and warp_group_thread_idx == 0:
+            comptime for stage in range(_V3_NN_SMALL_STAGES):
+                _ = empty_barriers[stage].arrive()
+        barrier()
+
+        if warp_group_idx == 0:
+            warpgroup_reg_dealloc[24]()
+            if thread_idx.x == 0:
+                var tile = 0
+                while tile < num_tiles:
+                    var stage = tile % _V3_NN_SMALL_STAGES
+                    var phase = UInt32((tile // _V3_NN_SMALL_STAGES) % 2)
+                    empty_barriers[stage].wait(phase)
+                    full_barriers[stage].expect_bytes(Int32(TMA_BYTES))
+                    var a_tile = LayoutTensor[
+                        _V3_BF16,
+                        _V3_NN_SMALL_A_LAYOUT,
+                        MutAnyOrigin,
+                        address_space=AddressSpace.SHARED,
+                        alignment=128,
+                    ](
+                        a_pipeline.ptr
+                        + stage * _V3_NN_SMALL_BM * _V3_NN_SMALL_BK
+                    )
+                    var b_tile = LayoutTensor[
+                        _V3_BF16,
+                        _V3_NN_SMALL_B_LAYOUT,
+                        MutAnyOrigin,
+                        address_space=AddressSpace.SHARED,
+                        alignment=128,
+                    ](
+                        b_pipeline.ptr
+                        + stage * _V3_NN_SMALL_BN * _V3_NN_SMALL_BK
+                    )
+                    var k0 = tile * _V3_NN_SMALL_BK
+                    a_tma.async_copy(a_tile, full_barriers[stage], (k0, m0))
+                    b_tma.async_copy(b_tile, full_barriers[stage], (n0, k0))
+                    tile += 1
+        else:
+            warpgroup_reg_alloc[232]()
+            var accum = LayoutTensor[
+                _V3_F32,
+                Layout.row_major(1, CFRAG),
+                MutAnyOrigin,
+                address_space=AddressSpace.LOCAL,
+            ].stack_allocation()
+            _ = accum.fill(0.0)
+            comptime wgmma = TensorCoreAsync[
+                _V3_F32,
+                _V3_BF16,
+                _V3_BF16,
+                _V3_NN_SMALL_WGMMA_SHAPE,
+                a_swizzle=_V3_SWIZZLE,
+                b_swizzle=_V3_SWIZZLE,
+                transpose_b=False,
+            ]()
+
+            var tile = 0
+            while tile < num_tiles:
+                var stage = tile % _V3_NN_SMALL_STAGES
+                var phase = UInt32((tile // _V3_NN_SMALL_STAGES) % 2)
+                full_barriers[stage].wait(phase)
+                var a_tile = LayoutTensor[
+                    _V3_BF16,
+                    _V3_NN_SMALL_A_LAYOUT,
+                    MutAnyOrigin,
+                    address_space=AddressSpace.SHARED,
+                    alignment=128,
+                ](a_pipeline.ptr + stage * _V3_NN_SMALL_BM * _V3_NN_SMALL_BK)
+                var b_tile = LayoutTensor[
+                    _V3_BF16,
+                    _V3_NN_SMALL_B_LAYOUT,
+                    MutAnyOrigin,
+                    address_space=AddressSpace.SHARED,
+                    alignment=128,
+                ](b_pipeline.ptr + stage * _V3_NN_SMALL_BN * _V3_NN_SMALL_BK)
+                warpgroup_fence(accum)
+                wgmma.arrive()
+                wgmma.wgmma[_V3_NN_SMALL_CONSUMERS](
+                    a_tile, b_tile, accum, warp_group_idx - 1
+                )
+                wgmma.commit_group()
+                warpgroup_fence(accum)
+                wgmma.wait_group()
+                if warp_group_thread_idx == 0:
+                    _ = empty_barriers[stage].arrive()
+                tile += 1
+
+            var tid = warp_group_thread_idx
+            var warp = tid // 32
+            var lane = tid % 32
+            var base_row = warp * 16 + lane // 4
+            var base_col = (lane % 4) * 2
+            comptime for q in range(CFRAG // 2):
+                var e = q * 2
+                var row = base_row + (q % 2) * 8
+                var col = base_col + (q // 2) * 8
+                var pair = SIMD[_V3_BF16, 2](
+                    accum.ptr[e].cast[_V3_BF16](),
+                    accum.ptr[e + 1].cast[_V3_BF16](),
+                )
+                if m0 + row < m and n0 + col + 1 < n:
+                    output.store[alignment=4]((m0 + row) * n + n0 + col, pair)
+
+
+def _v3_enqueue_nn_ws_m64n128_tma_s3(
+    output: _V3_PTR,
+    a: _V3_PTR,
+    b: _V3_PTR,
+    m: Int,
+    n: Int,
+    k: Int,
+    grid_x: Int,
+    ctx: DeviceContext,
+) raises:
+    var a_desc = create_tma_descriptor[_V3_BF16, 2, _V3_SWIZZLE](
+        DeviceBuffer(
+            ctx,
+            a.address_space_cast[AddressSpace.GENERIC](),
+            1,
+            owning=False,
+        ),
+        IndexList[2](m, k),
+        IndexList[2](k, 1),
+        IndexList[2](_V3_NN_SMALL_BM, _V3_NN_SMALL_BK),
+    )
+    var b_desc = create_tma_descriptor[_V3_BF16, 2, _V3_SWIZZLE](
+        DeviceBuffer(
+            ctx,
+            b.address_space_cast[AddressSpace.GENERIC](),
+            1,
+            owning=False,
+        ),
+        IndexList[2](k, n),
+        IndexList[2](n, 1),
+        IndexList[2](_V3_NN_SMALL_BK, 64),
+    )
+    var a_tma = _V3_NN_SMALL_A_TMA(a_desc)
+    var b_tma = _V3_NN_SMALL_B_TMA(b_desc)
+    ctx.enqueue_function[_v3_nn_ws_m64n128_tma_s3](
+        a_tma,
+        b_tma,
+        output,
+        m,
+        n,
+        k,
+        grid_dim=(grid_x,),
+        block_dim=(_V3_NN_SMALL_THREADS,),
     )
 
 
@@ -1337,20 +1637,21 @@ def enqueue_bf16_gemm(
                 DeviceAttribute.COMPUTE_CAPABILITY_MINOR
             )
             if cc_major == 9 and cc_minor == 0:
-                # Full-tile NN regime only. The ordered bounds make all
-                # descriptor and address products machine-width safe; TMA
-                # receives 16B-aligned bases and 128B-compatible rows.
+                # A 64x128 tile preserves the prior aligned-NN coverage and
+                # increases available CTAs when the 128x256 grid would be
+                # severely underfilled on the current GPU.  This predicate is
+                # shape-regime based; no model dimension is hardcoded.
                 if (
                     not transpose_a
                     and not transpose_b
                     and not has_bias
-                    and m >= _V3_BM
-                    and n >= _V3_BN
-                    and k >= _V3_BK
+                    and m >= _V3_NN_SMALL_BM
+                    and n >= _V3_NN_SMALL_BN
+                    and k >= _V3_NN_SMALL_BK
                     and m // n >= 8
-                    and m % _V3_BM == 0
-                    and n % _V3_BN == 0
-                    and k % _V3_BK == 0
+                    and m % _V3_NN_SMALL_BM == 0
+                    and n % _V3_NN_SMALL_BN == 0
+                    and k % _V3_NN_SMALL_BK == 0
                     and Int(output) % 16 == 0
                     and Int(a) % 16 == 0
                     and Int(b) % 16 == 0
@@ -1361,8 +1662,60 @@ def enqueue_bf16_gemm(
                     and k <= 9_223_372_036_854_775_807 // n
                     and n <= 9_223_372_036_854_775_807 // m
                 ):
-                    var blocks_m = m // _V3_BM
-                    var blocks_n = n // _V3_BN
+                    var large_blocks_m = m // _V3_NN_BM
+                    var large_blocks_n = n // _V3_NN_BN
+                    var sm_count = ctx.get_attribute(
+                        DeviceAttribute.MULTIPROCESSOR_COUNT
+                    )
+                    var use_small_tile = (
+                        m % _V3_NN_BM != 0
+                        or n % _V3_NN_BN != 0
+                        or large_blocks_m * large_blocks_n * 4 < sm_count
+                    )
+                    if use_small_tile:
+                        var blocks_m = m // _V3_NN_SMALL_BM
+                        var blocks_n = n // _V3_NN_SMALL_BN
+                        var max_grid_x = ctx.get_attribute(
+                            DeviceAttribute.MAX_GRID_DIM_X
+                        )
+                        if (
+                            blocks_m > 0
+                            and blocks_n > 0
+                            and max_grid_x > 0
+                            and blocks_m <= max_grid_x // blocks_n
+                        ):
+                            var grid_x = blocks_m * blocks_n
+                            if grid_x > 0:
+                                _v3_enqueue_nn_ws_m64n128_tma_s3(
+                                    output, a, b, m, n, k, grid_x, ctx
+                                )
+                                return
+                # Full-tile NN regime only. The ordered bounds make all
+                # descriptor and address products machine-width safe; TMA
+                # receives 16B-aligned bases and 128B-compatible rows.
+                if (
+                    not transpose_a
+                    and not transpose_b
+                    and not has_bias
+                    and m >= _V3_NN_BM
+                    and n >= _V3_NN_BN
+                    and k >= _V3_NN_BK
+                    and m // n >= 8
+                    and m % _V3_NN_BM == 0
+                    and n % _V3_NN_BN == 0
+                    and k % _V3_NN_BK == 0
+                    and Int(output) % 16 == 0
+                    and Int(a) % 16 == 0
+                    and Int(b) % 16 == 0
+                    and m <= 2_147_483_647
+                    and n <= 2_147_483_647
+                    and k <= 2_147_483_647
+                    and k <= 9_223_372_036_854_775_807 // m
+                    and k <= 9_223_372_036_854_775_807 // n
+                    and n <= 9_223_372_036_854_775_807 // m
+                ):
+                    var blocks_m = m // _V3_NN_BM
+                    var blocks_n = n // _V3_NN_BN
                     var max_grid_x = ctx.get_attribute(
                         DeviceAttribute.MAX_GRID_DIM_X
                     )
@@ -1374,7 +1727,7 @@ def enqueue_bf16_gemm(
                     ):
                         var grid_x = blocks_m * blocks_n
                         if grid_x > 0:
-                            _v3_enqueue_nn_wgmma_tma_s2(
+                            _v3_enqueue_nn_ws_m128n256_tma_s3(
                                 output, a, b, m, n, k, grid_x, ctx
                             )
                             return
