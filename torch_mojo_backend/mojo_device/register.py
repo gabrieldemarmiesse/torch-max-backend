@@ -95,17 +95,50 @@ def register_mojo_devices():
     """Enable the mojo device globally and register all aten ops"""
     from torch.utils.backend_registration import _setup_privateuseone_for_python_backend
 
+    from . import torch_mojo_device_module
+
     # since it's so recent we import it here.
     global _registered
     if _registered:
         # Already registered
         return
 
-    _setup_privateuseone_for_python_backend("mojo")
+    # Module._apply otherwise replaces a shared CPU Parameter independently in
+    # each child module when its converted tensor has a different subclass.
+    # Swapping preserves tied weights (for example GPT-2's token embedding and
+    # lm_head) as one Parameter and one Mojo allocation.
+    torch.__future__.set_swap_module_params_on_conversion(True)
+
+    _setup_privateuseone_for_python_backend(
+        "mojo", backend_module=torch_mojo_device_module
+    )
+
+    # PyTorch deliberately uses exact-type checks before selecting foreach
+    # optimizers. TorchMojoTensor is a plain PrivateUse1 tensor subclass, so
+    # opt it into the same lists as DTensor and other supported tensor types.
+    import torch.optim.optimizer as optimizer_module
+    import torch.utils._foreach_utils as foreach_utils
+
+    from .torch_mojo_tensor import TorchMojoTensor
+
+    for supported_types in (
+        optimizer_module._foreach_supported_types,
+        foreach_utils._foreach_supported_types,
+    ):
+        if TorchMojoTensor not in supported_types:
+            supported_types.append(TorchMojoTensor)
 
     # Register all collected aten operations
     for op_name, func in _aten_ops_registry:
         torch.library.impl(op_name, "privateuseone")(func)
+
+    from .mojo_device_autograd import register_autograd_ops
+
+    register_autograd_ops()
+
+    from .mojo_device_autocast import register_autocast_ops
+
+    register_autocast_ops()
 
     _declare_mojo_tensor_as_plain_tensor()
     _keep_mojo_kernels_out_of_fake_tensor_construction()

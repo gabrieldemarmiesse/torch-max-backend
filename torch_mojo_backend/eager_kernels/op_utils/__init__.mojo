@@ -74,6 +74,51 @@ def _enqueue_cached[
     )
 
 
+@always_inline
+def _enqueue_cached_2d[
+    declared_arg_types: TypeList[Trait=AnyType, ...],
+    //,
+    func: def(* args: * declared_arg_types) thin -> None,
+    *Ts: DevicePassable,
+](
+    ctx: DeviceContext,
+    key: String,
+    gx: Int,
+    gy: Int,
+    gz: Int,
+    threads_x: Int,
+    threads_y: Int,
+    *args: *Ts,
+) raises:
+    """Cached enqueue for kernels with a two-dimensional thread block."""
+    var name = String(t"TMB_KERNEL_2D_{key}_{ctx.id()}")
+    comptime FuncT = type_of(ctx.compile_function[func]())
+
+    if global_ptr := _get_global_or_null(name):
+        var fptr = global_ptr.value().bitcast[FuncT]()
+        ctx.enqueue_function(
+            fptr[],
+            *args,
+            grid_dim=(gx, gy, gz),
+            block_dim=(threads_x, threads_y),
+        )
+        return
+
+    var compiled = ctx.compile_function[func]()
+    var fptr = alloc[FuncT](1)
+    fptr.init_pointee_move(compiled^)
+    external_call["KGEN_CompilerRT_InsertGlobal", NoneType](
+        StringSlice(name),
+        fptr.bitcast[NoneType](),
+    )
+    ctx.enqueue_function(
+        fptr[],
+        *args,
+        grid_dim=(gx, gy, gz),
+        block_dim=(threads_x, threads_y),
+    )
+
+
 # Launch geometry for the cached grid-stride kernels that replace stdlib
 # `elementwise` on GPU: `ctx.enqueue_function` costs ~20us per call on Metal
 # but `elementwise` pays ~42us (it rebuilds and re-resolves its closure

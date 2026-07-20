@@ -16,10 +16,12 @@ import torch
 from max.experimental.torch.torch import torch_dtype_to_max
 
 import torch_mojo_backend.is_running_tests
+from torch_mojo_backend.mojo_device.cross_entropy import decompose_cross_entropy_loss
 from torch_mojo_backend.mojo_device.torch_mojo_tensor import (
     TorchMojoTensor,
     _copy_strided_into,
-    _rebind_payload,
+    _record_h2d_source,
+    _resize_payload,
     find_equivalent_max_device,
 )
 
@@ -148,20 +150,56 @@ def _copy_into_tensor(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
 
 
 @no_type_check
-def _out_variant(op_name: str, fast_name: str):
+def _out_variant(op_name: str, fast_name: str, *, dtype_policy: str = "safe_cast"):
     """Wrap a functional fast implementation as an out= variant: compute,
     then copy into `out` (strided-safe)."""
 
     def dispatcher(*args, out: TorchMojoTensor, **kwargs):
+        if not isinstance(out, TorchMojoTensor):
+            raise RuntimeError(f"{op_name}: expected out to be a mojo tensor")
+
+        # Reject a cross-device destination before launching the functional
+        # composition.  Fast implementations already require all tensor
+        # operands to share a device, so the first mojo operand identifies
+        # the only valid output context.
+        input_device = next(
+            (arg._device for arg in args if isinstance(arg, TorchMojoTensor)), None
+        )
+        if input_device is not None and out._device != input_device:
+            raise RuntimeError(
+                f"{op_name}: expected out and input tensors to be on the same device"
+            )
+
         aten_fast = _fast()
         result = getattr(aten_fast, fast_name)(*args, **kwargs)
         if result is aten_fast.NOT_HANDLED:
             raise _unsupported(op_name, args, kwargs)
+
+        if out._device != result._device:
+            raise RuntimeError(
+                f"{op_name}: expected out and result tensors to be on the same device"
+            )
+        result_dtype = max_dtype_to_torch_dtype(result._dtype)
+        out_dtype = max_dtype_to_torch_dtype(out._dtype)
+        if dtype_policy == "exact":
+            valid_dtype = result_dtype == out_dtype
+        elif dtype_policy == "bool_or_uint8":
+            valid_dtype = out_dtype in (torch.bool, torch.uint8)
+        elif dtype_policy == "safe_cast":
+            valid_dtype = torch.can_cast(result_dtype, out_dtype)
+        else:
+            raise AssertionError(f"unknown out dtype policy: {dtype_policy}")
+        if not valid_dtype:
+            raise RuntimeError(
+                f"result type {result_dtype} can't be cast to the desired "
+                f"output type {out_dtype}"
+            )
+
         if tuple(result._shape) == tuple(out._shape):
             _copy_into_tensor(out, result)
         else:
-            # torch resizes mismatched out= tensors; rebind the payload.
-            _rebind_payload(out, result)
+            _resize_payload(out, result._shape)
+            _copy_into_tensor(out, result)
         return out
 
     return dispatcher
@@ -174,14 +212,16 @@ def _out_variant(op_name: str, fast_name: str):
 
 @register_aten_op("aten::_copy_from")
 @no_type_check
-def mojo_device__copy_from(self, dest):
+def mojo_device__copy_from(self, dest, non_blocking: bool = False):
     src_is_mojo = isinstance(self, TorchMojoTensor)
     dest_is_mojo = isinstance(dest, TorchMojoTensor)
 
     if src_is_mojo and dest_is_mojo:
         if self._device != dest._device:
             # Cross mojo-device: bounce through the host.
-            bounced = TorchMojoTensor._from_cpu(self._to_cpu_tensor(), dest._device)
+            bounced = TorchMojoTensor._from_cpu(
+                self._to_cpu_tensor(), dest._device, non_blocking=non_blocking
+            )
             _copy_into_tensor(dest, bounced)
             return dest
         _copy_into_tensor(dest, self)
@@ -205,14 +245,17 @@ def mojo_device__copy_from(self, dest):
             if dest._numel > 0:
                 from torch_mojo_backend import eager_kernels
 
-                eager_kernels.tensor_holder.copy_from_host(
+                transfer_owner = eager_kernels.tensor_holder.copy_from_host(
                     eager_kernels._ctx_ptr(dest._device),
                     dest._ptr,
                     cpu.data_ptr(),
                     dest._numel * dest._itemsize,
                 )
+                _record_h2d_source(dest._device, transfer_owner, non_blocking)
         else:
-            staged = TorchMojoTensor._from_cpu(cpu, dest._device)
+            staged = TorchMojoTensor._from_cpu(
+                cpu, dest._device, non_blocking=non_blocking
+            )
             _copy_strided_into(dest, staged)
         return dest
 
@@ -246,7 +289,9 @@ def mojo_device__to_copy(
         t = tensor.detach()
         if dtype is not None and t.dtype != dtype:
             t = t.to(dtype)
-        return TorchMojoTensor._from_cpu(t, find_equivalent_max_device(device))
+        return TorchMojoTensor._from_cpu(
+            t, find_equivalent_max_device(device), non_blocking=non_blocking
+        )
 
     result = tensor
     if dtype is not None:
@@ -267,13 +312,15 @@ def mojo_device__to_copy(
                     if device is not None
                     else result._device
                 )
-                return TorchMojoTensor._from_cpu(cpu, target)
+                return TorchMojoTensor._from_cpu(cpu, target, non_blocking=non_blocking)
     if device is not None and device.type == "cpu":
-        return result._to_cpu_tensor()
+        return result._to_cpu_tensor(non_blocking=non_blocking)
     if device is not None:
         target = find_equivalent_max_device(device)
         if target != result._device:
-            return TorchMojoTensor._from_cpu(result._to_cpu_tensor(), target)
+            return TorchMojoTensor._from_cpu(
+                result._to_cpu_tensor(), target, non_blocking=non_blocking
+            )
     if result is tensor:
         # _to_copy always returns a fresh tensor.
         result = tensor._materialize_contiguous()
@@ -604,8 +651,27 @@ def mojo_device_arange_start_out(start, end, step=1, *, out) -> TorchMojoTensor:
     if tuple(staged._shape) == tuple(out._shape):
         _copy_into_tensor(out, staged)
     else:
-        _rebind_payload(out, staged)
+        _resize_payload(out, staged._shape)
+        _copy_into_tensor(out, staged)
     return out
+
+
+@register_aten_op("aten::cross_entropy_loss")
+@no_type_check
+def mojo_device_cross_entropy_loss(
+    input, target, weight=None, reduction=1, ignore_index=-100, label_smoothing=0.0
+):
+    """Use fused H100 BF16 forward or the exact PyTorch composite body."""
+    aten_fast = _fast()
+    result = aten_fast.fast_bf16_cross_entropy_forward(
+        input, target, weight, reduction, ignore_index, label_smoothing
+    )
+    if result is aten_fast.NOT_HANDLED:
+        return decompose_cross_entropy_loss(
+            input, target, weight, reduction, ignore_index, label_smoothing
+        )
+    loss, _row_max, _row_logsum, _total_weight = result
+    return loss
 
 
 @register_aten_op("aten::normal_")
@@ -660,6 +726,15 @@ def mojo_device_masked_fill_(
     return result
 
 
+@register_aten_op("aten::mul_.Tensor")
+@no_type_check
+def mojo_device_mul_(self: TorchMojoTensor, other) -> TorchMojoTensor:
+    result = _fast().fast_aten_mul_(self, other)
+    if result is None:
+        raise _unsupported("aten::mul_.Tensor", (self, other))
+    return result
+
+
 @register_aten_op("aten::relu_")
 @no_type_check
 def mojo_device_relu_(self: TorchMojoTensor) -> TorchMojoTensor:
@@ -681,11 +756,30 @@ def mojo_device_zero_(self: TorchMojoTensor) -> TorchMojoTensor:
 # Out-variants
 # ----------------------------------------------------------------------------------
 
+register_aten_op("aten::addcdiv.out")(
+    _out_variant("aten::addcdiv.out", "fast_aten_addcdiv")
+)
+register_aten_op("aten::addcmul.out")(
+    _out_variant("aten::addcmul.out", "fast_aten_addcmul")
+)
+register_aten_op("aten::div.out")(_out_variant("aten::div.out", "fast_aten_div"))
+register_aten_op("aten::lerp.Scalar_out")(
+    _out_variant("aten::lerp.Scalar_out", "fast_aten_lerp")
+)
+register_aten_op("aten::linalg_vector_norm.out")(
+    _out_variant(
+        "aten::linalg_vector_norm.out",
+        "fast_aten_linalg_vector_norm",
+        dtype_policy="exact",
+    )
+)
 register_aten_op("aten::mul.out")(_out_variant("aten::mul.out", "fast_aten_mul"))
 register_aten_op("aten::mean.out")(_out_variant("aten::mean.out", "fast_aten_mean"))
-register_aten_op("aten::any.out")(_out_variant("aten::any.out", "fast_aten_any"))
+register_aten_op("aten::any.out")(
+    _out_variant("aten::any.out", "fast_aten_any", dtype_policy="bool_or_uint8")
+)
 register_aten_op("aten::isin.Tensor_Tensor_out")(
-    _out_variant("aten::isin.Tensor_Tensor_out", "fast_aten_isin")
+    _out_variant("aten::isin.Tensor_Tensor_out", "fast_aten_isin", dtype_policy="exact")
 )
 
 
@@ -732,7 +826,8 @@ def mojo_device_min_dim_min(
         if tuple(dst._shape) == tuple(src._shape):
             _copy_into_tensor(dst, src)
         else:
-            _rebind_payload(dst, src)
+            _resize_payload(dst, src._shape)
+            _copy_into_tensor(dst, src)
     return (min, min_indices)
 
 
@@ -758,6 +853,10 @@ _register_fast(
 _register_fast(
     "aten::_scaled_dot_product_flash_attention",
     "fast_aten__scaled_dot_product_flash_attention",
+)
+_register_fast(
+    "aten::_scaled_dot_product_flash_attention_backward",
+    "fast_aten__scaled_dot_product_flash_attention_backward",
 )
 _register_fast("aten::_softmax", "fast_aten__softmax")
 _register_fast("aten::_unsafe_view", "fast_aten__unsafe_view")
@@ -800,6 +899,7 @@ _register_fast("aten::cumsum", "fast_aten_cumsum")
 _register_fast("aten::detach", "fast_aten_detach")
 _register_fast("aten::div.Tensor", "fast_aten_div")
 _register_fast("aten::embedding", "fast_aten_embedding")
+_register_fast("aten::embedding_dense_backward", "fast_aten_embedding_dense_backward")
 _register_fast("aten::eq", "fast_aten_eq")
 _register_fast("aten::eq.Scalar", "fast_aten_eq")
 _register_fast("aten::eq.Tensor", "fast_aten_eq")
@@ -815,6 +915,7 @@ _register_fast("aten::ge", "fast_aten_ge")
 _register_fast("aten::ge.Scalar", "fast_aten_ge")
 _register_fast("aten::ge.Tensor", "fast_aten_ge")
 _register_fast("aten::gelu", "fast_aten_gelu")
+_register_fast("aten::gelu_backward", "fast_aten_gelu_backward")
 _register_fast("aten::gt", "fast_aten_gt")
 _register_fast("aten::gt.Scalar", "fast_aten_gt")
 _register_fast("aten::gt.Tensor", "fast_aten_gt")
@@ -824,6 +925,7 @@ _register_fast("aten::isnan", "fast_aten_isnan")
 _register_fast("aten::le", "fast_aten_le")
 _register_fast("aten::le.Scalar", "fast_aten_le")
 _register_fast("aten::le.Tensor", "fast_aten_le")
+_register_fast("aten::lerp.Scalar", "fast_aten_lerp")
 _register_fast("aten::linear", "fast_aten_linear")
 _register_fast("aten::log", "fast_aten_log")
 _register_fast("aten::log1p", "fast_aten_log1p")
@@ -847,12 +949,21 @@ _register_fast("aten::minimum", "fast_aten_minimum")
 _register_fast("aten::mm", "fast_aten_mm")
 _register_fast("aten::mul.Tensor", "fast_aten_mul")
 _register_fast("aten::native_batch_norm", "fast_aten_native_batch_norm")
+_register_fast("aten::native_dropout", "fast_aten_native_dropout")
+_register_fast("aten::native_dropout_backward", "fast_aten_native_dropout_backward")
 _register_fast("aten::native_group_norm", "fast_aten_native_group_norm")
 _register_fast("aten::native_layer_norm", "fast_aten_native_layer_norm")
+_register_fast(
+    "aten::native_layer_norm_backward", "fast_aten_native_layer_norm_backward"
+)
 _register_fast("aten::ne", "fast_aten_ne")
 _register_fast("aten::ne.Scalar", "fast_aten_ne")
 _register_fast("aten::ne.Tensor", "fast_aten_ne")
 _register_fast("aten::neg", "fast_aten_neg")
+_register_fast(
+    "aten::nll_loss_backward.grad_input", "fast_aten_nll_loss_backward_grad_input"
+)
+_register_fast("aten::nll_loss_forward.output", "fast_aten_nll_loss_forward_output")
 _register_fast("aten::nonzero", "fast_aten_nonzero")
 _register_fast("aten::permute", "fast_aten_permute")
 _register_fast("aten::pow.Tensor_Scalar", "fast_aten_pow")
@@ -906,4 +1017,3 @@ _register_fast("aten::where.self", "fast_aten_where")
 # ----------------------------------------------------------------------------------
 
 _register_missing("aten::_adaptive_avg_pool2d_backward")
-_register_missing("aten::gelu_backward")

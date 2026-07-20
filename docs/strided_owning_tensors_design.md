@@ -117,7 +117,14 @@ kernels are MAX/Mojo. The entire torch-side surface —
 `create_empty_tensor` + `torch.library.impl(op, "privateuseone")` + the
 `__class__` swap — is core `PrivateUse1` machinery present in every torch
 build, and is exactly what the current working setup already uses. No C++
-compiler, no DLPack, no CUDA-specific code.
+compiler or CUDA-specific code is required. The Mojo tensor representation
+does not depend on DLPack; a small pure-Python DLPack capsule is used only at
+explicit storage-adoption boundaries, including when PyTorch adopts the pinned
+CPU destination of an asynchronous D2H transfer. Each exported capsule puts a
+manual Python reference to its complete export state in DLPack `manager_ctx`;
+the consumer's deleter, rather than a replaceable module-global registry, is
+therefore the lifetime root. The state also retains both ctypes callbacks so a
+live CPU alias remains safe across module reload.
 
 > Note: POCs below were run in a **CUDA torch** venv (`2.11.0+cu130`,
 > which happened to be installed). The struct-relevant torch surface
@@ -309,16 +316,26 @@ correctness change.
 | Output alloc `driver.Buffer(dtype, shape, dev)` in `aten_fast._new_buffer` | `ctx.enqueue_create_buffer` in the op → returns holder |
 | `TorchMojoTensor._buffer` / `_from_buffer` / lazy `_max_data` | the `TensorHolder` struct |
 | Kernel unwrap (`_data_ptr()`/`num_elements`/`dtype` GetAttr in `op_utils`) | `downcast_value_ptr` + field reads |
-| H2D — `Buffer.from_dlpack(cpu.detach())` in `mojo_device__copy_from` | `buf.enqueue_copy_from(Span)` from the CPU torch tensor's `data_ptr()` |
-| D2H / `.item()` — `buffer.to_numpy()` | `buf.enqueue_copy_to(host)` + `ctx.synchronize()` |
+| H2D — `Buffer.from_dlpack(cpu.detach())` in `mojo_device__copy_from` | CPU `memcpy` into an exact-size MAX `HostBuffer`, then asynchronous pinned `buf.enqueue_copy_from`; Python retains the pinned owner behind a stream event |
+| D2H / `.item()` — `buffer.to_numpy()` | Blocking D2H copies into ordinary torch CPU storage and synchronizes; non-blocking GPU D2H enqueues into a MAX `HostBuffer`, exposes it as a CPU tensor through pure-Python DLPack, and retains both source and destination behind a stream event |
 | dtype cast — `_to_copy` via graph | Mojo cast kernel (fast cast already exists) |
 | free — `driver.Buffer` GC | holder `__del__` → `DeviceBuffer` stream-ordered free |
 
 Relevant Mojo APIs (`std/gpu/host/device_context.mojo`, verified present):
-`enqueue_create_buffer`, `DeviceBuffer.enqueue_copy_to`/`enqueue_copy_from`
-(overloads for `HostBuffer`, `DeviceBuffer`, and `Span[Scalar]` — the
-`Span` overload copies to/from an arbitrary host pointer region, so no
-`driver.Buffer` and no numpy is needed for host transfers),
+`enqueue_create_buffer`, `enqueue_create_host_buffer`, and
+`DeviceBuffer.enqueue_copy_to`/`enqueue_copy_from` (overloads for
+`HostBuffer`, `DeviceBuffer`, and `Span[Scalar]`). A pageable `Span` is valid,
+but a large GPU H2D from it may stage by draining earlier stream work. The
+implementation therefore performs the host-side copy into MAX-owned pinned
+memory first and retains that `HostBuffer` until a recorded stream event says
+DMA is complete. Non-blocking GPU D2H uses the inverse arrangement: MAX owns
+the pinned destination, PyTorch adopts it as CPU storage, and an event retains
+both that destination and the source holder until DMA completes. Blocking D2H
+and scalar reads continue to synchronize before exposing ordinary CPU memory.
+The DLPack deleter clears `manager_ctx` before dropping its one manual owner,
+so consumed and unconsumed capsules release exactly once; callback helpers are
+captured per export to remain valid across `importlib.reload`.
+This needs neither `driver.Buffer`, numpy, nor torch-cuda.
 `DeviceContext.synchronize`, and the owning-from-external-pointer
 `DeviceBuffer.__init__(ctx, ptr, size, *, owning=True/False)`.
 
@@ -347,8 +364,9 @@ strides too and need the same stride-awareness or guard.
    move output allocation into the ops (`enqueue_create_buffer`). Keep the
    `create_empty_tensor` meta wrapper + `__class__` swap unchanged.
 3. **Stride-aware `.contiguous()`** copy kernel + **H2D/D2H/`.item()`** on
-   the holder (`enqueue_copy_*` + `synchronize`). This removes the last
-   `driver.Buffer` uses.
+   the holder. Blocking host reads synchronize; non-blocking GPU transfers
+   use MAX-owned pinned staging/destinations with event-based lifetime
+   retention. This removes the last `driver.Buffer` uses.
 4. **One stride-aware elementwise kernel** + `permute`/`slice` returning
    **zero-copy strided holders**; verify a non-materializing
    `permute`/`slice` against CPU on `mojo_device`.

@@ -81,9 +81,12 @@ def _percentile(sorted_samples: List[Float64], numerator: Int) -> Float64:
     if remainder == 0:
         return sorted_samples[lower]
     var upper = lower + 1
-    return sorted_samples[lower] + (
-        sorted_samples[upper] - sorted_samples[lower]
-    ) * Float64(remainder) / 100.0
+    return (
+        sorted_samples[lower]
+        + (sorted_samples[upper] - sorted_samples[lower])
+        * Float64(remainder)
+        / 100.0
+    )
 
 
 def main() raises:
@@ -111,19 +114,15 @@ def main() raises:
         _enqueue_fill(
             b_buf.unsafe_ptr().as_unsafe_any_origin(), k * n, half, ctx
         )
-        _enqueue_fill(
-            bias_buf.unsafe_ptr().as_unsafe_any_origin(), n, one, ctx
-        )
+        _enqueue_fill(bias_buf.unsafe_ptr().as_unsafe_any_origin(), n, one, ctx)
 
-        var a = TileTensor[mut=False](
-            a_buf, row_major(Coord(m, k))
-        )
-        var b = TileTensor[mut=False](
-            b_buf, row_major(Coord(k, n))
-        )
+        var a = TileTensor[mut=False](a_buf, row_major(Coord(m, k)))
+        var b = TileTensor[mut=False](b_buf, row_major(Coord(k, n)))
         var c = TileTensor[mut=True](c_buf, row_major(Coord(m, n)))
         var c_ptr = c_buf.unsafe_ptr().as_unsafe_any_origin()
-        var bias_ptr = bias_buf.unsafe_ptr().as_unsafe_any_origin().as_immutable()
+        var bias_ptr = (
+            bias_buf.unsafe_ptr().as_unsafe_any_origin().as_immutable()
+        )
 
         @always_inline
         @parameter
@@ -134,9 +133,10 @@ def main() raises:
             var row = Int(coords[0])
             var col = Int(coords[1])
             var off = row * n + col
-            var result = value.cast[DType.float32]() + bias_ptr.load[
-                width=width
-            ](col).cast[DType.float32]()
+            var result = (
+                value.cast[DType.float32]()
+                + bias_ptr.load[width=width](col).cast[DType.float32]()
+            )
             c_ptr.store[width=width, alignment=4](
                 off, result.cast[DType.bfloat16]()
             )
@@ -182,6 +182,7 @@ def main() raises:
                     UInt32(config.shared_mem_usage())
                 ),
             )
+
         comptime if DUMP_ASM:
             ctx.enqueue_function[kernel, dump_asm=True](
                 c,
@@ -232,15 +233,34 @@ def main() raises:
         var flops = 2.0 * Float64(m) * Float64(n) * Float64(k)
         var tflops = flops / (median * 1.0e6)
         print(
-            "shape=", m, "x", n, "x", k,
-            " config=", BM, "x", BN, "x", BK,
-            " warp=", WM, "x", WN,
-            " warp_k=", WARP_K,
-            " stages=", STAGES,
-            " median_us=", median,
-            " p10_us=", p10,
-            " p90_us=", p90,
-            " tflops=", tflops,
+            "shape=",
+            m,
+            "x",
+            n,
+            "x",
+            k,
+            " config=",
+            BM,
+            "x",
+            BN,
+            "x",
+            BK,
+            " warp=",
+            WM,
+            "x",
+            WN,
+            " warp_k=",
+            WARP_K,
+            " stages=",
+            STAGES,
+            " median_us=",
+            median,
+            " p10_us=",
+            p10,
+            " p90_us=",
+            p90,
+            " tflops=",
+            tflops,
             " correctness=pass",
         )
 

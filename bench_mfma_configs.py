@@ -12,7 +12,6 @@ import torch
 
 from torch_mojo_backend import get_accelerators, register_mojo_devices
 
-
 CONFIGS = {
     0: "bm32_bn64_wm16_wn32_bk32",
     1: "bm32_bn128_wm16_wn64_bk32",
@@ -98,9 +97,10 @@ def main():
 
     register_mojo_devices()
     device = list(get_accelerators())[0]
+    from max.dtype import DType
+
     from torch_mojo_backend.eager_kernels import _ctx_ptr, matmul_ops, tensor_holder
     from torch_mojo_backend.mojo_device.torch_mojo_tensor import TorchMojoTensor
-    from max.dtype import DType
 
     ctx = _ctx_ptr(device)
 

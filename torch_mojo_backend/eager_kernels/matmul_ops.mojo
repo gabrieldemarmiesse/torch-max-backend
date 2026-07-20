@@ -937,13 +937,17 @@ def _amd_dynamic_mfma_edge_kernel[
             var bv = b[col * k + kk + u] if transpose_b else b[
                 (kk + u) * n + col
             ]
-            acc = a[row * k + kk + u].cast[DType.float32]().fma(
-                bv.cast[DType.float32](), acc
+            acc = (
+                a[row * k + kk + u]
+                .cast[DType.float32]()
+                .fma(bv.cast[DType.float32](), acc)
             )
     for kk in range(k4, k):
         var bv = b[col * k + kk] if transpose_b else b[kk * n + col]
-        acc = a[row * k + kk].cast[DType.float32]().fma(
-            bv.cast[DType.float32](), acc
+        acc = (
+            a[row * k + kk]
+            .cast[DType.float32]()
+            .fma(bv.cast[DType.float32](), acc)
         )
     comptime if fuse_bias:
         acc += bias[col].cast[DType.float32]()
@@ -1009,16 +1013,15 @@ def _amd_dynamic_mfma_gemm[
         var col = Int(coords[1])
         var off = row * n + col
         if col + width <= n:
-            var result = value.cast[F32]() + bias_ptr.load[width=width](
-                col
-            ).cast[F32]()
+            var result = (
+                value.cast[F32]() + bias_ptr.load[width=width](col).cast[F32]()
+            )
             c_ptr.store[width=width, alignment=4](off, result.cast[dtype]())
         else:
             comptime for i in range(width):
                 if col + i < n:
                     c_ptr[off + i] = (
-                        value[i].cast[F32]()
-                        + bias_ptr[col + i].cast[F32]()
+                        value[i].cast[F32]() + bias_ptr[col + i].cast[F32]()
                     ).cast[dtype]()
 
     comptime bias_epilogue = Optional[elementwise_epilogue_type](_bias_store)
@@ -1145,9 +1148,7 @@ def _amd_dynamic_mfma_dispatch[
                 ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
                 return True
     if m >= 128 and n >= 8192 and k >= 128:
-        _amd_dynamic_mfma_gemm[
-            dtype, 128, 128, 64, 64, transpose_b, fuse_bias
-        ](
+        _amd_dynamic_mfma_gemm[dtype, 128, 128, 64, 64, transpose_b, fuse_bias](
             c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
         )
     elif k >= 2048 and k >= 2 * n:
@@ -1171,13 +1172,9 @@ def _amd_dynamic_mfma_dispatch[
         else:
             _amd_dynamic_mfma_gemm[
                 dtype, 32, 32, 16, 16, transpose_b, fuse_bias
-            ](
-                c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
-            )
+            ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
     else:
-        _amd_dynamic_mfma_gemm[
-            dtype, 32, 64, 16, 32, transpose_b, fuse_bias
-        ](
+        _amd_dynamic_mfma_gemm[dtype, 32, 64, 16, 32, transpose_b, fuse_bias](
             c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
         )
     return True
@@ -1206,33 +1203,33 @@ def _amd_bf16_tune_dispatcher(
     var ctx = _get_ctx(device_context_ptr)
 
     if cfg == 0:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 32, 64, 16, 32, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 32, 64, 16, 32, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 1:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 32, 128, 16, 64, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 32, 128, 16, 64, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 2:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 32, 128, 32, 64, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 32, 128, 32, 64, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 3:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 64, 64, 32, 32, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 64, 64, 32, 32, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 4:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 64, 128, 32, 64, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 64, 128, 32, 64, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 5:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 96, 64, 48, 32, False, True, 64
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 96, 64, 48, 32, False, True, 64](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 6:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 128, 64, 64, 32, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 128, 64, 64, 32, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 7:
         _amd_dynamic_mfma_gemm[
             DType.bfloat16, 32, 32, 32, 32, False, True, 64, 2
@@ -1262,24 +1259,23 @@ def _amd_bf16_tune_dispatcher(
             DType.bfloat16, 32, 64, 16, 32, False, True, 64, 1, 2
         ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
     elif cfg == 18:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 16, 32, 16, 32, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 16, 32, 16, 32, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 19:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 16, 64, 16, 32, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 16, 64, 16, 32, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 20:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 64, 32, 32, 32, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 64, 32, 32, 32, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     elif cfg == 22:
-        _amd_dynamic_mfma_gemm[
-            DType.bfloat16, 128, 32, 64, 32, False, True
-        ](c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx)
+        _amd_dynamic_mfma_gemm[DType.bfloat16, 128, 32, 64, 32, False, True](
+            c_addr, a_addr, b_addr, bias_addr, m, n, k, ctx
+        )
     else:
         raise Error("unknown AMD BF16 MFMA tune config")
-
 
 
 # ---------------------------------------------------------------------------

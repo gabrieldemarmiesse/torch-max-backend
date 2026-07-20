@@ -21,22 +21,68 @@ backend keeps using `aten_functions` directly.
 """
 
 import math
+import struct
+import warnings
 from typing import no_type_check
 
+import torch
 from max.dtype import DType
 
 from torch_mojo_backend import eager_kernels, is_running_tests
 from torch_mojo_backend.eager_kernels import _ctx_ptr
+from torch_mojo_backend.mojo_device.torch_mojo_device_module import (
+    _reserve_philox_state,
+)
 from torch_mojo_backend.mojo_device.torch_mojo_tensor import (
     TorchMojoTensor,
     _copy_strided_into,
     _pad8,
+    _resize_payload,
     _row_major_strides,
 )
 
 # Returned when the inputs don't qualify; the registration then raises
 # NotImplementedError naming the op (there is no fallback anymore).
 NOT_HANDLED = object()
+
+# The host/autograd route is landed before Fable's separately validated kernel
+# port.  Do not ask mojo.importer to compile the thin bridge until every source
+# it imports exists; a missing optional source would otherwise make ordinary
+# eager SDPA backward pay for a predictably failing compiler subprocess.
+_SDPA_BACKWARD_SOURCE_PATHS = (
+    eager_kernels._PACKAGE_DIR / "sdpa_backward_ops.mojo",
+    eager_kernels._PACKAGE_DIR / "sdpa_dropout_softmax_backward_kernels.mojo",
+)
+
+# Keep the optional BF16 bridge dormant until the bridge, optimized dispatcher,
+# and accepted fallback all exist. A partial dependency closure would otherwise
+# launch a predictably failing compile before an ordinary eager matmul.
+_BF16_SOURCE_PATHS = (
+    eager_kernels._PACKAGE_DIR / "bf16_matmul_ops.mojo",
+    eager_kernels._PACKAGE_DIR / "bf16_gemm_v3_kernels.mojo",
+    eager_kernels._PACKAGE_DIR / "bf16_gemm_kernels.mojo",
+)
+_BF16_IMPORT_FAILED = False
+
+# Fused BF16 index-target cross entropy is installed independently from its
+# GPT-SOL-owned device kernel. Keep the route dormant until both the pointer
+# bridge and kernel source are present; ordinary cross entropy must retain its
+# CompositeImplicitAutograd decomposition without paying for a doomed import.
+_BF16_CROSS_ENTROPY_SOURCE_PATHS = (
+    eager_kernels._PACKAGE_DIR / "bf16_cross_entropy_ops.mojo",
+    eager_kernels._PACKAGE_DIR / "bf16_cross_entropy_kernels.mojo",
+)
+_BF16_CROSS_ENTROPY_IMPORT_FAILED = False
+
+# The TF32 host route is useful before the separately profiled Fable kernel is
+# installed, but the thin bridge imports that kernel unconditionally.  Avoid a
+# predictably failing lazy compile (and an unnecessary output allocation) while
+# either source is absent from a source checkout or wheel.
+_TF32_SOURCE_PATHS = (
+    eager_kernels._PACKAGE_DIR / "tf32_matmul_ops.mojo",
+    eager_kernels._PACKAGE_DIR / "tf32_gemm_kernels.mojo",
+)
+_TF32_IMPORT_FAILED = False
 
 # The Mojo kernels raise (instead of falling back) on dtypes they don't
 # support; gate float-only ops here.
@@ -138,8 +184,9 @@ _view_of = TorchMojoTensor._view_of
 # kernels (binary/comparison in logic_ops, relu/batch_norm still in
 # tensor_holder) and do checks, broadcast, output alloc and kernel launch
 # in one boundary call, raising a real NotImplementedError when the inputs
-# don't qualify — the callers below treat any exception as "take the
-# classic path". make_spec (the constructor) stays in tensor_holder.
+# don't qualify — the callers below treat unsupported-input exceptions as
+# "take the classic path", while allocator OOMs propagate. make_spec (the
+# constructor) stays in tensor_holder.
 # ---------------------------------------------------------------------------
 
 
@@ -202,6 +249,7 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
             b = _tc(b)
         if a._dtype != b._dtype:
             # torch's promotion rules (the only pairs the loops hit).
+            cast_both = False
             if a._dtype == DType.bool and b._dtype in _CAST_DTYPES:
                 cast_a, dtype = True, b._dtype
             elif b._dtype == DType.bool and a._dtype in _CAST_DTYPES:
@@ -210,10 +258,30 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
                 cast_a, dtype = True, DType.int64
             elif a._dtype == DType.int64 and b._dtype == DType.int32:
                 cast_a, dtype = False, DType.int64
+            elif a._dtype == DType.float32 and b._dtype in (
+                DType.float16,
+                DType.bfloat16,
+            ):
+                cast_a, dtype = False, DType.float32
+            elif b._dtype == DType.float32 and a._dtype in (
+                DType.float16,
+                DType.bfloat16,
+            ):
+                cast_a, dtype = True, DType.float32
+            elif {a._dtype, b._dtype} == {DType.float16, DType.bfloat16}:
+                cast_both = True
+                dtype = DType.float32
             else:
                 return None
             try:
-                if cast_a:
+                if cast_both:
+                    keep_a, spec_a, _, _ = eager_kernels.data_movement_ops.CastSpec(
+                        _spec_of(a), dtype.value
+                    )
+                    keep_b, spec_b, _, _ = eager_kernels.data_movement_ops.CastSpec(
+                        _spec_of(b), dtype.value
+                    )
+                elif cast_a:
                     keep_a, spec_a, _, _ = eager_kernels.data_movement_ops.CastSpec(
                         _spec_of(a), dtype.value
                     )
@@ -221,7 +289,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
                     keep_b, spec_b, _, _ = eager_kernels.data_movement_ops.CastSpec(
                         _spec_of(b), dtype.value
                     )
-            except Exception:
+            except Exception as exc:
+                _raise_if_device_oom(exc)
                 return None
     elif a is not None:
         device = a._device
@@ -233,7 +302,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
             keep_b, spec_b, _, _ = eager_kernels.elementwise_ops.FillSpec(
                 _pad8((), 1), 0, 1, value, dtype.value, _ctx_ptr(device)
             )
-        except Exception:
+        except Exception as exc:
+            _raise_if_device_oom(exc)
             return None
     elif b is not None:
         # Scalar-first calls, e.g. rsub-style `1 - tensor`.
@@ -246,7 +316,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
             keep_a, spec_a, _, _ = eager_kernels.elementwise_ops.FillSpec(
                 _pad8((), 1), 0, 1, value, dtype.value, _ctx_ptr(device)
             )
-        except Exception:
+        except Exception as exc:
+            _raise_if_device_oom(exc)
             return None
     else:
         return None
@@ -255,7 +326,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
             spec_a if spec_a is not None else _spec_of(a),
             spec_b if spec_b is not None else _spec_of(b),
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     _ = keep_a, keep_b  # intermediates must outlive the enqueued launch
     return _wrap_spec_result(result, out_dtype or dtype, device)
@@ -272,7 +344,8 @@ def _try_spec_unary(spec_fn_name, x, out_dtype=None, module_name="elementwise_op
         return None
     try:
         result = getattr(getattr(eager_kernels, module_name), spec_fn_name)(_spec_of(a))
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
 
@@ -288,7 +361,8 @@ def _try_spec_reduce(
         result = getattr(getattr(eager_kernels, module_name), spec_fn_name)(
             _spec_of(a), tuple(rdims), 1 if keepdim else 0, *extra
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
 
@@ -302,6 +376,31 @@ def _wrap_spec_pair(result, dtype0, dtype1, device):
     )
 
 
+_DEVICE_OOM_MARKERS = (
+    "cuda_error_out_of_memory",
+    "hiperroroutofmemory",
+    "out of memory",
+    "failed to allocate device memory",
+    "halerror (code = -13",
+)
+
+
+@no_type_check
+def _raise_if_device_oom(exc):
+    """Keep TensorSpec fallbacks from disguising allocator exhaustion.
+
+    Mojo TensorSpec dispatch reports both unsupported metadata and runtime
+    launch/allocation failures as ``NotImplementedError``. Unsupported
+    metadata should retain the classic fallback, but retrying after a device
+    OOM only replaces the useful allocator error with a misleading
+    ``aten::<op> is not supported`` message.
+    """
+    message = str(exc)
+    folded = message.casefold()
+    if any(marker in folded for marker in _DEVICE_OOM_MARKERS):
+        raise torch.OutOfMemoryError(message) from exc
+
+
 @no_type_check
 def _try_spec_matmul(spec_fn_name, tensors, transpose_b):
     """Matmul-family spec op over already-typed operands, or None. The spec
@@ -313,7 +412,8 @@ def _try_spec_matmul(spec_fn_name, tensors, transpose_b):
         result = getattr(eager_kernels.matmul_ops, spec_fn_name)(
             *[_spec_of(t) for t in ts], transpose_b
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, ts[0]._dtype, ts[0]._device)
 
@@ -330,7 +430,8 @@ def _try_spec_scalar(spec_fn_name, x, scalar):
         result = getattr(eager_kernels.elementwise_ops, spec_fn_name)(
             _spec_of(a), float(scalar)
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, a._dtype, a._device)
 
@@ -347,7 +448,8 @@ def _try_spec_int_scalar(spec_fn_name, x, scalar):
         result = getattr(eager_kernels.elementwise_ops, spec_fn_name)(
             _spec_of(a), scalar
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, a._dtype, a._device)
 
@@ -355,6 +457,30 @@ def _try_spec_int_scalar(spec_fn_name, x, scalar):
 @no_type_check
 def _on_gpu(t: TorchMojoTensor) -> bool:
     return t._device.label == "gpu"
+
+
+@no_type_check
+def _alert_not_deterministic(caller: str) -> None:
+    """Match PyTorch's deterministic-algorithm error/warn-only contract."""
+    if not torch.are_deterministic_algorithms_enabled():
+        return
+    if torch.is_deterministic_algorithms_warn_only_enabled():
+        warnings.warn(
+            f"{caller} does not have a deterministic implementation, but you set "
+            "'torch.use_deterministic_algorithms(True, warn_only=True)'. "
+            "You can file an issue at https://github.com/pytorch/pytorch/issues "
+            "to help us prioritize adding deterministic support for this operation.",
+            stacklevel=2,
+        )
+        return
+    raise RuntimeError(
+        f"{caller} does not have a deterministic implementation, but you set "
+        "'torch.use_deterministic_algorithms(True)'. You can turn off "
+        "determinism just for this operation, or you can use the "
+        "'warn_only=True' option, if that's acceptable for your application. "
+        "You can also file an issue at https://github.com/pytorch/pytorch/issues "
+        "to help us prioritize adding deterministic support for this operation."
+    )
 
 
 @no_type_check
@@ -368,6 +494,33 @@ def _copy_into(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
         )
     else:
         _copy_strided_into(dst, src)
+
+
+@no_type_check
+def _valid_nll_out(tensor, dtype, device) -> bool:
+    """Whether an NLL out= tensor may be written or resized in place."""
+    out = _t(tensor)
+    return out is not None and out._dtype == dtype and out._device == device
+
+
+@no_type_check
+def _prepare_nll_out(out: TorchMojoTensor, shape):
+    """Return a contiguous NLL kernel destination for ``out``.
+
+    Validation is deliberately separate: callers validate every input and
+    output before entering this helper so a rejected call never partially
+    resizes its supplied outputs. A wrong-shaped output is rebound to fresh
+    contiguous storage (the eager out= resize convention). A correctly-shaped
+    view keeps its storage and receives one ordered strided copy after the
+    kernel. The common contiguous path writes directly into the supplied out.
+    """
+    shape = tuple(shape)
+    if tuple(out._shape) != shape:
+        _resize_payload(out, shape)
+        return out
+    if out._is_contiguous:
+        return out
+    return _alloc(shape, out._dtype, out._device)
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +790,24 @@ def fast_aten_mul(input, other):
 
 
 @no_type_check
+def fast_aten_mul_(input, other):
+    """In-place multiply used by the foreach gradient-clipping slow path."""
+    dst = _t(input)
+    if dst is None:
+        return None
+    result = fast_aten_mul(input, other)
+    if (
+        result is NOT_HANDLED
+        or result._shape != dst._shape
+        or result._dtype != dst._dtype
+        or result._device != dst._device
+    ):
+        return None
+    _copy_into(dst, result)
+    return input
+
+
+@no_type_check
 def fast_aten_div(input, other, *, rounding_mode=None):
     if rounding_mode is not None:
         return NOT_HANDLED
@@ -667,9 +838,56 @@ def fast_aten_div(input, other, *, rounding_mode=None):
 
 
 @no_type_check
+def fast_aten_lerp(self, end, weight):
+    """FP32 scalar lerp composed from the existing asynchronous fast ops.
+
+    Match ATen's numerically stable branch from ``native/Lerp.h``.  Keeping
+    this as a host composition is sufficient for the foreach AdamW slow path:
+    tensor values stay on the accelerator and every constituent launch uses
+    the tensors' current device context.
+    """
+    start = _t(self)
+    finish = _t(end)
+    if (
+        start is None
+        or finish is None
+        or start._device != finish._device
+        or start._dtype != DType.float32
+        or finish._dtype != DType.float32
+        or not isinstance(weight, int | float)
+        or isinstance(weight, bool)
+    ):
+        return NOT_HANDLED
+
+    # ATen narrows Scalar to the tensor's opmath type before choosing the
+    # stable formula.  In particular, values just below 0.5 can round to
+    # exactly 0.5 and must take the second branch.
+    try:
+        narrowed_weight = struct.unpack("=f", struct.pack("=f", weight))[0]
+    except (OverflowError, struct.error) as exc:
+        # Scalar conversion is part of the ATen contract: finite values that
+        # do not fit the tensor's opmath type are rejected rather than
+        # silently becoming +/-inf.  Actual infinity remains representable
+        # and therefore reaches the kernel normally.
+        raise RuntimeError(
+            "value cannot be converted to type float without overflow"
+        ) from exc
+
+    difference = fast_aten_sub(finish, start)
+    if difference is NOT_HANDLED:
+        return NOT_HANDLED
+    if abs(narrowed_weight) < 0.5:
+        return fast_aten_add(start, difference, alpha=narrowed_weight)
+    one_minus_weight = struct.unpack("=f", struct.pack("=f", 1.0 - narrowed_weight))[0]
+    return fast_aten_sub(finish, difference, alpha=one_minus_weight)
+
+
+@no_type_check
 def fast_aten_fill_scalar(input, value):
     """Functional fill: new tensor, same shape/dtype, all elements = value."""
-    if not isinstance(value, int | float) or isinstance(value, bool):
+    # ``bool`` is a Python ``int`` subclass and ATen accepts it for every
+    # scalar-fill dtype (most importantly for mutating saved bool masks).
+    if not isinstance(value, int | float):
         return NOT_HANDLED
     a = _t(input)
     if a is None or a._dtype not in _FILL_DTYPES:
@@ -681,7 +899,7 @@ def fast_aten_fill_scalar(input, value):
 @no_type_check
 def fast_aten_fill__scalar(input, value):
     """In-place fill of input (any strides). Returns None when unavailable."""
-    if not isinstance(value, int | float) or isinstance(value, bool):
+    if not isinstance(value, int | float):
         return None
     a = _t(input)
     if a is None:
@@ -884,6 +1102,44 @@ def fast_aten_gelu(input, approximate="none"):
 
 
 @no_type_check
+def fast_aten_gelu_backward(grad_output, self, *, approximate="none"):
+    """Float32/BFloat16 GPU GELU backward through Fable-owned Mojo kernels."""
+    grad = _t(grad_output)
+    input = _t(self)
+    dtype = input._dtype if input is not None else None
+    if (
+        approximate not in ("none", "tanh")
+        or grad is None
+        or input is None
+        or not _on_gpu(input)
+        or grad._device != input._device
+        or grad._dtype != dtype
+        or dtype not in (DType.float32, DType.bfloat16)
+        or tuple(grad._shape) != tuple(input._shape)
+    ):
+        return NOT_HANDLED
+
+    grad = _tc(grad)
+    input = _tc(input)
+    out = _alloc(input._shape, dtype, input._device)
+    if out._numel > 0:
+        kernel = (
+            eager_kernels.activation_backward_ops.GeluBackwardBF16
+            if dtype == DType.bfloat16
+            else eager_kernels.activation_backward_ops.GeluBackwardF32
+        )
+        kernel(
+            out._ptr,
+            grad._ptr,
+            input._ptr,
+            out._numel,
+            int(approximate == "tanh"),
+            _ctx_ptr(input._device),
+        )
+    return out
+
+
+@no_type_check
 def fast_aten_isnan(x):
     result = _try_spec_unary("IsNanSpec", x, DType.bool)
     return result if result is not None else NOT_HANDLED
@@ -1063,7 +1319,8 @@ def _try_logical(spec_fn_name, input, other):
                 _spec_of(b), DType.bool.value
             )
         result = getattr(eager_kernels.logic_ops, spec_fn_name)(spec_a, spec_b)
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     _ = keep_a, keep_b  # intermediates must outlive the enqueued launch
     return _wrap_spec_result(result, DType.bool, a._device)
@@ -2035,7 +2292,8 @@ def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, e
                 _spec_of(stats[3]),
                 float(eps),
             )
-        except Exception:
+        except Exception as exc:
+            _raise_if_device_oom(exc)
             pass
         else:
             out = _wrap_spec_result(result, a._dtype, a._device)
@@ -2093,8 +2351,116 @@ def fast_aten__native_batch_norm_legit_no_training(
 
 
 @no_type_check
+def fast_aten_native_dropout(input, p, train):
+    """Contiguous float32 GPU native dropout with host-owned RNG state.
+
+    The Fable-owned Mojo kernel is stateless: this host path atomically
+    reserves the exact Philox4 interval and passes its full seed/counter as
+    four 32-bit limbs.  Keeping every Python integer below ``2**32`` avoids
+    ``Py_ssize_t`` overflow in the raw CPython bridge while preserving all 64
+    bits of both values.
+    """
+    a = _t(input)
+    if (
+        a is None
+        or not _on_gpu(a)
+        or a._dtype != DType.float32
+        or (train is not None and type(train) is not bool)
+    ):
+        return NOT_HANDLED
+
+    # Match native_dropout's inference shortcut: p is deliberately ignored,
+    # including an otherwise invalid or NaN value, and RNG state is untouched.
+    if train is False:
+        output = fast_aten_clone(a)
+        mask = fast_filled(a._shape, True, DType.bool, a._device)
+        if output is NOT_HANDLED or mask is None:
+            return NOT_HANDLED
+        return output, mask
+
+    if not isinstance(p, int | float) or not 0.0 <= p <= 1.0:
+        raise RuntimeError(
+            f"dropout probability has to be between 0 and 1, but got {p}"
+        )
+    p = float(p)
+
+    # Return distinct tensors even for an empty input, without a zero-grid
+    # launch or a zero-length generator reservation.
+    if a._numel == 0:
+        return (
+            _alloc(a._shape, DType.float32, a._device),
+            _alloc(a._shape, DType.bool, a._device),
+        )
+
+    # PyTorch's GPU endpoint shortcut neither divides by zero nor consumes
+    # generator state.
+    if p == 1.0:
+        output = fast_filled(a._shape, 0.0, DType.float32, a._device)
+        mask = fast_filled(a._shape, False, DType.bool, a._device)
+        if output is None or mask is None:
+            return NOT_HANDLED
+        return output, mask
+
+    # Validate and allocate before changing generator state.  No operation
+    # after the reservation reads the host or synchronizes the device queue.
+    a = _tc(a)
+    output = _alloc(a._shape, DType.float32, a._device)
+    mask = _alloc(a._shape, DType.bool, a._device)
+    kernel = eager_kernels.dropout_ops.NativeDropoutF32
+    seed, base_offset = _reserve_philox_state(a._torch_device, (a._numel + 3) // 4)
+    word_mask = (1 << 32) - 1
+    kernel(
+        output._ptr,
+        mask._ptr,
+        a._ptr,
+        a._numel,
+        p,
+        seed & word_mask,
+        (seed >> 32) & word_mask,
+        base_offset & word_mask,
+        (base_offset >> 32) & word_mask,
+        _ctx_ptr(a._device),
+    )
+    return output, mask
+
+
+@no_type_check
+def fast_aten_native_dropout_backward(grad_output, mask, scale):
+    """Float32 GPU native-dropout backward through the saved bool mask."""
+    grad = _t(grad_output)
+    keep = _t(mask)
+    if (
+        grad is None
+        or keep is None
+        or not _on_gpu(grad)
+        or grad._dtype != DType.float32
+        or keep._dtype != DType.bool
+        or keep._device != grad._device
+        or tuple(keep._shape) != tuple(grad._shape)
+        or not isinstance(scale, int | float)
+    ):
+        return NOT_HANDLED
+
+    grad = _tc(grad)
+    keep = _tc(keep)
+    grad_input = _alloc(grad._shape, DType.float32, grad._device)
+    if grad._numel > 0:
+        kernel = eager_kernels.dropout_ops.NativeDropoutBackwardF32
+        kernel(
+            grad_input._ptr,
+            grad._ptr,
+            keep._ptr,
+            grad._numel,
+            float(scale),
+            _ctx_ptr(grad._device),
+        )
+    return grad_input
+
+
+@no_type_check
 def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
-    a = _tc(input)
+    a = _t(input)
+    normalized_shape = tuple(normalized_shape)
     k = len(normalized_shape)
     if (
         a is None
@@ -2102,7 +2468,7 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
         or a._dtype not in _FLOAT_DTYPES
         or k < 1
         or len(a._shape) < k
-        or tuple(a._shape[-k:]) != tuple(normalized_shape)
+        or tuple(a._shape[-k:]) != normalized_shape
     ):
         return NOT_HANDLED
     cols = 1
@@ -2111,15 +2477,33 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
     rows = a._numel // cols
     # weight/bias are optional (no-affine layer norm): default to 1s / 0s.
     if weight is not None:
-        gamma = _tc(weight)
-        if gamma is None or gamma._dtype != a._dtype or gamma._numel != cols:
+        gamma = _t(weight)
+        if (
+            gamma is None
+            or gamma._dtype != a._dtype
+            or gamma._device != a._device
+            or tuple(gamma._shape) != normalized_shape
+        ):
             return NOT_HANDLED
+    if bias is not None:
+        beta = _t(bias)
+        if (
+            beta is None
+            or beta._dtype != a._dtype
+            or beta._device != a._device
+            or tuple(beta._shape) != normalized_shape
+        ):
+            return NOT_HANDLED
+
+    # Materialize only after all metadata has been validated, so a rejected
+    # cross-device or wrong-shape call cannot enqueue partial work.
+    a = _tc(a)
+    if weight is not None:
+        gamma = _tc(gamma)
     else:
         gamma = fast_filled((cols,), 1.0, a._dtype, a._device)
     if bias is not None:
-        beta = _tc(bias)
-        if beta is None or beta._dtype != a._dtype or beta._numel != cols:
-            return NOT_HANDLED
+        beta = _tc(beta)
     else:
         beta = fast_filled((cols,), 0.0, a._dtype, a._device)
     # Not spec-converted: the classic prologue here is already thin, and
@@ -2143,6 +2527,126 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
         _ctx_ptr(a._device),
     )
     return out, mean, rstd
+
+
+@no_type_check
+def fast_aten_native_layer_norm_backward(
+    grad_out, input, normalized_shape, mean, rstd, weight, bias, output_mask
+):
+    """Direct eager LayerNorm backward for the pure-Mojo f32 GPU kernels.
+
+    Validate every tensor from Python-side metadata before materializing a
+    view or allocating an output. Besides keeping rejected calls free of
+    partial device work, this lets the Fable-owned kernels keep a compact
+    pointer-only ABI while preserving ATen's optional-output contract.
+    """
+    grad = _t(grad_out)
+    a = _t(input)
+    saved_mean = _t(mean)
+    saved_rstd = _t(rstd)
+    gamma = _t(weight) if weight is not None else None
+    beta = _t(bias) if bias is not None else None
+    normalized_shape = tuple(normalized_shape)
+    mask = tuple(output_mask)
+    k = len(normalized_shape)
+
+    if (
+        len(mask) != 3
+        or any(not isinstance(requested, bool) for requested in mask)
+        or grad is None
+        or a is None
+        or saved_mean is None
+        or saved_rstd is None
+        or not _on_gpu(a)
+        or a._dtype != DType.float32
+        or grad._dtype != DType.float32
+        or saved_mean._dtype != DType.float32
+        or saved_rstd._dtype != DType.float32
+        or grad._device != a._device
+        or saved_mean._device != a._device
+        or saved_rstd._device != a._device
+        or tuple(grad._shape) != tuple(a._shape)
+        or k < 1
+        or len(a._shape) < k
+        or tuple(a._shape[-k:]) != normalized_shape
+    ):
+        return NOT_HANDLED
+
+    cols = math.prod(normalized_shape)
+    if cols <= 0:
+        return NOT_HANDLED
+    rows = a._numel // cols
+    if saved_mean._numel != rows or saved_rstd._numel != rows:
+        return NOT_HANDLED
+
+    if weight is not None and (
+        gamma is None
+        or gamma._dtype != DType.float32
+        or gamma._device != a._device
+        or tuple(gamma._shape) != normalized_shape
+    ):
+        return NOT_HANDLED
+    if bias is not None and (
+        beta is None
+        or beta._dtype != DType.float32
+        or beta._device != a._device
+        or tuple(beta._shape) != normalized_shape
+    ):
+        return NOT_HANDLED
+    if (mask[1] and gamma is None) or (mask[2] and beta is None):
+        return NOT_HANDLED
+
+    if not any(mask):
+        return None, None, None
+
+    if rows == 0:
+        # ATen defines the two affine reductions over an empty outer extent as
+        # zero. Avoid a zero-grid LayerNorm launch; Fill handles only the
+        # requested nonempty affine outputs.
+        grad_input = _alloc(a._shape, DType.float32, a._device) if mask[0] else None
+        grad_weight = (
+            fast_filled(normalized_shape, 0.0, DType.float32, a._device)
+            if mask[1]
+            else None
+        )
+        grad_bias = (
+            fast_filled(normalized_shape, 0.0, DType.float32, a._device)
+            if mask[2]
+            else None
+        )
+        return grad_input, grad_weight, grad_bias
+
+    # All metadata validation is complete. The kernels consume dense row-major
+    # buffers, so materialize arbitrary ATen views only now.
+    grad = _tc(grad)
+    a = _tc(a)
+    saved_mean = _tc(saved_mean)
+    saved_rstd = _tc(saved_rstd)
+    # The affine-parameter reductions do not consume weight.  Materialize it
+    # only for the grad-input kernel, which needs gamma in the dx formula.
+    gamma = _tc(gamma) if gamma is not None and mask[0] else None
+
+    grad_input = _alloc(a._shape, DType.float32, a._device) if mask[0] else None
+    grad_weight = (
+        _alloc(normalized_shape, DType.float32, a._device) if mask[1] else None
+    )
+    grad_bias = _alloc(normalized_shape, DType.float32, a._device) if mask[2] else None
+    mask_bits = int(mask[0]) | (int(mask[1]) << 1) | (int(mask[2]) << 2)
+    eager_kernels.normalization_backward_ops.LayerNormBackwardF32(
+        grad_input._ptr if grad_input is not None else 0,
+        grad_weight._ptr if grad_weight is not None else 0,
+        grad_bias._ptr if grad_bias is not None else 0,
+        grad._ptr,
+        a._ptr,
+        saved_mean._ptr,
+        saved_rstd._ptr,
+        gamma._ptr if gamma is not None else 0,
+        rows,
+        cols,
+        mask_bits,
+        _ctx_ptr(a._device),
+    )
+    return grad_input, grad_weight, grad_bias
 
 
 # ---------------------------------------------------------------------------
@@ -2276,6 +2780,30 @@ def fast_aten_sum(input, dim=None, keepdim=False, *, dtype=None):
 
 
 @no_type_check
+def fast_aten_linalg_vector_norm(self, ord=2, dim=None, keepdim=False, *, dtype=None):
+    """FP32 L2 norm composed from existing eager elementwise/reduction ops."""
+    input = _t(self)
+    if (
+        input is None
+        or input._dtype != DType.float32
+        or not isinstance(ord, int | float)
+        or isinstance(ord, bool)
+        or ord != 2
+        or dtype is not None
+        or not isinstance(keepdim, bool)
+    ):
+        return NOT_HANDLED
+
+    squared = fast_aten_mul(input, input)
+    if squared is NOT_HANDLED:
+        return NOT_HANDLED
+    summed = fast_aten_sum(squared, dim, keepdim)
+    if summed is NOT_HANDLED:
+        return NOT_HANDLED
+    return fast_aten_sqrt(summed)
+
+
+@no_type_check
 def _amax_amin(input, dim, keepdim, spec_name):
     a = _t(input)
     if a is None or a._dtype not in _ROW_REDUCE_DTYPES:
@@ -2321,7 +2849,8 @@ def fast_aten_min_dim(input, dim, keepdim=False):
         result = eager_kernels.reduction_ops.MinDimSpec(
             _spec_of(a), (dim % rank,), 1 if keepdim else 0
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         result = None
     if result is not None:
         return _wrap_spec_pair(result, a._dtype, DType.int64, a._device)
@@ -2454,6 +2983,387 @@ def fast_aten__log_softmax(input, dim, half_to_float=False):
         return fast_aten_transpose(result, dim, rank - 1)
     result = _try_spec_unary("LogSoftmaxSpec", t, module_name="reduction_ops")
     return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def _bf16_cross_entropy_inputs(
+    input,
+    target,
+    weight,
+    reduction,
+    ignore_index,
+    label_smoothing,
+    *,
+    require_autocast=True,
+):
+    """Validate the fused H100 BF16 index-target cross-entropy regime.
+
+    The device kernel is deliberately narrow: a dense ``(rows, classes)``
+    BF16 logits matrix, dense ``(rows,)`` int64 labels, no class weights or
+    smoothing, and mean reduction.  Unsupported calls retain PyTorch's
+    ordinary CompositeImplicitAutograd decomposition.  Target values cannot
+    be inspected by the host without synchronizing; the device kernel must
+    safe-assert every non-ignore index before using it in an address, matching
+    CUDA's asynchronous bounds-error behavior.
+    """
+    logits = _t(input)
+    labels = _t(target)
+    if (
+        weight is not None
+        or not isinstance(reduction, int)
+        or isinstance(reduction, bool)
+        or reduction != 1
+        or not isinstance(ignore_index, int)
+        or isinstance(ignore_index, bool)
+        or not isinstance(label_smoothing, int | float)
+        or isinstance(label_smoothing, bool)
+        or float(label_smoothing) != 0.0
+        # Native BF16 cross entropy returns BF16 outside autocast.  The fused
+        # bridge intentionally returns an FP32 scalar for nanoGPT's CUDA-like
+        # autocast policy, so it must not change the non-autocast contract.
+        or (require_autocast and not torch.is_autocast_enabled("mojo"))
+        or logits is None
+        or labels is None
+        or logits._dtype != DType.bfloat16
+        or labels._dtype != DType.int64
+        or logits._device != labels._device
+        or logits._device.label != "gpu"
+        or logits._device.api != "cuda"
+        or logits._device.architecture_name != "sm_90a"
+        or not logits._is_contiguous
+        or not labels._is_contiguous
+        or len(logits._shape) != 2
+    ):
+        return None
+
+    rows, classes = logits._shape
+    if rows <= 0 or classes <= 0 or tuple(labels._shape) != (rows,):
+        return None
+    return logits, labels, rows, classes
+
+
+@no_type_check
+def bf16_cross_entropy_supported(
+    input,
+    target,
+    weight=None,
+    reduction=1,
+    ignore_index=-100,
+    label_smoothing=0.0,
+    *,
+    require_backward=False,
+):
+    """Pure host preflight for the optional fused BF16 cross entropy.
+
+    This function does not allocate, materialize, launch, or synchronize.  It
+    also requires the backward bridge when autograd will need one, preventing
+    a forward-only installation from failing after producing a loss.
+    """
+    inputs = _bf16_cross_entropy_inputs(
+        input, target, weight, reduction, ignore_index, label_smoothing
+    )
+    if inputs is None:
+        return False
+    if _resolve_bf16_cross_entropy_bridge("Bf16CrossEntropyForward") is None:
+        return False
+    return not require_backward or (
+        _resolve_bf16_cross_entropy_bridge("Bf16CrossEntropyBackward") is not None
+    )
+
+
+@no_type_check
+def fast_bf16_cross_entropy_forward(
+    input,
+    target,
+    weight=None,
+    reduction=1,
+    ignore_index=-100,
+    label_smoothing=0.0,
+    *,
+    require_backward=False,
+):
+    """Enqueue fused BF16 cross-entropy forward, returning saved auxiliaries.
+
+    Bridge ABI::
+
+        Bf16CrossEntropyForward(
+            loss_f32, total_weight_f32, row_max_f32, row_logsum_f32,
+            row_loss_f32,
+            logits_bf16, targets_i64, rows, classes, ignore_index, ctx
+        )
+
+    ``row_loss`` is ordinary host-owned device scratch.  It is released after
+    the launch is enqueued; MAX's stream-ordered allocator keeps it alive for
+    the reduction.  ``total_weight`` remains device-side throughout, so mean
+    reduction introduces no CPU read or synchronization.  When every row is
+    ignored, finite logits produce NaN loss and exact +0 gradients.  Ignored
+    rows with nonfinite log-softmax state instead preserve the composite NaN
+    gradients rather than being forcibly zeroed.  Numerics must match CUDA
+    BF16 AMP rather than a full-FP32 cross entropy: CUDA forms each
+    log-probability as the left-associated
+    ``BF16((logit - row_max) - row_logsum)``.  Keeping those two FP32 row
+    components separate avoids rare reassociation differences at BF16
+    rounding boundaries.  Autograd saves only logits, targets, row_max,
+    row_logsum, and total_weight.
+    """
+    inputs = _bf16_cross_entropy_inputs(
+        input, target, weight, reduction, ignore_index, label_smoothing
+    )
+    if inputs is None:
+        return NOT_HANDLED
+    logits, labels, rows, classes = inputs
+
+    forward_bridge = _resolve_bf16_cross_entropy_bridge("Bf16CrossEntropyForward")
+    if forward_bridge is None or (
+        require_backward
+        and _resolve_bf16_cross_entropy_bridge("Bf16CrossEntropyBackward") is None
+    ):
+        return NOT_HANDLED
+
+    # Resolve every optional entry point before the first allocation.  Once
+    # allocations or a launch occur, errors propagate instead of silently
+    # re-running the composite implementation after partial device work.
+    loss = _alloc((), DType.float32, logits._device)
+    total_weight = _alloc((), DType.float32, logits._device)
+    row_max = _alloc((rows,), DType.float32, logits._device)
+    row_logsum = _alloc((rows,), DType.float32, logits._device)
+    row_loss = _alloc((rows,), DType.float32, logits._device)
+    forward_bridge(
+        loss._ptr,
+        total_weight._ptr,
+        row_max._ptr,
+        row_logsum._ptr,
+        row_loss._ptr,
+        logits._ptr,
+        labels._ptr,
+        rows,
+        classes,
+        ignore_index,
+        _ctx_ptr(logits._device),
+    )
+    del row_loss
+    return loss, row_max, row_logsum, total_weight
+
+
+@no_type_check
+def fast_bf16_cross_entropy_backward(
+    grad_output, input, target, row_max, row_logsum, total_weight, ignore_index
+):
+    """Enqueue the fused backward and return a BF16 logits gradient.
+
+    Bridge ABI::
+
+        Bf16CrossEntropyBackward(
+            grad_input_bf16, grad_output_f32, logits_bf16, targets_i64,
+            row_max_f32, row_logsum_f32, total_weight_f32,
+            rows, classes, ignore_index, ctx
+        )
+
+    CUDA BF16 AMP compatibility requires reconstructing BF16 log-probabilities
+    and applying the BF16-rounded NLL scale, exponentiating in FP32, then
+    rounding the final logits gradient to BF16.
+    """
+    inputs = _bf16_cross_entropy_inputs(
+        input, target, None, 1, ignore_index, 0.0, require_autocast=False
+    )
+    grad = _t(grad_output)
+    maximum = _t(row_max)
+    logsum = _t(row_logsum)
+    weight_sum = _t(total_weight)
+    if (
+        inputs is None
+        or grad is None
+        or maximum is None
+        or logsum is None
+        or weight_sum is None
+    ):
+        return NOT_HANDLED
+    logits, labels, rows, classes = inputs
+    if (
+        grad._dtype != DType.float32
+        or grad._device != logits._device
+        or tuple(grad._shape) not in ((), (1,))
+        or not grad._is_contiguous
+        or maximum._dtype != DType.float32
+        or maximum._device != logits._device
+        or tuple(maximum._shape) != (rows,)
+        or not maximum._is_contiguous
+        or logsum._dtype != DType.float32
+        or logsum._device != logits._device
+        or tuple(logsum._shape) != (rows,)
+        or not logsum._is_contiguous
+        or weight_sum._dtype != DType.float32
+        or weight_sum._device != logits._device
+        or weight_sum._numel != 1
+        or not weight_sum._is_contiguous
+    ):
+        return NOT_HANDLED
+
+    backward_bridge = _resolve_bf16_cross_entropy_bridge("Bf16CrossEntropyBackward")
+    if backward_bridge is None:
+        return NOT_HANDLED
+
+    grad_input = _alloc(logits._shape, DType.bfloat16, logits._device)
+    backward_bridge(
+        grad_input._ptr,
+        grad._ptr,
+        logits._ptr,
+        labels._ptr,
+        maximum._ptr,
+        logsum._ptr,
+        weight_sum._ptr,
+        rows,
+        classes,
+        ignore_index,
+        _ctx_ptr(logits._device),
+    )
+    return grad_input
+
+
+@no_type_check
+def _nll_loss_inputs(self, target, weight, reduction, ignore_index):
+    """Validate the f32/i64 two-dimensional NLL kernel contract.
+
+    This stays enqueue-only, so it cannot inspect target values on the host.
+    The current kernel contract therefore assumes each label is either in
+    ``[0, classes)`` or exactly ``ignore_index``; a future device-side assert
+    is needed to match PyTorch's error for other labels without synchronizing.
+    """
+    log_probs = _t(self)
+    labels = _t(target)
+    if (
+        weight is not None
+        or not isinstance(reduction, int)
+        or isinstance(reduction, bool)
+        or reduction not in (0, 1, 2)
+        or not isinstance(ignore_index, int)
+        or isinstance(ignore_index, bool)
+        or log_probs is None
+        or labels is None
+        or not _on_gpu(log_probs)
+        or log_probs._dtype != DType.float32
+        or not log_probs._is_contiguous
+        or len(log_probs._shape) != 2
+    ):
+        return None
+
+    rows, classes = log_probs._shape
+    if (
+        classes <= 0
+        or labels._dtype != DType.int64
+        or labels._device != log_probs._device
+        or tuple(labels._shape) != (rows,)
+    ):
+        return None
+    return log_probs, labels, rows, classes
+
+
+@no_type_check
+def fast_aten_nll_loss_forward_output(
+    self, target, weight, reduction, ignore_index, *, output, total_weight
+):
+    """Direct out= NLL forward for the pure-Mojo f32 GPU kernel."""
+    inputs = _nll_loss_inputs(self, target, weight, reduction, ignore_index)
+    if inputs is None:
+        return NOT_HANDLED
+    log_probs, labels, rows, classes = inputs
+    if (
+        output is total_weight
+        or not _valid_nll_out(output, DType.float32, log_probs._device)
+        or not _valid_nll_out(total_weight, DType.float32, log_probs._device)
+    ):
+        return NOT_HANDLED
+
+    output_shape = (rows,) if reduction == 0 else ()
+    # Every supplied out is known-valid before either can be resized.
+    write_output = _prepare_nll_out(output, output_shape)
+    write_total_weight = _prepare_nll_out(total_weight, ())
+
+    if rows == 0:
+        # Avoid a zero-grid launch. PyTorch defines empty reduced NLL as NaN
+        # for mean and zero for sum; reduction=none already has no elements.
+        fast_aten_fill__scalar(write_total_weight, 0.0)
+        if reduction != 0:
+            fast_aten_fill__scalar(write_output, math.nan if reduction == 1 else 0.0)
+    else:
+        labels_c = _tc(labels)
+        eager_kernels.loss_ops.NllLossForwardF32(
+            write_output._ptr,
+            write_total_weight._ptr,
+            log_probs._ptr,
+            labels_c._ptr,
+            rows,
+            classes,
+            reduction,
+            ignore_index,
+            _ctx_ptr(log_probs._device),
+        )
+
+    if write_output is not output:
+        _copy_into(output, write_output)
+    if write_total_weight is not total_weight:
+        _copy_into(total_weight, write_total_weight)
+    return output, total_weight
+
+
+@no_type_check
+def fast_aten_nll_loss_backward_grad_input(
+    grad_output,
+    self,
+    target,
+    weight,
+    reduction,
+    ignore_index,
+    total_weight,
+    *,
+    grad_input,
+):
+    """Direct out= NLL backward for the pure-Mojo f32 GPU kernel."""
+    inputs = _nll_loss_inputs(self, target, weight, reduction, ignore_index)
+    if inputs is None:
+        return NOT_HANDLED
+    log_probs, labels, rows, classes = inputs
+    grad = _t(grad_output)
+    weight_sum = _t(total_weight)
+    expected_grad_shape = (rows,) if reduction == 0 else None
+    if (
+        grad is None
+        or grad._dtype != DType.float32
+        or grad._device != log_probs._device
+        or (
+            tuple(grad._shape) != expected_grad_shape
+            if expected_grad_shape is not None
+            else tuple(grad._shape) not in ((), (1,))
+        )
+        or weight_sum is None
+        or weight_sum._dtype != DType.float32
+        or weight_sum._device != log_probs._device
+        or weight_sum._numel != 1
+        or not _valid_nll_out(grad_input, DType.float32, log_probs._device)
+    ):
+        return NOT_HANDLED
+
+    # Validation above completes before the sanctioned out= resize.
+    write_grad_input = _prepare_nll_out(grad_input, log_probs._shape)
+    if rows != 0:
+        labels_c = _tc(labels)
+        grad_c = _tc(grad)
+        weight_sum_c = _tc(weight_sum)
+        eager_kernels.loss_ops.NllLossBackwardF32(
+            write_grad_input._ptr,
+            grad_c._ptr,
+            labels_c._ptr,
+            weight_sum_c._ptr,
+            rows,
+            classes,
+            reduction,
+            ignore_index,
+            _ctx_ptr(log_probs._device),
+        )
+
+    if write_grad_input is not grad_input:
+        _copy_into(grad_input, write_grad_input)
+    return grad_input
 
 
 @no_type_check
@@ -2729,18 +3639,22 @@ def fast_aten_upsample_bilinear2d(
 
 
 @no_type_check
-def _sdpa_math_forward(query, key, value, is_causal, scale):
-    """Decomposed bmm + scale/causal softmax + bmm; returns (out, probs) both
-    as (B, H, Sq, *) views. Used by the math SDPA variant (needs the softmax
-    probabilities as a second output). Returns NOT_HANDLED for shapes/dtypes
-    the fast kernels don't cover."""
-    q = _tc(query)
-    k = _tc(key)
-    v = _tc(value)
+def _sdpa_math_forward_with_dropout(query, key, value, is_causal, scale, dropout_p):
+    """Decomposed SDPA returning output, pre-dropout probabilities, and mask.
+
+    Dropout is deliberately composed between softmax and the value BMM.  The
+    returned probabilities stay pre-dropout because softmax backward needs
+    values at every position, including positions dropped in the forward.
+    """
+    q = _t(query)
+    k = _t(key)
+    v = _t(value)
     if (
         q is None
         or k is None
         or v is None
+        or q._device != k._device
+        or q._device != v._device
         or q._dtype != k._dtype
         or q._dtype != v._dtype
         or q._dtype not in _FLOAT_DTYPES
@@ -2752,15 +3666,37 @@ def _sdpa_math_forward(query, key, value, is_causal, scale):
         or 0 in k._shape
     ):
         return NOT_HANDLED
+    if not isinstance(dropout_p, int | float) or not 0.0 <= dropout_p <= 1.0:
+        return NOT_HANDLED
+    dropout_p = float(dropout_p)
+    if dropout_p != 0.0 and (q._dtype != DType.float32 or not _on_gpu(q)):
+        return NOT_HANDLED
+
+    q = _tc(q)
+    k = _tc(k)
+    v = _tc(v)
     b, h, q_len, head_dim = q._shape
     kv_len = k._shape[2]
     scale_val = scale if scale is not None else 1.0 / math.sqrt(head_dim)
     ctx = _ctx_ptr(q._device)
     dt = q._dtype.value
-    scores = _alloc((b * h, q_len, kv_len), q._dtype, q._device)
-    eager_kernels.matmul_ops.Bmm(
-        scores._ptr, q._ptr, k._ptr, (b * h, q_len, kv_len, head_dim, 1), dt, ctx
+    q3_shape = (b * h, q_len, head_dim)
+    kv3_shape = (b * h, kv_len, head_dim)
+    q3 = _view_of(q, q3_shape, _row_major_strides(q3_shape), q._offset, contiguous=True)
+    k3 = _view_of(
+        k, kv3_shape, _row_major_strides(kv3_shape), k._offset, contiguous=True
     )
+    v3 = _view_of(
+        v, kv3_shape, _row_major_strides(kv3_shape), v._offset, contiguous=True
+    )
+    scores = _try_bf16_bmm(q3, k3, transpose_b=True)
+    if scores is None:
+        scores = _try_tf32_bmm(q3, k3, transpose_b=True)
+    if scores is None:
+        scores = _alloc((b * h, q_len, kv_len), q._dtype, q._device)
+        eager_kernels.matmul_ops.Bmm(
+            scores._ptr, q._ptr, k._ptr, (b * h, q_len, kv_len, head_dim, 1), dt, ctx
+        )
     probs = _alloc((b * h, q_len, kv_len), q._dtype, q._device)
     eager_kernels.nn_ops.SoftmaxRows(
         probs._ptr,
@@ -2773,10 +3709,47 @@ def _sdpa_math_forward(query, key, value, is_causal, scale):
         dt,
         ctx,
     )
-    out = _alloc((b * h, q_len, head_dim), q._dtype, q._device)
-    eager_kernels.matmul_ops.Bmm(
-        out._ptr, probs._ptr, v._ptr, (b * h, q_len, head_dim, kv_len, 0), dt, ctx
-    )
+    # All allocations use stream-ordered lifetime management, so releasing the
+    # host reference here cannot recycle scores before SoftmaxRows consumes it.
+    del scores
+
+    effective_probs = probs
+    dropout_mask = None
+    if dropout_p == 1.0:
+        # SDPA's math implementation composes ``torch.dropout`` rather than
+        # exposing CUDA native_dropout directly.  At the full-drop endpoint
+        # that is arithmetic ``P * 0`` semantics: nonfinite probabilities
+        # remain nonfinite instead of being overwritten by zeros.  The mask
+        # is still saved so backward applies the same mask/scale arithmetic,
+        # and neither path reserves RNG state at this endpoint.
+        effective_probs = fast_aten_mul(probs, 0.0)
+        dropout_mask = fast_filled(probs._shape, False, DType.bool, probs._device)
+        if effective_probs is NOT_HANDLED or dropout_mask is None:
+            return NOT_HANDLED
+    elif dropout_p > 0.0:
+        dropout_result = fast_aten_native_dropout(probs, dropout_p, True)
+        if dropout_result is NOT_HANDLED:
+            return NOT_HANDLED
+        effective_probs, dropout_mask = dropout_result
+        del dropout_result
+
+    out = _try_bf16_bmm(effective_probs, v3)
+    if out is None:
+        out = _try_tf32_bmm(effective_probs, v3)
+    if out is None:
+        out = _alloc((b * h, q_len, head_dim), q._dtype, q._device)
+        eager_kernels.matmul_ops.Bmm(
+            out._ptr,
+            effective_probs._ptr,
+            v._ptr,
+            (b * h, q_len, head_dim, kv_len, 0),
+            dt,
+            ctx,
+        )
+    # P_drop is not saved: backward cheaply reconstructs it from P and the bool
+    # mask, avoiding one persistent f32 (B,H,L,S) allocation per layer.
+    del effective_probs
+
     out_shape = (b, h, q_len, head_dim)
     out4 = _view_of(
         out, out_shape, _row_major_strides(out_shape), out._offset, contiguous=True
@@ -2785,7 +3758,306 @@ def _sdpa_math_forward(query, key, value, is_causal, scale):
     probs4 = _view_of(
         probs, probs_shape, _row_major_strides(probs_shape), probs._offset
     )
-    return out4, probs4
+    mask4 = None
+    if dropout_mask is not None:
+        mask4 = _view_of(
+            dropout_mask,
+            probs_shape,
+            _row_major_strides(probs_shape),
+            dropout_mask._offset,
+            contiguous=True,
+        )
+    return out4, probs4, mask4
+
+
+@no_type_check
+def _fa4_bf16_d64_causal_inputs(
+    query,
+    key,
+    value,
+    attn_mask=None,
+    dropout_p=0.0,
+    is_causal=False,
+    scale=None,
+    enable_gqa=False,
+):
+    """Return eligible public BHTD inputs without doing any device work."""
+    q = _t(query)
+    k = _t(key)
+    v = _t(value)
+    if (
+        q is None
+        or k is None
+        or v is None
+        or attn_mask is not None
+        or enable_gqa
+        or not isinstance(dropout_p, int | float)
+        or isinstance(dropout_p, bool)
+        or float(dropout_p) != 0.0
+        or is_causal is not True
+        or q._device != k._device
+        or q._device != v._device
+        or q._device.api != "cuda"
+        or q._device.architecture_name != "sm_90a"
+        or q._dtype != DType.bfloat16
+        or k._dtype != DType.bfloat16
+        or v._dtype != DType.bfloat16
+        or len(q._shape) != 4
+        or tuple(q._shape) != tuple(k._shape)
+        or tuple(q._shape) != tuple(v._shape)
+    ):
+        return None
+    batch, heads, seqlen, head_dim = q._shape
+    if batch <= 0 or heads <= 0 or seqlen <= 0 or seqlen % 128 != 0 or head_dim != 64:
+        return None
+    if scale is not None and (
+        not isinstance(scale, int | float)
+        or isinstance(scale, bool)
+        or not math.isfinite(float(scale))
+    ):
+        return None
+    return q, k, v
+
+
+@no_type_check
+def _fa4_strided_bthd_layout(tensor) -> bool:
+    """Whether a physical BTHD view is safe for FA4's strided TMA ABI.
+
+    The pointer is already adjusted to logical ``[0, 0, 0, 0]`` and strides
+    are element strides.  Keep this predicate in lockstep with the defensive
+    validation in the Mojo bridge so an unsupported view is materialized
+    before any FA4 launch is selected.
+    """
+    if (
+        tensor is None
+        or tensor._dtype != DType.bfloat16
+        or tensor._itemsize != DType.bfloat16.size_in_bytes
+        or len(tensor._shape) != 4
+        or len(tensor._strides) != 4
+    ):
+        return False
+    batch, seqlen, heads, head_dim = tensor._shape
+    b_stride, s_stride, h_stride, d_stride = tensor._strides
+    if (
+        batch <= 0
+        or seqlen <= 0
+        or heads <= 0
+        or seqlen % 128 != 0
+        or head_dim != 64
+        or min(b_stride, s_stride, h_stride, d_stride) <= 0
+        or d_stride != 1
+        or h_stride != 64
+        or s_stride < heads * 64
+        or b_stride != seqlen * s_stride
+        or tensor._ptr % 16 != 0
+    ):
+        return False
+    return all(
+        stride * tensor._itemsize % 16 == 0 for stride in (b_stride, s_stride, h_stride)
+    )
+
+
+@no_type_check
+def _fa4_native_bthd(tensor):
+    """Expose public BHTD storage as FA4-native BTHD, copying if required."""
+    physical = fast_aten_transpose(tensor, 1, 2)
+    if physical is NOT_HANDLED:
+        return None
+    if _fa4_strided_bthd_layout(physical):
+        return physical
+    return _tc(physical)
+
+
+@no_type_check
+def _fa4_prepare_qkv_bridge(q_native, k_native, v_native):
+    """Return prepared Q/K/V plus whether their strided ABI is required."""
+    qkv = (q_native, k_native, v_native)
+    needs_strided_bridge = any(not tensor._is_contiguous for tensor in qkv)
+    if needs_strided_bridge and all(_fa4_strided_bthd_layout(tensor) for tensor in qkv):
+        return qkv, True
+    if needs_strided_bridge:
+        # Defensive path for callers of the private backward helper.  Normal
+        # forward preparation has already copied every unsupported view.
+        qkv = tuple(_tc(tensor) for tensor in qkv)
+        if any(tensor is None for tensor in qkv):
+            return None
+    return qkv, False
+
+
+@no_type_check
+def fast_fa4_bf16_d64_causal_forward(
+    query,
+    key,
+    value,
+    attn_mask=None,
+    dropout_p=0.0,
+    is_causal=False,
+    scale=None,
+    enable_gqa=False,
+):
+    """Run vendored FA4 and return output/LSE plus saved physical inputs.
+
+    Loading the bridge happens before materialization or allocation, so a
+    packaging/compiler error cannot leave unnecessary device work queued.
+    """
+    inputs = _fa4_bf16_d64_causal_inputs(
+        query, key, value, attn_mask, dropout_p, is_causal, scale, enable_gqa
+    )
+    if inputs is None:
+        return NOT_HANDLED
+
+    from torch_mojo_backend.eager_flash_attention import load_fa4_ops
+
+    fa4_ops = load_fa4_ops()
+    q, k, v = inputs
+    q_native = _fa4_native_bthd(q)
+    k_native = _fa4_native_bthd(k)
+    v_native = _fa4_native_bthd(v)
+    if q_native is None or k_native is None or v_native is None:
+        return NOT_HANDLED
+    prepared = _fa4_prepare_qkv_bridge(q_native, k_native, v_native)
+    if prepared is None:
+        return NOT_HANDLED
+    (q_native, k_native, v_native), use_strided_qkv = prepared
+
+    batch, heads, seqlen, head_dim = q._shape
+    physical_shape = (batch, seqlen, heads, head_dim)
+    out_native = _alloc(physical_shape, DType.bfloat16, q._device)
+    logsumexp = _alloc((batch, heads, seqlen), DType.float32, q._device)
+    scale_value = float(scale) if scale is not None else 1.0 / math.sqrt(head_dim)
+    if use_strided_qkv:
+        fa4_ops.flash_attention_fwd_bf16_d64_causal_strided_qkv(
+            q_native._ptr,
+            *q_native._strides,
+            k_native._ptr,
+            *k_native._strides,
+            v_native._ptr,
+            *v_native._strides,
+            out_native._ptr,
+            logsumexp._ptr,
+            batch,
+            seqlen,
+            heads,
+            scale_value,
+            _ctx_ptr(q._device),
+        )
+    else:
+        fa4_ops.flash_attention_fwd_bf16_d64_causal(
+            q_native._ptr,
+            k_native._ptr,
+            v_native._ptr,
+            out_native._ptr,
+            logsumexp._ptr,
+            batch,
+            seqlen,
+            heads,
+            scale_value,
+            _ctx_ptr(q._device),
+        )
+    output = fast_aten_transpose(out_native, 1, 2)
+    if output is NOT_HANDLED:
+        raise RuntimeError("FA4 output could not be exposed as a BHTD view")
+    return output, logsumexp, q_native, k_native, v_native
+
+
+@no_type_check
+def fast_fa4_bf16_d64_causal_backward(
+    q_native, k_native, v_native, output, logsumexp, grad_output, scale
+):
+    """Enqueue FA4 preprocess/main/convert and return public BHTD grads."""
+    from torch_mojo_backend.eager_flash_attention import load_fa4_ops
+
+    fa4_ops = load_fa4_ops()
+    batch, seqlen, heads, head_dim = q_native._shape
+    prepared = _fa4_prepare_qkv_bridge(q_native, k_native, v_native)
+    if prepared is None:
+        return NOT_HANDLED
+    (q_native, k_native, v_native), use_strided_qkv = prepared
+    # The new ABI broadens only Q/K/V.  Output and dO retain the original
+    # contiguous BTHD contract even if a caller supplies a descriptor-safe
+    # gapped public view.
+    out_native = _fa4_native_bthd(output)
+    dout_native = _fa4_native_bthd(grad_output)
+    if out_native is not None and not out_native._is_contiguous:
+        out_native = _tc(out_native)
+    if dout_native is not None and not dout_native._is_contiguous:
+        dout_native = _tc(dout_native)
+    if out_native is None or dout_native is None:
+        return NOT_HANDLED
+
+    physical_shape = (batch, seqlen, heads, head_dim)
+    dq_native = _alloc(physical_shape, DType.bfloat16, q_native._device)
+    dk_native = _alloc(physical_shape, DType.bfloat16, q_native._device)
+    dv_native = _alloc(physical_shape, DType.bfloat16, q_native._device)
+    seqlen_padded = ((seqlen + 127) // 128) * 128
+    stats_shape = (batch, heads, seqlen_padded)
+    dpsum = _alloc(stats_shape, DType.float32, q_native._device)
+    lse_log2 = _alloc(stats_shape, DType.float32, q_native._device)
+    dq_accum = _alloc(
+        (batch * heads * seqlen_padded * head_dim,), DType.float32, q_native._device
+    )
+    if use_strided_qkv:
+        fa4_ops.flash_attention_bwd_bf16_d64_causal_strided_qkv(
+            q_native._ptr,
+            *q_native._strides,
+            k_native._ptr,
+            *k_native._strides,
+            v_native._ptr,
+            *v_native._strides,
+            out_native._ptr,
+            dout_native._ptr,
+            logsumexp._ptr,
+            dq_native._ptr,
+            dk_native._ptr,
+            dv_native._ptr,
+            dpsum._ptr,
+            lse_log2._ptr,
+            dq_accum._ptr,
+            batch,
+            seqlen,
+            heads,
+            float(scale),
+            _ctx_ptr(q_native._device),
+        )
+    else:
+        fa4_ops.flash_attention_bwd_bf16_d64_causal(
+            q_native._ptr,
+            k_native._ptr,
+            v_native._ptr,
+            out_native._ptr,
+            dout_native._ptr,
+            logsumexp._ptr,
+            dq_native._ptr,
+            dk_native._ptr,
+            dv_native._ptr,
+            dpsum._ptr,
+            lse_log2._ptr,
+            dq_accum._ptr,
+            batch,
+            seqlen,
+            heads,
+            float(scale),
+            _ctx_ptr(q_native._device),
+        )
+    # TensorHolder destruction enqueues frees after the three kernels on the
+    # same context; releasing scratch here never synchronizes the CPU.
+    del dpsum, lse_log2, dq_accum, out_native, dout_native
+    grad_query = fast_aten_transpose(dq_native, 1, 2)
+    grad_key = fast_aten_transpose(dk_native, 1, 2)
+    grad_value = fast_aten_transpose(dv_native, 1, 2)
+    if any(grad is NOT_HANDLED for grad in (grad_query, grad_key, grad_value)):
+        raise RuntimeError("FA4 gradients could not be exposed as BHTD views")
+    return grad_query, grad_key, grad_value
+
+
+@no_type_check
+def _sdpa_math_forward(query, key, value, is_causal, scale):
+    """Dropout-free compatibility wrapper returning ``(output, probs)``."""
+    result = _sdpa_math_forward_with_dropout(query, key, value, is_causal, scale, 0.0)
+    if result is NOT_HANDLED:
+        return NOT_HANDLED
+    output, probabilities, _ = result
+    return output, probabilities
 
 
 @no_type_check
@@ -2826,26 +4098,123 @@ def fast_aten__scaled_dot_product_flash_attention(
     *,
     scale=None,
 ):
-    if dropout_p != 0.0:
+    if dropout_p != 0.0 or return_debug_mask:
         return NOT_HANDLED
-    out = fast_aten_scaled_dot_product_attention(
+    result = fast_fa4_bf16_d64_causal_forward(
         query, key, value, None, 0.0, is_causal, scale, False
     )
-    if out is NOT_HANDLED:
+    if result is NOT_HANDLED:
         return NOT_HANDLED
+    out, logsumexp, q_native, k_native, v_native = result
+    # This direct ATen forward does not own the autograd saves used by the
+    # high-level SDPA custom Function. The physical input copies only need to
+    # survive their already-enqueued forward launch, so release them in stream
+    # order instead of retaining three full activations.
+    del q_native, k_native, v_native
     q = _t(query)
-    b, h, sq, _ = q._shape
+    sq = q._shape[2]
     sk = _t(key)._shape[2]
     dev = q._device
-    # Auxiliary returns are only consumed by the backward pass; inference only
-    # needs the primary output. logsumexp is (B, H, Sq) float32 (matching the
-    # real kernel's shape/dtype); cum_seq_q/k are None as the dense CUDA path
-    # returns; rng_state/unused/debug_attn_mask are zero placeholders.
-    logsumexp = fast_filled((b, h, sq), 0.0, DType.float32, dev)
-    rng_state = fast_filled((2,), 0, DType.int64, dev)
-    unused = fast_filled((), 0, DType.int64, dev)
+    # Dense CUDA returns undefined cumulative-sequence tensors, uint64 RNG
+    # state/offset tensors, and an empty debug mask when dropout/debugging are
+    # disabled. FA4's real FP32 LSE must be returned for backward semantics.
+    # Dropout is disabled, so the RNG payload values are unobserved; only the
+    # CUDA-compatible uint64 shapes/dtypes are part of this forward contract.
+    rng_state = _alloc((2,), DType.uint64, dev)
+    unused = _alloc((), DType.uint64, dev)
     debug_attn_mask = _alloc((0,), q._dtype, dev)
     return (out, logsumexp, None, None, sq, sk, rng_state, unused, debug_attn_mask)
+
+
+@no_type_check
+def fast_aten__scaled_dot_product_flash_attention_backward(
+    grad_out,
+    query,
+    key,
+    value,
+    out,
+    logsumexp,
+    cum_seq_q,
+    cum_seq_k,
+    max_q,
+    max_k,
+    dropout_p,
+    is_causal,
+    philox_seed,
+    philox_offset,
+    *,
+    scale=None,
+):
+    """Dense lower-op autograd bridge for the vendored BF16 FA4 kernel."""
+    inputs = _fa4_bf16_d64_causal_inputs(
+        query, key, value, None, dropout_p, is_causal, scale, False
+    )
+    grad = _t(grad_out)
+    output = _t(out)
+    lse = _t(logsumexp)
+    if inputs is None:
+        return NOT_HANDLED
+    q, k, v = inputs
+    batch, heads, seqlen, _ = q._shape
+    if (
+        cum_seq_q is not None
+        or cum_seq_k is not None
+        or max_q != seqlen
+        or max_k != seqlen
+        or grad is None
+        or grad._device != q._device
+        or grad._dtype != DType.bfloat16
+        or tuple(grad._shape) != tuple(q._shape)
+        or (
+            output is not None
+            and (
+                output._device != q._device
+                or output._dtype != DType.bfloat16
+                or tuple(output._shape) != tuple(q._shape)
+            )
+        )
+        or (
+            lse is not None
+            and (
+                lse._device != q._device
+                or lse._dtype != DType.float32
+                or tuple(lse._shape) != (batch, heads, seqlen)
+            )
+        )
+    ):
+        return NOT_HANDLED
+    # Dropout is excluded above, so the RNG payload values are irrelevant.
+    _ = philox_seed, philox_offset
+    if output is None or lse is None:
+        # PyTorch's generated SavedVariable path can unpack our returned
+        # subclass output as a base Tensor without the Python allocation
+        # payload. Recompute this direct lower-op forward so backward never
+        # reads an inaccessible pointer. The high-level SDPA custom autograd
+        # path retains its payload and does not take this compatibility path.
+        recomputed = fast_fa4_bf16_d64_causal_forward(
+            q, k, v, None, 0.0, True, scale, False
+        )
+        if recomputed is NOT_HANDLED:
+            return NOT_HANDLED
+        recomputed_output, recomputed_lse, q_native, k_native, v_native = recomputed
+        output = recomputed_output
+        lse = recomputed_lse
+    else:
+        q_native = _fa4_native_bthd(q)
+        k_native = _fa4_native_bthd(k)
+        v_native = _fa4_native_bthd(v)
+        if q_native is None or k_native is None or v_native is None:
+            return NOT_HANDLED
+    # The lower ATen backward accepts arbitrary shape-compatible views, while
+    # FA4 consumes LSE as contiguous (B, H, S).  Keep the generated/high-level
+    # path zero-copy and materialize only a genuinely strided direct caller.
+    lse = _tc(lse)
+    if lse is None:
+        return NOT_HANDLED
+    scale_value = float(scale) if scale is not None else 1.0 / math.sqrt(q._shape[-1])
+    return fast_fa4_bf16_d64_causal_backward(
+        q_native, k_native, v_native, output, lse, grad, scale_value
+    )
 
 
 @no_type_check
@@ -2877,13 +4246,528 @@ def fast_aten__scaled_dot_product_efficient_attention(
     return (out, log_sumexp, philox_seed, philox_offset)
 
 
+@no_type_check
+def fast_sdpa_dropout_softmax_backward(
+    probabilities, grad_after_dropout, dropout_mask, dropout_scale, score_scale
+):
+    """Fuse SDPA dropout backward, softmax backward, and score scaling.
+
+    The helper owns public-tensor validation, ordinary output allocation, and
+    the pointer-only bridge call.  Its device-kernel body remains isolated in
+    the Fable-owned module.  Unsupported inputs return ``NOT_HANDLED`` before
+    any operand is materialized or output is allocated.
+    """
+    probs = _t(probabilities)
+    grad = _t(grad_after_dropout)
+    mask = _t(dropout_mask) if dropout_mask is not None else None
+    if (
+        probs is None
+        or grad is None
+        or (dropout_mask is not None and mask is None)
+        or not _on_gpu(probs)
+        or probs._dtype != DType.float32
+        or grad._dtype != DType.float32
+        or probs._device != grad._device
+        or tuple(probs._shape) != tuple(grad._shape)
+        or len(probs._shape) < 1
+        or not isinstance(score_scale, int | float)
+        or isinstance(score_scale, bool)
+        or not math.isfinite(float(score_scale))
+    ):
+        return NOT_HANDLED
+
+    has_mask = mask is not None
+    if has_mask and (
+        mask._device != probs._device
+        or mask._dtype != DType.bool
+        or tuple(mask._shape) != tuple(probs._shape)
+        or not isinstance(dropout_scale, int | float)
+        or isinstance(dropout_scale, bool)
+        or not math.isfinite(float(dropout_scale))
+    ):
+        return NOT_HANDLED
+
+    # The Fable-owned production kernel is ported separately from this host
+    # wiring.  Keep the eager decomposition usable while that optional module
+    # is absent, and resolve it before materializing inputs or allocating an
+    # output so a missing bridge has no device-side cost.
+    if not all(path.is_file() for path in _SDPA_BACKWARD_SOURCE_PATHS):
+        return NOT_HANDLED
+    try:
+        sdpa_backward_ops = eager_kernels.sdpa_backward_ops
+        fused_backward = sdpa_backward_ops.SDPADropoutSoftmaxBackwardF32
+    except (AttributeError, ImportError):
+        return NOT_HANDLED
+
+    # In the no-dropout path the scale is semantically dead.  Canonicalizing
+    # it also keeps nonnumeric or nonfinite caller metadata away from the raw
+    # Float64 bridge without rejecting an otherwise valid operation.
+    bridge_dropout_scale = float(dropout_scale) if has_mask else 1.0
+    bridge_score_scale = float(score_scale)
+
+    probs = _tc(probs)
+    grad = _tc(grad)
+    if has_mask:
+        mask = _tc(mask)
+    out = _alloc(probs._shape, DType.float32, probs._device)
+    if out._numel == 0:
+        return out
+
+    rows = math.prod(probs._shape[:-1])
+    cols = probs._shape[-1]
+    fused_backward(
+        out._ptr,
+        probs._ptr,
+        grad._ptr,
+        mask._ptr if has_mask else 0,
+        rows,
+        cols,
+        int(has_mask),
+        bridge_dropout_scale,
+        bridge_score_scale,
+        _ctx_ptr(probs._device),
+    )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Matmul family (GPU: pure-Mojo GEMM; CPU: correctness-grade loops)
 # ---------------------------------------------------------------------------
 
 
 @no_type_check
+def _tf32_dense_2d_layout(tensor: TorchMojoTensor) -> bool | None:
+    """Return the physical-transpose flag for an exact dense 2-D layout."""
+    if len(tensor._shape) != 2:
+        return None
+    rows, cols = tensor._shape
+    strides = tuple(tensor._strides)
+    if strides == (cols, 1):
+        return False
+    if strides == (1, rows):
+        return True
+    return None
+
+
+@no_type_check
+def _tf32_dense_batched_layout(tensor: TorchMojoTensor) -> tuple[bool, int] | None:
+    """Classify dense matrices separated by a non-overlapping batch stride.
+
+    The boolean is the physical per-matrix transpose flag and the integer is
+    the runtime batch stride in elements.  Padding between matrices is valid;
+    arbitrary inner strides, broadcasts, and overlapping batches are not.
+    """
+    if len(tensor._shape) != 3:
+        return None
+    batch, rows, cols = tensor._shape
+    batch_stride, row_stride, col_stride = tuple(tensor._strides)
+    row_major = col_stride == 1 and (rows == 1 or row_stride == cols)
+    transposed = row_stride == 1 and (cols == 1 or col_stride == rows)
+    if row_major:
+        physical_transpose = False
+    elif transposed:
+        physical_transpose = True
+    else:
+        return None
+    matrix_elements = rows * cols
+    if min(batch, rows, cols) <= 0 or batch_stride < matrix_elements:
+        return None
+    return physical_transpose, batch_stride
+
+
+def _resolve_bf16_bridge(name: str):
+    """Resolve a BF16 bridge without compiling a known-incomplete module."""
+    global _BF16_IMPORT_FAILED
+
+    module = eager_kernels.__dict__.get("bf16_matmul_ops")
+    if module is None:
+        if _BF16_IMPORT_FAILED or not all(
+            path.is_file() for path in _BF16_SOURCE_PATHS
+        ):
+            return None
+        try:
+            module = eager_kernels.bf16_matmul_ops
+        except (AttributeError, ImportError):
+            _BF16_IMPORT_FAILED = True
+            return None
+    try:
+        return getattr(module, name)
+    except (AttributeError, ImportError):
+        return None
+
+
+def _resolve_bf16_cross_entropy_bridge(name: str):
+    """Resolve the optional fused BF16 cross-entropy pointer bridge."""
+    global _BF16_CROSS_ENTROPY_IMPORT_FAILED
+
+    module = eager_kernels.__dict__.get("bf16_cross_entropy_ops")
+    if module is None:
+        if _BF16_CROSS_ENTROPY_IMPORT_FAILED or not all(
+            path.is_file() for path in _BF16_CROSS_ENTROPY_SOURCE_PATHS
+        ):
+            return None
+        try:
+            module = eager_kernels.bf16_cross_entropy_ops
+        except (AttributeError, ImportError):
+            _BF16_CROSS_ENTROPY_IMPORT_FAILED = True
+            return None
+    try:
+        return getattr(module, name)
+    except (AttributeError, ImportError):
+        return None
+
+
+def _resolve_tf32_bridge(name: str):
+    """Resolve a TF32 bridge without compiling a known-incomplete module."""
+    global _TF32_IMPORT_FAILED
+
+    module = eager_kernels.__dict__.get("tf32_matmul_ops")
+    if module is None:
+        if _TF32_IMPORT_FAILED or not all(
+            path.is_file() for path in _TF32_SOURCE_PATHS
+        ):
+            return None
+        try:
+            module = eager_kernels.tf32_matmul_ops
+        except (AttributeError, ImportError):
+            _TF32_IMPORT_FAILED = True
+            return None
+    try:
+        return getattr(module, name)
+    except (AttributeError, ImportError):
+        return None
+
+
+@no_type_check
+def _try_bf16_gemm(a, b, bias=None, *, transpose_b=False, output_shape=None):
+    """Enqueue the dense H100 BF16 GEMM, or return ``None``.
+
+    The bridge consumes and produces BF16 while the accepted device kernel
+    accumulates in FP32.  This host helper only validates metadata, resolves
+    the optional bridge before allocation, and launches it without a retry.
+    """
+    lhs = _t(a)
+    rhs = _t(b)
+    bias_tensor = _t(bias) if bias is not None else None
+    if (
+        lhs is None
+        or rhs is None
+        or (bias is not None and bias_tensor is None)
+        or lhs._dtype != DType.bfloat16
+        or rhs._dtype != DType.bfloat16
+        or lhs._device != rhs._device
+        or lhs._device.label != "gpu"
+        or lhs._device.api != "cuda"
+        or lhs._device.architecture_name != "sm_90a"
+    ):
+        return None
+    lhs_layout = _tf32_dense_2d_layout(lhs)
+    rhs_layout = _tf32_dense_2d_layout(rhs)
+    if lhs_layout is None or rhs_layout is None:
+        return None
+
+    m, k = lhs._shape
+    rhs_k = rhs._shape[1] if transpose_b else rhs._shape[0]
+    n = rhs._shape[0] if transpose_b else rhs._shape[1]
+    if min(m, n, k) <= 0 or rhs_k != k:
+        return None
+    if bias_tensor is not None and (
+        bias_tensor._device != lhs._device
+        or bias_tensor._dtype != DType.bfloat16
+        or tuple(bias_tensor._shape) != (n,)
+        or not bias_tensor._is_contiguous
+    ):
+        return None
+
+    logical_output_shape = (m, n) if output_shape is None else tuple(output_shape)
+    if (
+        not logical_output_shape
+        or logical_output_shape[-1] != n
+        or math.prod(logical_output_shape) != m * n
+    ):
+        return None
+    bridge = _resolve_bf16_bridge("Bf16GemmBF16")
+    if bridge is None:
+        return None
+    out = _alloc(logical_output_shape, DType.bfloat16, lhs._device)
+    bridge(
+        out._ptr,
+        lhs._ptr,
+        rhs._ptr,
+        bias_tensor._ptr if bias_tensor is not None else out._ptr,
+        m,
+        n,
+        k,
+        int(lhs_layout),
+        int(rhs_layout) ^ int(bool(transpose_b)),
+        int(bias_tensor is not None),
+        _ctx_ptr(lhs._device),
+    )
+    return out
+
+
+@no_type_check
+def _try_tf32_gemm(a, b, bias=None, *, transpose_b=False, output_shape=None):
+    """Enqueue the opt-in dense H100 TF32 GEMM, or return ``None``.
+
+    This helper owns only host validation/allocation and the raw bridge call;
+    the Fable-owned module owns every device-kernel body.  Unsupported layouts
+    and strict FP32 retain the existing pure-Mojo SIMT path.
+    """
+    if torch.get_float32_matmul_precision() == "highest":
+        return None
+    lhs = _t(a)
+    rhs = _t(b)
+    bias_tensor = _t(bias) if bias is not None else None
+    if (
+        lhs is None
+        or rhs is None
+        or (bias is not None and bias_tensor is None)
+        or lhs._dtype != DType.float32
+        or rhs._dtype != DType.float32
+        or lhs._device != rhs._device
+        or lhs._device.label != "gpu"
+        or lhs._device.api != "cuda"
+        or lhs._device.architecture_name != "sm_90a"
+    ):
+        return None
+    lhs_layout = _tf32_dense_2d_layout(lhs)
+    rhs_layout = _tf32_dense_2d_layout(rhs)
+    if lhs_layout is None or rhs_layout is None:
+        return None
+
+    m, k = lhs._shape
+    rhs_k = rhs._shape[1] if transpose_b else rhs._shape[0]
+    n = rhs._shape[0] if transpose_b else rhs._shape[1]
+    if min(m, n, k) <= 0 or rhs_k != k:
+        return None
+    if bias_tensor is not None and (
+        bias_tensor._device != lhs._device
+        or bias_tensor._dtype != DType.float32
+        or tuple(bias_tensor._shape) != (n,)
+        or not bias_tensor._is_contiguous
+    ):
+        return None
+
+    logical_output_shape = (m, n) if output_shape is None else tuple(output_shape)
+    if (
+        not logical_output_shape
+        or logical_output_shape[-1] != n
+        or math.prod(logical_output_shape) != m * n
+    ):
+        return None
+    bridge = _resolve_tf32_bridge("Tf32GemmF32")
+    if bridge is None:
+        return None
+    out = _alloc(logical_output_shape, DType.float32, lhs._device)
+    bridge(
+        out._ptr,
+        lhs._ptr,
+        rhs._ptr,
+        bias_tensor._ptr if bias_tensor is not None else out._ptr,
+        m,
+        n,
+        k,
+        int(lhs_layout),
+        int(rhs_layout) ^ int(bool(transpose_b)),
+        int(bias_tensor is not None),
+        _ctx_ptr(lhs._device),
+    )
+    return out
+
+
+@no_type_check
+def _try_bf16_bmm(a, b, *, transpose_b=False):
+    """Enqueue dense H100 BF16 BMM over packed or padded batches."""
+    lhs = _t(a)
+    rhs = _t(b)
+    if (
+        lhs is None
+        or rhs is None
+        or lhs._dtype != DType.bfloat16
+        or rhs._dtype != DType.bfloat16
+        or lhs._device != rhs._device
+        or lhs._device.label != "gpu"
+        or lhs._device.api != "cuda"
+        or lhs._device.architecture_name != "sm_90a"
+    ):
+        return None
+    lhs_layout = _tf32_dense_batched_layout(lhs)
+    rhs_layout = _tf32_dense_batched_layout(rhs)
+    if lhs_layout is None or rhs_layout is None:
+        return None
+
+    batch, m, k = lhs._shape
+    rhs_batch = rhs._shape[0]
+    rhs_k = rhs._shape[2] if transpose_b else rhs._shape[1]
+    n = rhs._shape[1] if transpose_b else rhs._shape[2]
+    if min(batch, m, n, k) <= 0 or rhs_batch != batch or rhs_k != k:
+        return None
+
+    lhs_transposed, lhs_batch_stride = lhs_layout
+    rhs_transposed, rhs_batch_stride = rhs_layout
+    output_batch_stride = m * n
+    bridge = _resolve_bf16_bridge("Bf16BmmBF16")
+    if bridge is None:
+        return None
+    out = _alloc((batch, m, n), DType.bfloat16, lhs._device)
+    bridge(
+        out._ptr,
+        lhs._ptr,
+        rhs._ptr,
+        batch,
+        m,
+        n,
+        k,
+        output_batch_stride,
+        lhs_batch_stride,
+        rhs_batch_stride,
+        int(lhs_transposed),
+        int(rhs_transposed) ^ int(bool(transpose_b)),
+        _ctx_ptr(lhs._device),
+    )
+    return out
+
+
+@no_type_check
+def _try_tf32_bmm(a, b, *, transpose_b=False):
+    """Enqueue the dormant dense H100 TF32 BMM, or return ``None``.
+
+    This bias-free ABI accepts packed or independently padded batches of
+    dense row-major/per-matrix-transpose operands.  ``transpose_b`` is the
+    logical RHS transpose used by the SDPA autograd path; it is folded with
+    B's physical layout without materializing a transposed tensor.
+    """
+    if torch.get_float32_matmul_precision() == "highest":
+        return None
+    lhs = _t(a)
+    rhs = _t(b)
+    if (
+        lhs is None
+        or rhs is None
+        or lhs._dtype != DType.float32
+        or rhs._dtype != DType.float32
+        or lhs._device != rhs._device
+        or lhs._device.label != "gpu"
+        or lhs._device.api != "cuda"
+        or lhs._device.architecture_name != "sm_90a"
+    ):
+        return None
+    lhs_layout = _tf32_dense_batched_layout(lhs)
+    rhs_layout = _tf32_dense_batched_layout(rhs)
+    if lhs_layout is None or rhs_layout is None:
+        return None
+
+    batch, m, k = lhs._shape
+    rhs_batch = rhs._shape[0]
+    rhs_k = rhs._shape[2] if transpose_b else rhs._shape[1]
+    n = rhs._shape[1] if transpose_b else rhs._shape[2]
+    if min(batch, m, n, k) <= 0 or rhs_batch != batch or rhs_k != k:
+        return None
+
+    lhs_transposed, lhs_batch_stride = lhs_layout
+    rhs_transposed, rhs_batch_stride = rhs_layout
+    output_batch_stride = m * n
+    bridge = _resolve_tf32_bridge("Tf32BmmF32")
+    if bridge is None:
+        return None
+    out = _alloc((batch, m, n), DType.float32, lhs._device)
+    bridge(
+        out._ptr,
+        lhs._ptr,
+        rhs._ptr,
+        batch,
+        m,
+        n,
+        k,
+        output_batch_stride,
+        lhs_batch_stride,
+        rhs_batch_stride,
+        int(lhs_transposed),
+        int(rhs_transposed) ^ int(bool(transpose_b)),
+        _ctx_ptr(lhs._device),
+    )
+    return out
+
+
+@no_type_check
+def _try_bf16_linear(input, weight, bias=None):
+    """Route a dense rank >= 2 BF16 projection through GEMM without copies."""
+    a = _t(input)
+    w = _t(weight)
+    if (
+        a is None
+        or w is None
+        or len(a._shape) < 2
+        or len(w._shape) != 2
+        or (len(a._shape) > 2 and not a._is_contiguous)
+    ):
+        return None
+
+    output_shape = tuple(a._shape[:-1]) + (w._shape[0],)
+    if len(a._shape) == 2:
+        matrix = a
+    else:
+        matrix_shape = (math.prod(a._shape[:-1]), a._shape[-1])
+        matrix = _view_of(
+            a,
+            matrix_shape,
+            _row_major_strides(matrix_shape),
+            a._offset,
+            contiguous=True,
+        )
+    return _try_bf16_gemm(
+        matrix, weight, bias, transpose_b=True, output_shape=output_shape
+    )
+
+
+@no_type_check
+def _try_tf32_linear(input, weight, bias=None):
+    """Route a dense rank >= 2 linear projection through TF32 without copies.
+
+    The TF32 GEMM ABI is two-dimensional.  A contiguous higher-rank linear
+    input is already the same row-major matrix after its leading dimensions
+    are flattened, so only a metadata view is needed.  Non-contiguous inputs
+    retain the TensorSpec path, which owns any required materialization.
+    """
+    if torch.get_float32_matmul_precision() == "highest":
+        return None
+    a = _t(input)
+    w = _t(weight)
+    if (
+        a is None
+        or w is None
+        or len(a._shape) < 2
+        or len(w._shape) != 2
+        or (len(a._shape) > 2 and not a._is_contiguous)
+    ):
+        return None
+
+    output_shape = tuple(a._shape[:-1]) + (w._shape[0],)
+    if len(a._shape) == 2:
+        matrix = a
+    else:
+        matrix_shape = (math.prod(a._shape[:-1]), a._shape[-1])
+        matrix = _view_of(
+            a,
+            matrix_shape,
+            _row_major_strides(matrix_shape),
+            a._offset,
+            contiguous=True,
+        )
+    return _try_tf32_gemm(
+        matrix, weight, bias, transpose_b=True, output_shape=output_shape
+    )
+
+
+@no_type_check
 def fast_aten_mm(x, y):
+    out = _try_bf16_gemm(x, y)
+    if out is not None:
+        return out
+    out = _try_tf32_gemm(x, y)
+    if out is not None:
+        return out
     out = _try_spec_matmul("MatmulSpec", (x, y), 0)
     return out if out is not None else NOT_HANDLED
 
@@ -2892,6 +4776,12 @@ def fast_aten_mm(x, y):
 def fast_aten_addmm(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     # beta/alpha scaling isn't implemented by the fast path (falls through).
     if beta == 1 and alpha == 1:
+        out = _try_bf16_gemm(mat1, mat2, input)
+        if out is not None:
+            return out
+        out = _try_tf32_gemm(mat1, mat2, input)
+        if out is not None:
+            return out
         out = _try_spec_matmul("MatmulBiasSpec", (mat1, mat2, input), 0)
         if out is not None:
             return out
@@ -2904,6 +4794,12 @@ def fast_aten_linear(input, weight, bias=None):
     # composite op (instead of letting torch decompose it into t() + mm)
     # matters because the GEMM kernel reads B transposed for free, so the
     # weight is never materialized in transposed layout.
+    out = _try_bf16_linear(input, weight, bias)
+    if out is not None:
+        return out
+    out = _try_tf32_linear(input, weight, bias)
+    if out is not None:
+        return out
     if bias is None:
         out = _try_spec_matmul("MatmulSpec", (input, weight), 1)
     else:
@@ -2913,7 +4809,31 @@ def fast_aten_linear(input, weight, bias=None):
 
 @no_type_check
 def fast_aten_bmm(input, mat2):
+    out = _try_bf16_bmm(input, mat2)
+    if out is not None:
+        return out
+    out = _try_tf32_bmm(input, mat2)
+    if out is not None:
+        return out
     out = _try_spec_matmul("BmmSpec", (input, mat2), 0)
+    return out if out is not None else NOT_HANDLED
+
+
+@no_type_check
+def _fast_aten_bmm_transpose_b(input, mat2):
+    """Batched ``input @ mat2.transpose(-2, -1)`` without a transpose copy.
+
+    This is an internal eager-autograd helper rather than an ATen registration:
+    ``BmmSpec`` passes the logical RHS-transpose flag directly to the existing
+    GEMM kernel while both physical operands remain dense row-major tensors.
+    """
+    out = _try_bf16_bmm(input, mat2, transpose_b=True)
+    if out is not None:
+        return out
+    out = _try_tf32_bmm(input, mat2, transpose_b=True)
+    if out is not None:
+        return out
+    out = _try_spec_matmul("BmmSpec", (input, mat2), 1)
     return out if out is not None else NOT_HANDLED
 
 
@@ -3044,6 +4964,14 @@ def fast_aten_scaled_dot_product_attention(
     scale=None,
     enable_gqa=False,
 ):
+    fa4_result = fast_fa4_bf16_d64_causal_forward(
+        query, key, value, attn_mask, dropout_p, is_causal, scale, enable_gqa
+    )
+    if fa4_result is not NOT_HANDLED:
+        output, logsumexp, q_native, k_native, v_native = fa4_result
+        del logsumexp, q_native, k_native, v_native
+        return output
+
     q = _t(query)
     k = _t(key)
     v = _t(value)
@@ -3052,7 +4980,16 @@ def fast_aten_scaled_dot_product_attention(
         and k is not None
         and v is not None
         and attn_mask is None
-        and dropout_p == 0.0
+        and (
+            dropout_p == 0.0
+            or (
+                isinstance(dropout_p, int | float)
+                and 0.0 < dropout_p <= 1.0
+                and q._dtype == DType.float32
+                and _on_gpu(q)
+            )
+        )
+        and q._device == k._device == v._device
         and q._dtype == k._dtype == v._dtype
         and q._dtype in _FLOAT_DTYPES
         and len(q._shape) == 4
@@ -3068,7 +5005,8 @@ def fast_aten_scaled_dot_product_attention(
         ctx = _ctx_ptr(q._device)
         dtype_val = q._dtype.value
         if (
-            _on_gpu(q)
+            dropout_p == 0.0
+            and _on_gpu(q)
             and q_len == 1
             and not is_causal
             and head_dim % 4 == 0
@@ -3087,7 +5025,8 @@ def fast_aten_scaled_dot_product_attention(
                 result = eager_kernels.nn_ops.AttnDecodeSpec(
                     _spec_of(q), _spec_of(k), _spec_of(v), float(scale_val)
                 )
-            except Exception:
+            except Exception as exc:
+                _raise_if_device_oom(exc)
                 result = None
             if result is not None:
                 return _wrap_spec_result(result, q._dtype, q._device)
@@ -3116,44 +5055,13 @@ def fast_aten_scaled_dot_product_attention(
                 ctx,
             )
             return out
-        k = k if k._is_contiguous else k._materialize_contiguous()
-        v = v if v._is_contiguous else v._materialize_contiguous()
-        q = q if q._is_contiguous else q._materialize_contiguous()
-        scores = _alloc((b * h, q_len, kv_len), q._dtype, q._device)
-        # scores = q @ k^T (transpose_b=1)
-        eager_kernels.matmul_ops.Bmm(
-            scores._ptr,
-            q._ptr,
-            k._ptr,
-            (b * h, q_len, kv_len, head_dim, 1),
-            dtype_val,
-            ctx,
+        result = _sdpa_math_forward_with_dropout(
+            q, k, v, is_causal, scale, float(dropout_p)
         )
-        probs = _alloc((b * h, q_len, kv_len), q._dtype, q._device)
-        eager_kernels.nn_ops.SoftmaxRows(
-            probs._ptr,
-            scores._ptr,
-            b * h * q_len,
-            kv_len,
-            float(scale_val),
-            1 if is_causal else 0,
-            q_len,
-            dtype_val,
-            ctx,
-        )
-        out = _alloc((b * h, q_len, head_dim), q._dtype, q._device)
-        eager_kernels.matmul_ops.Bmm(
-            out._ptr,
-            probs._ptr,
-            v._ptr,
-            (b * h, q_len, head_dim, kv_len, 0),
-            dtype_val,
-            ctx,
-        )
-        out_shape = (b, h, q_len, head_dim)
-        return _view_of(
-            out, out_shape, _row_major_strides(out_shape), out._offset, contiguous=True
-        )
+        if result is NOT_HANDLED:
+            return NOT_HANDLED
+        out, _, _ = result
+        return out
     return NOT_HANDLED
 
 
@@ -3212,19 +5120,27 @@ def fast_aten_embedding(
     input, weight, padding_idx=-1, scale_grad_by_freq=False, sparse=False
 ):
     # `input` is the weight table, `weight` the indices (aten naming).
-    table = _tc(input)
-    idx = _tc(weight)
+    table = _t(input)
+    idx = _t(weight)
     if (
-        table is not None
-        and idx is not None
-        and table._dtype in _FLOAT_DTYPES
-        and idx._dtype in (DType.int32, DType.int64)
-        and len(table._shape) == 2
-        and idx._numel > 0
+        table is None
+        or idx is None
+        or table._device != idx._device
+        or table._dtype not in _FLOAT_DTYPES
+        or idx._dtype not in (DType.int32, DType.int64)
+        or len(table._shape) != 2
     ):
-        row_len = table._shape[1]
-        out_shape = tuple(idx._shape) + (row_len,)
-        out = _alloc(out_shape, table._dtype, table._device)
+        return NOT_HANDLED
+
+    # Validate before either operand can be materialized.  Besides avoiding
+    # needless work, this keeps cross-device inputs from being enqueued on the
+    # table's context.
+    table = _tc(table)
+    idx = _tc(idx)
+    row_len = table._shape[1]
+    out_shape = tuple(idx._shape) + (row_len,)
+    out = _alloc(out_shape, table._dtype, table._device)
+    if out._numel > 0:
         eager_kernels.nn_ops.Gather0(
             out._ptr,
             table._ptr,
@@ -3235,8 +5151,65 @@ def fast_aten_embedding(
             table._dtype.value,
             _ctx_ptr(table._device),
         )
-        return out
-    return NOT_HANDLED
+    return out
+
+
+@no_type_check
+def fast_aten_embedding_dense_backward(
+    grad_output, indices, num_weights, padding_idx, scale_grad_by_freq
+):
+    """FP32/int64 GPU embedding backward through the Fable-owned kernel."""
+    grad = _t(grad_output)
+    idx = _t(indices)
+
+    # Reject unsupported public modes here before materialization, allocation,
+    # or launch.  The raw bridge also propagates defensive candidate-side
+    # errors, but those must not be the normal validation path.
+    if scale_grad_by_freq is not False:
+        raise NotImplementedError(
+            "Mojo eager embedding_dense_backward does not yet support "
+            "scale_grad_by_freq=True"
+        )
+    _alert_not_deterministic("embedding_dense_backward on Mojo")
+
+    if (
+        grad is None
+        or idx is None
+        or not _on_gpu(grad)
+        or grad._device != idx._device
+        or grad._dtype != DType.float32
+        or idx._dtype != DType.int64
+        or len(grad._shape) < 1
+        or not isinstance(num_weights, int)
+        or isinstance(num_weights, bool)
+        or num_weights < 0
+        or not isinstance(padding_idx, int)
+        or isinstance(padding_idx, bool)
+    ):
+        return NOT_HANDLED
+
+    embedding_dim = grad._shape[-1]
+    if grad._numel != idx._numel * embedding_dim:
+        return NOT_HANDLED
+
+    grad = _tc(grad)
+    idx = _tc(idx)
+    grad_weight = _alloc((num_weights, embedding_dim), DType.float32, grad._device)
+    if grad_weight._numel > 0:
+        # This call includes complete output zeroing and accumulation, stays on
+        # the tensor's supplied context, and returns asynchronously.
+        eager_kernels.embedding_backward_ops.EmbeddingDenseBackwardF32I64(
+            grad_weight._ptr,
+            grad._ptr,
+            idx._ptr,
+            idx._numel,
+            embedding_dim,
+            num_weights,
+            padding_idx,
+            0,
+            _ctx_ptr(grad._device),
+        )
+    return grad_weight
 
 
 # ---------------------------------------------------------------------------

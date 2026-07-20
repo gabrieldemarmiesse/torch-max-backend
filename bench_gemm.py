@@ -19,7 +19,6 @@ import torch
 
 from torch_mojo_backend import get_accelerators, register_mojo_devices
 
-
 MI300X_BF16_FLOPS = 1.3e15
 MI300X_HBM_BYTES = 5.3e12
 
