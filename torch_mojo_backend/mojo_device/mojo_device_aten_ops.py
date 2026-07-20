@@ -775,6 +775,7 @@ register_aten_op("aten::linalg_vector_norm.out")(
 )
 register_aten_op("aten::mul.out")(_out_variant("aten::mul.out", "fast_aten_mul"))
 register_aten_op("aten::mean.out")(_out_variant("aten::mean.out", "fast_aten_mean"))
+register_aten_op("aten::sub.out")(_out_variant("aten::sub.out", "fast_aten_sub"))
 register_aten_op("aten::any.out")(
     _out_variant("aten::any.out", "fast_aten_any", dtype_policy="bool_or_uint8")
 )
@@ -836,6 +837,8 @@ def mojo_device_min_dim_min(
 # ----------------------------------------------------------------------------------
 
 _register_fast("aten::_adaptive_avg_pool2d", "fast_aten__adaptive_avg_pool2d")
+_register_fast("aten::_fused_adamw_", "fast_aten__fused_adamw")
+_register_fast("aten::_fused_adamw_.tensor_lr", "fast_aten__fused_adamw")
 _register_fast("aten::_local_scalar_dense", "fast_aten__local_scalar_dense")
 _register_fast("aten::_log_softmax", "fast_aten__log_softmax")
 _register_fast(

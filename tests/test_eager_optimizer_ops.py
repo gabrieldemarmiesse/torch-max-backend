@@ -24,6 +24,466 @@ def _watch_eager_op(call_checker: CallChecker, op_name: str) -> None:
     call_checker.register(EAGER_CALL_COUNTERS[op_name])
 
 
+def _fused_adamw_case(device: str, *, amsgrad: bool, maximize: bool):
+    """Create nonuniform, nonzero AdamW state without sharing storage."""
+    shapes = ((), (0,), (7,), (17, 65))
+
+    def values(shape, *, scale, offset):
+        numel = torch.empty(shape).numel()
+        return (
+            torch.arange(numel, dtype=torch.float32)
+            .mul(scale)
+            .add(offset)
+            .reshape(shape)
+        )
+
+    parameters = [
+        values(shape, scale=0.003, offset=-0.75 + index * 0.1)
+        for index, shape in enumerate(shapes)
+    ]
+    gradients = [
+        values(shape, scale=-0.0007, offset=0.3 - index * 0.02)
+        for index, shape in enumerate(shapes)
+    ]
+    exp_avgs = [
+        values(shape, scale=0.0002, offset=-0.08 + index * 0.01)
+        for index, shape in enumerate(shapes)
+    ]
+    exp_avg_sqs = [
+        values(shape, scale=0.00001, offset=0.01 + index * 0.001)
+        for index, shape in enumerate(shapes)
+    ]
+    max_exp_avg_sqs = [value.mul(1.25) for value in exp_avg_sqs] if amsgrad else []
+    state_steps = [
+        torch.tensor(float(step), dtype=torch.float32) for step in (3, 5, 11, 17)
+    ]
+    groups = (
+        parameters,
+        gradients,
+        exp_avgs,
+        exp_avg_sqs,
+        max_exp_avg_sqs,
+        state_steps,
+    )
+    return tuple([[value.to(device) for value in group] for group in groups])
+
+
+@pytest.mark.parametrize(
+    ("amsgrad", "maximize"), [(False, False), (False, True), (True, False)]
+)
+def test_fused_adamw_direct_matches_cpu_for_runtime_shapes(
+    mojo_gpu: str, call_checker: CallChecker, amsgrad: bool, maximize: bool
+):
+    """Exercise the exact mutable TensorList op used by fused AdamW."""
+    _watch_eager_op(call_checker, "aten::_fused_adamw_")
+    cpu_groups = _fused_adamw_case("cpu", amsgrad=amsgrad, maximize=maximize)
+    mojo_groups = _fused_adamw_case(mojo_gpu, amsgrad=amsgrad, maximize=maximize)
+    kwargs = {
+        "lr": 0.025,
+        "beta1": 0.8,
+        "beta2": 0.95,
+        "weight_decay": 0.1,
+        "eps": 1e-8,
+        "amsgrad": amsgrad,
+        "maximize": maximize,
+    }
+    aliases = [
+        [(tensor._holder, tensor._ptr) for tensor in group]
+        for group in mojo_groups[: 5 if amsgrad else 4]
+    ]
+    original_grads = [tensor.cpu().clone() for tensor in mojo_groups[1]]
+    original_steps = [tensor.cpu().clone() for tensor in mojo_groups[5]]
+
+    assert torch.ops.aten._fused_adamw_.default(*cpu_groups, **kwargs) is None
+    assert torch.ops.aten._fused_adamw_.default(*mojo_groups, **kwargs) is None
+
+    for cpu_group, mojo_group in zip(cpu_groups, mojo_groups, strict=True):
+        for expected, actual in zip(cpu_group, mojo_group, strict=True):
+            torch.testing.assert_close(actual.cpu(), expected, rtol=2e-6, atol=2e-7)
+    for group, group_aliases in zip(
+        mojo_groups[: 5 if amsgrad else 4], aliases, strict=True
+    ):
+        for tensor, (holder, ptr) in zip(group, group_aliases, strict=True):
+            assert tensor._holder is holder
+            assert tensor._ptr == ptr
+    for actual, expected in zip(mojo_groups[1], original_grads, strict=True):
+        torch.testing.assert_close(actual.cpu(), expected, rtol=0, atol=0)
+    for actual, expected in zip(mojo_groups[5], original_steps, strict=True):
+        torch.testing.assert_close(actual.cpu(), expected, rtol=0, atol=0)
+
+
+def test_fused_adamw_tensor_lr_overload_matches_cpu(
+    mojo_gpu: str, call_checker: CallChecker
+):
+    _watch_eager_op(call_checker, "aten::_fused_adamw_.tensor_lr")
+    cpu_groups = _fused_adamw_case("cpu", amsgrad=False, maximize=False)
+    mojo_groups = _fused_adamw_case(mojo_gpu, amsgrad=False, maximize=False)
+    cpu_lr = torch.tensor(0.0125, dtype=torch.float32)
+    mojo_lr = cpu_lr.to(mojo_gpu)
+    kwargs = {
+        "beta1": 0.8,
+        "beta2": 0.95,
+        "weight_decay": 0.1,
+        "eps": 1e-8,
+        "amsgrad": False,
+        "maximize": False,
+    }
+
+    assert (
+        torch.ops.aten._fused_adamw_.tensor_lr(*cpu_groups, lr=cpu_lr, **kwargs) is None
+    )
+    assert (
+        torch.ops.aten._fused_adamw_.tensor_lr(*mojo_groups, lr=mojo_lr, **kwargs)
+        is None
+    )
+    for cpu_group, mojo_group in zip(cpu_groups, mojo_groups, strict=True):
+        for expected, actual in zip(cpu_group, mojo_group, strict=True):
+            torch.testing.assert_close(actual.cpu(), expected, rtol=2e-6, atol=2e-7)
+    torch.testing.assert_close(mojo_lr.cpu(), cpu_lr, rtol=0, atol=0)
+
+
+def test_fused_adamw_zero_decay_preserves_nonfinite_parameter(
+    mojo_gpu: str, call_checker: CallChecker
+):
+    """Zero decay must not evaluate ``0 * inf`` and turn infinity into NaN."""
+    _watch_eager_op(call_checker, "aten::_fused_adamw_")
+
+    def groups(device):
+        return (
+            [torch.tensor([float("inf")], dtype=torch.float32, device=device)],
+            [torch.tensor([0.25], dtype=torch.float32, device=device)],
+            [torch.tensor([0.0], dtype=torch.float32, device=device)],
+            [torch.tensor([1.0], dtype=torch.float32, device=device)],
+            [],
+            [torch.tensor(1.0, dtype=torch.float32, device=device)],
+        )
+
+    cpu_groups = groups("cpu")
+    mojo_groups = groups(mojo_gpu)
+    kwargs = {
+        "lr": 0.01,
+        "beta1": 0.9,
+        "beta2": 0.95,
+        "weight_decay": 0.0,
+        "eps": 1e-8,
+        "amsgrad": False,
+        "maximize": False,
+    }
+
+    torch.ops.aten._fused_adamw_.default(*cpu_groups, **kwargs)
+    torch.ops.aten._fused_adamw_.default(*mojo_groups, **kwargs)
+
+    assert torch.isinf(cpu_groups[0][0]).all()
+    assert torch.isinf(mojo_groups[0][0].cpu()).all()
+    for cpu_group, mojo_group in zip(cpu_groups[1:], mojo_groups[1:], strict=True):
+        for expected, actual in zip(cpu_group, mojo_group, strict=True):
+            torch.testing.assert_close(actual.cpu(), expected, rtol=2e-6, atol=2e-7)
+
+
+def test_fused_adamw_accepts_contiguous_singleton_stride_variants(
+    mojo_gpu: str, call_checker: CallChecker
+):
+    """Size-one dimensions can have arbitrary strides and remain contiguous."""
+    _watch_eager_op(call_checker, "aten::_fused_adamw_")
+
+    def groups(device):
+        def singleton_view(values):
+            return torch.tensor([values], dtype=torch.float32, device=device).transpose(
+                0, 1
+            )
+
+        return (
+            [torch.tensor([[1.0], [-2.0]], dtype=torch.float32, device=device)],
+            [singleton_view([0.25, -0.5])],
+            [singleton_view([0.0, 0.1])],
+            [singleton_view([1.0, 1.5])],
+            [],
+            [torch.tensor(3.0, dtype=torch.float32, device=device)],
+        )
+
+    cpu_groups = groups("cpu")
+    mojo_groups = groups(mojo_gpu)
+    parameter, gradient = mojo_groups[0][0], mojo_groups[1][0]
+    assert parameter._strides == (1, 1)
+    assert gradient._strides == (1, 2)
+    assert parameter._is_contiguous and gradient._is_contiguous
+    kwargs = {
+        "lr": 0.01,
+        "beta1": 0.9,
+        "beta2": 0.95,
+        "weight_decay": 0.1,
+        "eps": 1e-8,
+        "amsgrad": False,
+        "maximize": False,
+    }
+
+    torch.ops.aten._fused_adamw_.default(*cpu_groups, **kwargs)
+    torch.ops.aten._fused_adamw_.default(*mojo_groups, **kwargs)
+
+    for cpu_group, mojo_group in zip(cpu_groups, mojo_groups, strict=True):
+        for expected, actual in zip(cpu_group, mojo_group, strict=True):
+            torch.testing.assert_close(actual.cpu(), expected, rtol=2e-6, atol=2e-7)
+
+
+def test_fused_adamw_batches_more_than_descriptor_capacity(
+    mojo_gpu: str, call_checker: CallChecker
+):
+    """Cross the 32-descriptor launch boundary with interspersed empty tensors."""
+    _watch_eager_op(call_checker, "aten::_fused_adamw_")
+    empty_indices = {0, 31, 32, 36}
+    sizes = [0 if index in empty_indices else index % 9 + 1 for index in range(37)]
+
+    def values(size, *, scale, offset):
+        return torch.arange(size, dtype=torch.float32).mul(scale).add(offset)
+
+    cpu_groups = (
+        [
+            values(size, scale=0.01, offset=index * 0.1)
+            for index, size in enumerate(sizes)
+        ],
+        [values(size, scale=-0.02, offset=0.25) for size in sizes],
+        [values(size, scale=0.001, offset=-0.05) for size in sizes],
+        [values(size, scale=0.0001, offset=0.01) for size in sizes],
+        [],
+        [torch.tensor(float(index % 7 + 1)) for index in range(len(sizes))],
+    )
+    mojo_groups = tuple(
+        [[tensor.to(mojo_gpu) for tensor in group] for group in cpu_groups]
+    )
+    kwargs = {
+        "lr": 0.01,
+        "beta1": 0.9,
+        "beta2": 0.95,
+        "weight_decay": 0.1,
+        "eps": 1e-8,
+        "amsgrad": False,
+        "maximize": False,
+    }
+
+    torch.ops.aten._fused_adamw_.default(*cpu_groups, **kwargs)
+    torch.ops.aten._fused_adamw_.default(*mojo_groups, **kwargs)
+
+    for cpu_group, mojo_group in zip(cpu_groups, mojo_groups, strict=True):
+        for expected, actual in zip(cpu_group, mojo_group, strict=True):
+            torch.testing.assert_close(actual.cpu(), expected, rtol=2e-6, atol=2e-7)
+
+
+@pytest.mark.parametrize("found_inf_value", [0.0, 1.0])
+def test_fused_adamw_grad_scale_and_found_inf_match_cpu(
+    mojo_gpu: str, call_checker: CallChecker, found_inf_value: float
+):
+    _watch_eager_op(call_checker, "aten::_fused_adamw_")
+    cpu_groups = _fused_adamw_case("cpu", amsgrad=True, maximize=False)
+    mojo_groups = _fused_adamw_case(mojo_gpu, amsgrad=True, maximize=False)
+    original_mojo = [
+        [tensor.cpu().clone() for tensor in group] for group in mojo_groups
+    ]
+    cpu_grad_scale = torch.tensor(2.0, dtype=torch.float32)
+    mojo_grad_scale = cpu_grad_scale.to(mojo_gpu)
+    cpu_found_inf = torch.tensor(found_inf_value, dtype=torch.float32)
+    mojo_found_inf = cpu_found_inf.to(mojo_gpu)
+    kwargs = {
+        "lr": 0.025,
+        "beta1": 0.8,
+        "beta2": 0.95,
+        "weight_decay": 0.1,
+        "eps": 1e-8,
+        "amsgrad": True,
+        "maximize": False,
+    }
+
+    torch.ops.aten._fused_adamw_.default(
+        *cpu_groups, grad_scale=cpu_grad_scale, found_inf=cpu_found_inf, **kwargs
+    )
+    torch.ops.aten._fused_adamw_.default(
+        *mojo_groups, grad_scale=mojo_grad_scale, found_inf=mojo_found_inf, **kwargs
+    )
+
+    for cpu_group, mojo_group in zip(cpu_groups, mojo_groups, strict=True):
+        for expected, actual in zip(cpu_group, mojo_group, strict=True):
+            torch.testing.assert_close(actual.cpu(), expected, rtol=2e-6, atol=2e-7)
+    if found_inf_value == 0.0:
+        for original, actual in zip(original_mojo[1], mojo_groups[1], strict=True):
+            torch.testing.assert_close(actual.cpu(), original / 2.0, rtol=0, atol=0)
+    else:
+        for original_group, actual_group in zip(
+            original_mojo, mojo_groups, strict=True
+        ):
+            for original, actual in zip(original_group, actual_group, strict=True):
+                torch.testing.assert_close(actual.cpu(), original, rtol=0, atol=0)
+    torch.testing.assert_close(mojo_grad_scale.cpu(), cpu_grad_scale, rtol=0, atol=0)
+    torch.testing.assert_close(mojo_found_inf.cpu(), cpu_found_inf, rtol=0, atol=0)
+
+
+def test_fused_adamw_validates_every_tensor_before_write(
+    mojo_gpu: str, call_checker: CallChecker
+):
+    _watch_eager_op(call_checker, "aten::_fused_adamw_")
+    parameters = [
+        torch.tensor([1.0, -2.0], device=mojo_gpu),
+        torch.tensor([3.0, -4.0, 5.0], device=mojo_gpu),
+    ]
+    grads = [torch.ones_like(parameter) for parameter in parameters]
+    exp_avgs = [torch.zeros_like(parameter) for parameter in parameters]
+    exp_avg_sqs = [torch.ones_like(parameter) for parameter in parameters]
+    # Only the later entry is malformed; a partial-launch implementation would
+    # have already updated the valid first entry before discovering this.
+    exp_avg_sqs[1] = torch.ones(4, device=mojo_gpu)
+    steps = [torch.tensor(1.0, device=mojo_gpu) for _ in parameters]
+    mutable_groups = (parameters, grads, exp_avgs, exp_avg_sqs)
+    snapshots = [[tensor.cpu().clone() for tensor in group] for group in mutable_groups]
+
+    with pytest.raises(RuntimeError, match="same dtype, device, shape"):
+        torch.ops.aten._fused_adamw_.default(
+            parameters,
+            grads,
+            exp_avgs,
+            exp_avg_sqs,
+            [],
+            steps,
+            lr=0.01,
+            beta1=0.9,
+            beta2=0.95,
+            weight_decay=0.1,
+            eps=1e-8,
+            amsgrad=False,
+            maximize=False,
+        )
+    for snapshot_group, actual_group in zip(snapshots, mutable_groups, strict=True):
+        for snapshot, actual in zip(snapshot_group, actual_group, strict=True):
+            torch.testing.assert_close(actual.cpu(), snapshot, rtol=0, atol=0)
+
+
+def test_sub_out_supports_optimizer_step_rollback(
+    mojo_gpu: str, call_checker: CallChecker
+):
+    _watch_eager_op(call_checker, "aten::sub.out")
+    step = torch.tensor(4.0, device=mojo_gpu)
+    found_inf = torch.tensor(1.0, device=mojo_gpu)
+    holder, ptr = step._holder, step._ptr
+
+    returned = torch.ops.aten.sub.out(step, found_inf, out=step)
+
+    assert returned is step
+    assert step._holder is holder
+    assert step._ptr == ptr
+    torch.testing.assert_close(step.cpu(), torch.tensor(3.0), rtol=0, atol=0)
+
+
+def test_fused_adamw_optimizer_two_groups_matches_cpu(
+    mojo_gpu: str, call_checker: CallChecker
+):
+    """Cover PyTorch's state setup, foreach step increment, and fused route."""
+    _watch_eager_op(call_checker, "aten::_fused_adamw_")
+    initial = [
+        torch.linspace(-1.0, 1.0, 31, dtype=torch.float32),
+        torch.linspace(0.5, -0.75, 35, dtype=torch.float32).reshape(5, 7),
+    ]
+    cpu_parameters = [torch.nn.Parameter(value.clone()) for value in initial]
+    mojo_parameters = [torch.nn.Parameter(value.to(mojo_gpu)) for value in initial]
+    cpu_optimizer = torch.optim.AdamW(
+        [
+            {"params": [cpu_parameters[0]], "weight_decay": 0.1},
+            {"params": [cpu_parameters[1]], "weight_decay": 0.0},
+        ],
+        lr=0.0125,
+        betas=(0.8, 0.95),
+        eps=1e-8,
+        fused=True,
+    )
+    mojo_optimizer = torch.optim.AdamW(
+        [
+            {"params": [mojo_parameters[0]], "weight_decay": 0.1},
+            {"params": [mojo_parameters[1]], "weight_decay": 0.0},
+        ],
+        lr=0.0125,
+        betas=(0.8, 0.95),
+        eps=1e-8,
+        fused=True,
+    )
+
+    from torch_mojo_backend.mojo_device.mojo_device_aten_ops import EAGER_CALL_COUNTERS
+
+    fused_counter = EAGER_CALL_COUNTERS["aten::_fused_adamw_"]
+    calls_before = fused_counter.call_count
+    for step in range(2):
+        for index, (cpu_parameter, mojo_parameter) in enumerate(
+            zip(cpu_parameters, mojo_parameters, strict=True)
+        ):
+            gradient = torch.linspace(
+                -0.2 + step * 0.03,
+                0.35 - index * 0.02,
+                cpu_parameter.numel(),
+                dtype=torch.float32,
+            ).reshape(cpu_parameter.shape)
+            cpu_parameter.grad = gradient.clone()
+            mojo_parameter.grad = gradient.to(mojo_gpu)
+        cpu_optimizer.step()
+        mojo_optimizer.step()
+
+    assert fused_counter.call_count - calls_before == 4
+    assert all(group["fused"] is True for group in mojo_optimizer.param_groups)
+
+    for cpu_parameter, mojo_parameter in zip(
+        cpu_parameters, mojo_parameters, strict=True
+    ):
+        torch.testing.assert_close(
+            mojo_parameter.cpu(), cpu_parameter, rtol=2e-6, atol=2e-7
+        )
+        cpu_state = cpu_optimizer.state[cpu_parameter]
+        mojo_state = mojo_optimizer.state[mojo_parameter]
+        for name in ("exp_avg", "exp_avg_sq", "step"):
+            torch.testing.assert_close(
+                mojo_state[name].cpu(), cpu_state[name], rtol=2e-6, atol=2e-7
+            )
+        assert mojo_state["step"].device == torch.device(mojo_gpu)
+        assert mojo_state["step"].dtype == torch.float32
+        assert mojo_state["step"].item() == 2
+
+
+def test_fused_adamw_optimizer_found_inf_rolls_back_step(
+    mojo_gpu: str, call_checker: CallChecker
+):
+    """PyTorch, not the fused ATen op, owns preincrement and rollback."""
+    _watch_eager_op(call_checker, "aten::_fused_adamw_")
+    initial = torch.tensor([1.0, -2.0, 3.0], dtype=torch.float32)
+    gradient = torch.tensor([0.2, -0.4, 0.6], dtype=torch.float32)
+    cpu_parameter = torch.nn.Parameter(initial.clone())
+    mojo_parameter = torch.nn.Parameter(initial.to(mojo_gpu))
+    cpu_optimizer = torch.optim.AdamW([cpu_parameter], lr=0.01, fused=True)
+    mojo_optimizer = torch.optim.AdamW([mojo_parameter], lr=0.01, fused=True)
+    cpu_parameter.grad = gradient.clone()
+    mojo_parameter.grad = gradient.to(mojo_gpu)
+    cpu_optimizer.grad_scale = torch.tensor(2.0)
+    cpu_optimizer.found_inf = torch.tensor(1.0)
+    mojo_optimizer.grad_scale = torch.tensor(2.0, device=mojo_gpu)
+    mojo_optimizer.found_inf = torch.tensor(1.0, device=mojo_gpu)
+
+    cpu_optimizer.step()
+    mojo_optimizer.step()
+    torch.testing.assert_close(mojo_parameter.cpu(), initial, rtol=0, atol=0)
+    mojo_state = mojo_optimizer.state[mojo_parameter]
+    assert mojo_state["step"].device == torch.device(mojo_gpu)
+    assert mojo_state["step"].dtype == torch.float32
+    assert mojo_state["step"].item() == 0
+
+    cpu_optimizer.found_inf.fill_(0.0)
+    mojo_optimizer.found_inf.fill_(0.0)
+    cpu_optimizer.step()
+    mojo_optimizer.step()
+    torch.testing.assert_close(
+        mojo_parameter.cpu(), cpu_parameter, rtol=2e-6, atol=2e-7
+    )
+    for name in ("exp_avg", "exp_avg_sq", "step"):
+        torch.testing.assert_close(
+            mojo_state[name].cpu(),
+            cpu_optimizer.state[cpu_parameter][name],
+            rtol=2e-6,
+            atol=2e-7,
+        )
+    assert mojo_state["step"].item() == 1
+
+
 def test_lerp_scalar_broadcast_uses_narrowed_fp32_branch(
     mojo_gpu: str, call_checker: CallChecker
 ):

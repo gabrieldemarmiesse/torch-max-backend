@@ -51,6 +51,7 @@ _MOJO_MODULES = (
     "loss_ops",
     "bf16_cross_entropy_ops",
     "normalization_backward_ops",
+    "optimizer_ops",
     "sdpa_backward_ops",
 )
 

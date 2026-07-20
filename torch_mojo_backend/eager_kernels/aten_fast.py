@@ -159,6 +159,8 @@ _BCAST_DTYPES = _FLOAT_DTYPES + (
     DType.uint8,
 )
 
+_FUSED_ADAMW_RECORD_FIELDS = 7
+
 
 @no_type_check
 def _t(x) -> TorchMojoTensor | None:
@@ -176,6 +178,161 @@ def _tc(x) -> TorchMojoTensor | None:
 
 _alloc = TorchMojoTensor._alloc
 _view_of = TorchMojoTensor._view_of
+
+
+@no_type_check
+def _fused_adamw_scalar_tensor(value, name, device):
+    """Validate an optional read-only scalar and return its device pointer."""
+    if value is None:
+        return 0
+    tensor = _t(value)
+    if (
+        tensor is None
+        or tensor._device != device
+        or tensor._dtype != DType.float32
+        or tensor._numel != 1
+        or not tensor._is_contiguous
+    ):
+        raise RuntimeError(
+            f"{name} must be a contiguous scalar float32 tensor on the "
+            "same Mojo device as the parameters"
+        )
+    return tensor._ptr
+
+
+@no_type_check
+def fast_aten__fused_adamw(
+    parameters,
+    grads,
+    exp_avgs,
+    exp_avg_sqs,
+    max_exp_avg_sqs,
+    state_steps,
+    *,
+    lr,
+    beta1,
+    beta2,
+    weight_decay,
+    eps,
+    amsgrad,
+    maximize,
+    grad_scale=None,
+    found_inf=None,
+):
+    """Runtime-dynamic, allocation-free fused FP32 AdamW TensorList route.
+
+    Validation deliberately completes for every tensor before the first
+    launch.  This preserves ATen's all-before-write failure behavior and is
+    especially important for mutable TensorLists, where materializing a view
+    or discovering a malformed later entry after launch would be observable.
+    """
+    tensor_count = len(parameters)
+    expected_lengths = {
+        "grads": len(grads),
+        "exp_avgs": len(exp_avgs),
+        "exp_avg_sqs": len(exp_avg_sqs),
+        "state_steps": len(state_steps),
+    }
+    if amsgrad:
+        expected_lengths["max_exp_avg_sqs"] = len(max_exp_avg_sqs)
+    elif len(max_exp_avg_sqs) != 0:
+        raise RuntimeError("max_exp_avg_sqs must be empty when amsgrad is False")
+    if any(length != tensor_count for length in expected_lengths.values()):
+        rendered = ", ".join(
+            f"{name}={length}" for name, length in expected_lengths.items()
+        )
+        raise RuntimeError(
+            "fused AdamW tensor lists must have the same length "
+            f"(parameters={tensor_count}, {rendered})"
+        )
+    if tensor_count == 0:
+        return None
+
+    first = _t(parameters[0])
+    if first is None:
+        return NOT_HANDLED
+    device = first._device
+    mutable_groups = (parameters, grads, exp_avgs, exp_avg_sqs)
+    if amsgrad:
+        mutable_groups += (max_exp_avg_sqs,)
+
+    # Inspect the backend's real metadata, not TensorImpl's compatibility
+    # facade.  Mutable optimizer state cannot be materialized into temporaries.
+    for index in range(tensor_count):
+        parameter = _t(parameters[index])
+        if parameter is None:
+            return NOT_HANDLED
+        shape = tuple(parameter._shape)
+        for group in mutable_groups:
+            tensor = _t(group[index])
+            if (
+                tensor is None
+                or tensor._device != device
+                or tensor._dtype != DType.float32
+                or tensor._shape != shape
+                or tensor._numel != parameter._numel
+                or not tensor._is_contiguous
+            ):
+                raise RuntimeError(
+                    "fused AdamW tensors must have the same dtype, device, "
+                    "shape, and numel; contiguous float32 is "
+                    f"required (invalid tensor index {index})"
+                )
+        step = _t(state_steps[index])
+        if (
+            step is None
+            or step._device != device
+            or step._dtype != DType.float32
+            or step._numel != 1
+            or not step._is_contiguous
+        ):
+            raise RuntimeError(
+                "fused AdamW state_steps must be contiguous scalar float32 "
+                f"tensors on the parameter device (invalid index {index})"
+            )
+
+    lr_ptr = 0
+    if isinstance(lr, TorchMojoTensor):
+        lr_ptr = _fused_adamw_scalar_tensor(lr, "lr", device)
+        lr_scalar = 0.0
+    elif isinstance(lr, torch.Tensor):
+        if lr.device.type != "cpu" or lr.numel() != 1:
+            raise RuntimeError("tensor lr must be a scalar CPU or Mojo tensor")
+        lr_scalar = float(lr.item())
+    elif isinstance(lr, int | float) and not isinstance(lr, bool):
+        lr_scalar = float(lr)
+    else:
+        return NOT_HANDLED
+
+    grad_scale_ptr = _fused_adamw_scalar_tensor(grad_scale, "grad_scale", device)
+    found_inf_ptr = _fused_adamw_scalar_tensor(found_inf, "found_inf", device)
+    metadata = tuple(
+        value
+        for index in range(tensor_count)
+        for value in (
+            parameters[index]._ptr,
+            grads[index]._ptr,
+            exp_avgs[index]._ptr,
+            exp_avg_sqs[index]._ptr,
+            max_exp_avg_sqs[index]._ptr if amsgrad else 0,
+            state_steps[index]._ptr,
+            parameters[index]._numel,
+        )
+    )
+    if len(metadata) != tensor_count * _FUSED_ADAMW_RECORD_FIELDS:
+        raise AssertionError("invalid fused AdamW metadata packing")
+
+    eager_kernels.optimizer_ops.FusedAdamW(
+        metadata,
+        (lr_scalar, float(beta1), float(beta2), float(weight_decay), float(eps)),
+        0,  # homogeneous FP32 parameters, gradients, and optimizer state
+        int(bool(amsgrad)) | (int(bool(maximize)) << 1),
+        lr_ptr,
+        grad_scale_ptr,
+        found_inf_ptr,
+        _ctx_ptr(device),
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------
