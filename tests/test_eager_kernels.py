@@ -2209,7 +2209,7 @@ def test_bf16_v3_source_dependency_and_kernel_contract():
     assert "from bf16_gemm_kernels import (" in v3_source
     for kernel_name in (
         "nanogpt_bf16_gemm_v3_nn_wgmma_tma_s2",
-        "nanogpt_bf16_gemm_v3_nt_wgmma_tma_s2",
+        "nanogpt_bf16_gemm_v3_nt_ws_m128n256_tma_s3",
         "nanogpt_bf16_gemm_v3_tn_wgmma_tma_transpose_s2",
     ):
         assert f'@__name("{kernel_name}")' in v3_source
@@ -3791,9 +3791,10 @@ def _assert_bf16_fp32_accumulation_close(actual, expected):
     [
         (1088, 128, 192, False, False),
         (1088, 256, 192, False, True),
+        (192, 384, 256, False, True),
         (576, 2048, 64, True, False),
     ],
-    ids=["nn", "nt", "tn"],
+    ids=["nn", "nt_three_stages", "nt_half_tiles_stage_reuse", "tn"],
 )
 def test_bf16_real_v3_aligned_dynamic_gemm_routes(
     mojo_h100, monkeypatch, m, n, k, lhs_transposed, rhs_transposed
