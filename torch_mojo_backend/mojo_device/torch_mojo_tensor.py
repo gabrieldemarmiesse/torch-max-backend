@@ -318,6 +318,18 @@ class TorchMojoTensor(torch.Tensor):
             return None
         return self
 
+    @no_type_check
+    def __reduce_ex__(self, protocol):
+        """Pickle as a portable plain CPU tensor.
+
+        The Mojo allocation holder is not picklable. Checkpoints written from
+        this device therefore serialize tensor values on the CPU and can be
+        loaded without this backend being installed.
+        """
+        if hasattr(self, "_holder"):
+            return self._to_cpu_tensor().__reduce_ex__(protocol)
+        return super().__reduce_ex__(protocol)
+
     def __repr__(self):
         if hasattr(self, "_holder"):
             return f"TorchMojoTensor({self._to_cpu_tensor()!r}, device='{self.device}')"
