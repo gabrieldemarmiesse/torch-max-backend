@@ -91,28 +91,106 @@ _pyapi.PyCapsule_IsValid.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 _pyapi.PyCapsule_IsValid.restype = ctypes.c_int
 _pyapi.PyCapsule_GetPointer.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 _pyapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+_pyapi.Py_IncRef.argtypes = [ctypes.py_object]
+_pyapi.Py_IncRef.restype = None
+_pyapi.Py_DecRef.argtypes = [ctypes.py_object]
+_pyapi.Py_DecRef.restype = None
+
+
+class _ExportState:
+    """Python objects that must outlive one exported DLManagedTensor.
+
+    ``manager_ctx`` owns one manual Python reference to this state. That makes
+    the DLPack consumer, rather than the module-global diagnostics dictionary,
+    the lifetime root. Keeping both CFUNCTYPE objects here is equally
+    important: a PyCapsule and a C++ DLPack consumer retain their callback
+    addresses, but those raw C function pointers do not retain ctypes' Python
+    callback trampolines by themselves.
+    """
+
+    __slots__ = (
+        "managed",
+        "shape_arr",
+        "holder",
+        "registry",
+        "managed_deleter",
+        "capsule_destructor",
+        "released",
+    )
+
+    def __init__(self, managed, shape_arr, holder, registry):
+        self.managed = managed
+        self.shape_arr = shape_arr
+        self.holder = holder
+        self.registry = registry
+        self.managed_deleter = None
+        self.capsule_destructor = None
+        self.released = False
+
 
 # Every live export, keyed by the DLManagedTensor struct address. The entry
-# pins the ctypes structs (which must outlive the capsule) and the producing
-# tensor's holder (which must outlive the consumer's use of the memory).
-_live_exports: dict[int, tuple] = {}
+# makes live exports observable for diagnostics/tests. It is not the ownership
+# root: reloading or tearing down this module can replace the dictionary while
+# a DLPack consumer still holds the raw DLManagedTensor pointer.
+_live_exports: dict[int, _ExportState] = {}
 
 
-def _deleter_impl(handle):
-    _live_exports.pop(ctypes.addressof(handle.contents), None)
+def _release_export(
+    handle,
+    *,
+    addressof=ctypes.addressof,
+    cast=ctypes.cast,
+    py_object=ctypes.py_object,
+    py_decref=_pyapi.Py_DecRef,
+):
+    """Release the producer reference owned by ``manager_ctx`` exactly once.
+
+    All helpers needed during release are captured as defaults. An old ctypes
+    callback can therefore finish safely after ``importlib.reload`` replaces
+    this module's globals.
+    """
+    if not handle:
+        return
+    manager_ctx = handle.contents.manager_ctx
+    if not manager_ctx:
+        return
+
+    # Reading a py_object from its address creates a normal local reference;
+    # that keeps the state (and therefore this DLManagedTensor) alive until the
+    # callback returns, even after the manual manager_ctx reference is dropped.
+    state = cast(manager_ctx, py_object).value
+    handle.contents.manager_ctx = None
+    if state.released:
+        return
+    state.released = True
+    state.registry.pop(addressof(handle.contents), None)
+    py_decref(state)
+
+
+def _deleter_impl(handle, release_export=_release_export):
+    release_export(handle)
 
 
 _managed_deleter = _DLManagedTensorDeleter(_deleter_impl)
 
 
-def _capsule_destructor_impl(capsule_ptr):
+def _capsule_destructor_impl(
+    capsule_ptr,
+    *,
+    capsule_name=_CAPSULE_NAME,
+    capsule_is_valid=_pyapi.PyCapsule_IsValid,
+    capsule_get_pointer=_pyapi.PyCapsule_GetPointer,
+    cast=ctypes.cast,
+    managed_pointer=ctypes.POINTER(_DLManagedTensor),
+    release_export=_release_export,
+):
     # A consumer that adopted the memory renames the capsule to
     # "used_dltensor" and becomes responsible for calling the deleter; if
     # the capsule dies still named "dltensor" it was never consumed and the
     # export is released here.
-    if _pyapi.PyCapsule_IsValid(capsule_ptr, _CAPSULE_NAME):
-        addr = _pyapi.PyCapsule_GetPointer(capsule_ptr, _CAPSULE_NAME)
-        _live_exports.pop(addr, None)
+    if capsule_is_valid(capsule_ptr, capsule_name):
+        addr = capsule_get_pointer(capsule_ptr, capsule_name)
+        release_export(cast(addr, managed_pointer))
 
 
 _capsule_destructor = _PyCapsule_Destructor(_capsule_destructor_impl)
@@ -147,8 +225,21 @@ def make_capsule(holder, data_ptr: int, shape, dtype: DType, device):
     managed.dl_tensor.shape = shape_arr
     managed.dl_tensor.strides = None  # compact row-major
     managed.dl_tensor.byte_offset = 0
-    managed.manager_ctx = None
     managed.deleter = _managed_deleter
     addr = ctypes.addressof(managed)
-    _live_exports[addr] = (managed, shape_arr, holder)
-    return _pyapi.PyCapsule_New(addr, _CAPSULE_NAME, _capsule_destructor)
+    state = _ExportState(managed, shape_arr, holder, _live_exports)
+    state.managed_deleter = _managed_deleter
+    state.capsule_destructor = _capsule_destructor
+    managed.manager_ctx = id(state)
+    _live_exports[addr] = state
+
+    # DLPack transfers this producer reference to either the unconsumed
+    # capsule destructor or the consumer-provided storage deleter. It cannot be
+    # represented solely by a Python container: module reload/teardown may
+    # destroy that container while the consumer still owns the raw pointer.
+    _pyapi.Py_IncRef(state)
+    try:
+        return _pyapi.PyCapsule_New(addr, _CAPSULE_NAME, _capsule_destructor)
+    except Exception:
+        _release_export(ctypes.pointer(managed))
+        raise
