@@ -13,7 +13,7 @@ from std.gpu import block_dim, block_idx, grid_dim, thread_idx
 from std.gpu.host import DeviceBuffer, DeviceContext
 from std.memory import OpaquePointer, alloc
 from std.python import Python, PythonObject
-from std.python._cpython import PyObjectPtr, Py_ssize_t
+from std.python._cpython import PyObjectPtr
 from std.sys.info import has_accelerator, has_apple_gpu_accelerator
 from std.utils import IndexList
 from std.utils.coord import Coord
@@ -24,10 +24,6 @@ from std.utils.coord import Coord
 # runtime dtype, which unrolls into the same `if dtype == ...` chain without
 # repeating the call site once per dtype.
 comptime FLOAT_DTYPES = [DType.float32, DType.float16, DType.bfloat16]
-
-
-def _get_dtype(buffer: PythonObject) raises -> DType:
-    return DType._from_ui8(UInt8(py=buffer.dtype.value)._mlir_value)
 
 
 @always_inline
@@ -133,16 +129,6 @@ def _gs_blocks(total: Int) -> Int:
     return max(1, min((total + GS_THREADS - 1) // GS_THREADS, 4096))
 
 
-def _get_buffer_ptr[
-    dtype: DType
-](buffer: PythonObject) raises -> UnsafePointer[
-    Scalar[dtype], MutUntrackedOrigin
-]:
-    return UnsafePointer[Scalar[dtype], MutUntrackedOrigin](
-        unsafe_from_address=Int(py=buffer._data_ptr())
-    )
-
-
 @always_inline
 def _make_ptr[
     dtype: DType
@@ -151,10 +137,6 @@ def _make_ptr[
     return UnsafePointer[Scalar[dtype], MutUntrackedOrigin](
         unsafe_from_address=addr
     )
-
-
-def _get_size(buffer: PythonObject) raises -> Int:
-    return Int(py=buffer.num_elements)
 
 
 def _get_ctx(device_context_ptr: PythonObject) raises -> DeviceContext:
@@ -190,27 +172,6 @@ def _raw_tuple_int(t: PyObjectPtr, i: Int) -> Int:
     # PyTuple_GetItem returns a borrowed reference: no refcount traffic.
     ref cpy = Python().cpython()
     return Int(cpy.PyLong_AsSsize_t(cpy.PyTuple_GetItem(t, i)))
-
-
-@always_inline
-def _raw_addr(buffer: PyObjectPtr) -> Int:
-    """buffer._data_ptr() via direct CPython calls."""
-    ref cpy = Python().cpython()
-    var meth = cpy.PyObject_GetAttrString(buffer, "_data_ptr")
-    var addr_obj = cpy.PyObject_CallObject(meth, PyObjectPtr())
-    var addr = Int(cpy.PyLong_AsSsize_t(addr_obj))
-    cpy.Py_DecRef(addr_obj)
-    cpy.Py_DecRef(meth)
-    return addr
-
-
-@always_inline
-def _raw_numel(buffer: PyObjectPtr) -> Int:
-    ref cpy = Python().cpython()
-    var v = cpy.PyObject_GetAttrString(buffer, "num_elements")
-    var n = Int(cpy.PyLong_AsSsize_t(v))
-    cpy.Py_DecRef(v)
-    return n
 
 
 @always_inline

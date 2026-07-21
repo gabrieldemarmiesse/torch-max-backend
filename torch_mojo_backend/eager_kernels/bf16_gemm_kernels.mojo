@@ -1520,14 +1520,14 @@ def _bmm_tt_wide(
 
 
 @always_inline
-def _a_fast_flag(a: _Ptr, m: Int, k: Int, transpose_a: Bool) -> Int:
+def _a_fast_flag(m: Int, k: Int, transpose_a: Bool) -> Int:
     # Row divisibility only; guarded kernels prove base alignment per batch.
     var contig = m if transpose_a else k
     return 1 if contig % 8 == 0 else 0
 
 
 @always_inline
-def _b_fast_flag(b: _Ptr, n: Int, k: Int, transpose_b: Bool) -> Int:
+def _b_fast_flag(n: Int, k: Int, transpose_b: Bool) -> Int:
     # Row divisibility only; guarded kernels prove base alignment per batch.
     var contig = k if transpose_b else n
     return 1 if contig % 8 == 0 else 0
@@ -1551,12 +1551,12 @@ def _fast_proof(
     # in every batch, and 4B-aligned pair stores of the output. Strides are
     # in elements (2B), so 16B alignment needs stride % 8 == 0.
     var a_ok = (
-        _a_fast_flag(a, m, k, transpose_a) == 1
+        _a_fast_flag(m, k, transpose_a) == 1
         and Int(a) % 16 == 0
         and a_bstride % 8 == 0
     )
     var b_ok = (
-        _b_fast_flag(b, n, k, transpose_b) == 1
+        _b_fast_flag(n, k, transpose_b) == 1
         and Int(b) % 16 == 0
         and b_bstride % 8 == 0
     )
@@ -1565,7 +1565,7 @@ def _fast_proof(
 
 
 @always_inline
-def _pick_regime(m: Int, n: Int, batch_count: Int) -> Int:
+def _pick_regime(m: Int, n: Int) -> Int:
     # 0: 128x128, 1: 128x64, 2: 64x128. Narrow tiles only where the wide
     # tile wastes at least half of one extent (small n or small m); the wide
     # tile's compute-to-traffic ratio wins elsewhere, including long-K
@@ -1798,11 +1798,11 @@ def enqueue_bf16_gemm(
     has_bias: Bool,
     ctx: DeviceContext,
 ) raises:
-    var a_fast = _a_fast_flag(a, m, k, transpose_a)
-    var b_fast = _b_fast_flag(b, n, k, transpose_b)
+    var a_fast = _a_fast_flag(m, k, transpose_a)
+    var b_fast = _b_fast_flag(n, k, transpose_b)
     var c_pair = 1 if n % 2 == 0 else 0
     var hb = 1 if has_bias else 0
-    var regime = _pick_regime(m, n, 1)
+    var regime = _pick_regime(m, n)
     var bm = 64 if regime == 2 else 128
     var bn = 64 if regime == 1 else 128
     # The Int32 kernels are legal only under the machine-width proof; a zero
@@ -2003,10 +2003,10 @@ def enqueue_bf16_bmm(
     transpose_b: Bool,
     ctx: DeviceContext,
 ) raises:
-    var a_fast = _a_fast_flag(a, m, k, transpose_a)
-    var b_fast = _b_fast_flag(b, n, k, transpose_b)
+    var a_fast = _a_fast_flag(m, k, transpose_a)
+    var b_fast = _b_fast_flag(n, k, transpose_b)
     var c_pair = 1 if n % 2 == 0 else 0
-    var regime = _pick_regime(m, n, batch_count)
+    var regime = _pick_regime(m, n)
     var bm = 64 if regime == 2 else 128
     var bn = 64 if regime == 1 else 128
     var grid_x = 0

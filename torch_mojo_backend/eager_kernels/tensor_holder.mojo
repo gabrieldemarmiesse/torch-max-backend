@@ -22,14 +22,13 @@
 
 from std.os import abort
 from std.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
-from std.memory import OpaquePointer, memcpy
+from std.memory import memcpy
 from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
 from std.utils.coord import Coord
 
-from std.algorithm.functional import elementwise
-from std.sys.info import has_accelerator, size_of
+from std.sys.info import size_of
 from std.utils import IndexList
 
 from op_utils import (
@@ -39,7 +38,6 @@ from op_utils import (
     _copy_strided,
     _get_ctx,
     _make_ptr,
-    _parallel_for,
     _parallel_for_dt,
     _raw_ctx,
     _raw_dtype_int,
@@ -47,9 +45,6 @@ from op_utils import (
     _raw_int,
     _raw_ret_none,
     _raw_tuple_int,
-    _row_major8,
-    _spec_ptr,
-    _spec_result,
     _spec_unsupported,
 )
 

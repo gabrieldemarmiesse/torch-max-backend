@@ -8,7 +8,6 @@ import pytest
 import torch
 
 from torch_mojo_backend import get_accelerators, register_mojo_devices
-from torch_mojo_backend.flags import fast_eager_enabled
 
 pytestmark = pytest.mark.xdist_group(name="group1")
 
@@ -58,8 +57,6 @@ def test_fast_path_is_used(mojo_device):
 
     Tensor-tensor adds route through the shared spec op, or through the
     Apple flat kernel selected during Metal device registration."""
-    if not fast_eager_enabled():
-        pytest.skip("fast eager path disabled")
     from torch_mojo_backend import eager_kernels
 
     calls = []
@@ -100,8 +97,6 @@ def test_fast_path_is_used(mojo_device):
 def test_spec_path_is_used(mojo_device, module_name, spec_name, fn):
     """One representative op per converted family must route through its
     spec entry (whole prologue in one Mojo call), not the classic chain."""
-    if not fast_eager_enabled():
-        pytest.skip("fast eager path disabled")
     from torch_mojo_backend import eager_kernels
 
     module = getattr(eager_kernels, module_name)
@@ -146,9 +141,8 @@ def test_fallback_int_div(mojo_device):
     x = torch.arange(1, 65, dtype=torch.int32)
     y = torch.full((64,), 4, dtype=torch.int32)
     result = (x.to(mojo_device) / y.to(mojo_device)).cpu()
-    # check_dtype=False: the graph-based fallback path promotes int div to
-    # float64 where torch gives float32 — a pre-existing deviation
-    # (reproduces with TORCH_MOJO_BACKEND_FAST_EAGER=0).
+    # check_dtype=False: Mojo integer division currently promotes to float64
+    # where torch gives float32.
     torch.testing.assert_close(result, x / y, check_dtype=False)
 
 
@@ -195,8 +189,6 @@ def test_fast_add_f32_bf16_fused_dynamic_shapes(
     mojo_gpu, shape, bf16_first, monkeypatch
 ):
     """Mixed residual adds convert BF16 values in registers, in either order."""
-    if not fast_eager_enabled():
-        pytest.skip("fast eager path disabled")
     from torch_mojo_backend import eager_kernels
 
     generator = torch.Generator().manual_seed(20260720)
@@ -231,8 +223,6 @@ def test_fast_add_f32_bf16_fused_dynamic_shapes(
 
 def test_fast_add_f32_bf16_fused_spec_avoids_cast_temporary(mojo_gpu):
     """A contiguous mixed add must be one fused spec launch, even with tails."""
-    if not fast_eager_enabled():
-        pytest.skip("fast eager path disabled")
     from torch_mojo_backend import eager_kernels
 
     fp32_storage = torch.randn(1_106).to(mojo_gpu)
@@ -271,8 +261,6 @@ def test_fast_add_f32_bf16_fused_spec_avoids_cast_temporary(mojo_gpu):
 
 def test_fast_add_f32_bf16_strided_preserves_general_fallback(mojo_gpu):
     """Ineligible layouts remain correct through the existing general path."""
-    if not fast_eager_enabled():
-        pytest.skip("fast eager path disabled")
     from torch_mojo_backend import eager_kernels
 
     fp32 = torch.randn(7, 11)

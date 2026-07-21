@@ -43,7 +43,6 @@ from std.gpu import (
     MAX_THREADS_PER_BLOCK_METADATA,
     barrier,
     block_idx,
-    grid_dim,
     lane_id,
     thread_idx,
     warp_id,

@@ -68,9 +68,6 @@ def launch_fwd_fa4[
     v_addr: Int,
     o_addr: Int,
     lse_addr: Int,
-    o_b_stride: Int,
-    o_l_stride: Int,
-    o_h_stride: Int,
     stream_handle_addr: Int,
     ctx_handle_addr: Int,
     varlen_total_q: Int = 0,
@@ -135,10 +132,6 @@ def launch_fwd_fa4[
     var lse_ptr = UnsafePointer[Float32, MutAnyOrigin](
         unsafe_from_address=lse_addr
     )
-    var o_ptr = UnsafePointer[Scalar[dtype], MutAnyOrigin](
-        unsafe_from_address=o_addr
-    )
-
     # 3D TMA descriptors over the (B*L, H, D) gmem view.
     comptime gmem_shape = IndexList[3](UNKNOWN_VALUE, UNKNOWN_VALUE, head_dim)
     comptime q_smem_shape = IndexList[3](

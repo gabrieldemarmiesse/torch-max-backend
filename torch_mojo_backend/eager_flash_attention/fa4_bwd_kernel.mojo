@@ -49,7 +49,6 @@ from std.utils.numerics import inf
 from std.sys import size_of
 from std.utils.index import StaticTuple, IndexList
 
-from std.atomic import Atomic, Ordering
 from std.sys._assembly import inlined_assembly
 from std.gpu import (
     MAX_THREADS_PER_BLOCK_METADATA,
@@ -73,7 +72,6 @@ from std.gpu.sync import (
     cp_async_bulk_wait_group,
     named_barrier,
     named_barrier_arrive,
-    syncwarp,
 )
 from std.memory import bitcast, stack_allocation
 
@@ -93,7 +91,6 @@ from layout.tma_async import SharedMemBarrier, TMATensorTile
 from fa4_wgmma_f16 import wgmma_rs_f16_m64n128, wgmma_rs_f16_m64n64
 
 from fa4_bwd_common import (
-    kBwdBlockM,
     kBwdTileM,
     kBwdBlockN,
     kBwdCvtThreads,
@@ -264,13 +261,6 @@ def bwd_main_kernel[
         address_space=AddressSpace.SHARED,
         alignment=128,
     ](v_base)
-    var kt_view = LayoutTensor[
-        dtype,
-        kt_view_layout,
-        MutAnyOrigin,
-        address_space=AddressSpace.SHARED,
-        alignment=128,
-    ](k_base)
     # ---- mbarriers.
     var mbar_k = stack_allocation[
         1, SharedMemBarrier, address_space=AddressSpace.SHARED, alignment=8
@@ -1276,7 +1266,7 @@ def bwd_main_kernel[
 
     # The dK/dV staging below overwrites the K/V smem
     # areas; warpgroup 0's final dQ GEMM (retired before its barrier
-    # arrival) must not still be reading kt_view -> sync first.
+    # arrival) must not still be reading the transposed K view -> sync first.
     named_barrier[Int32(NWG * 128)](Int32(4))
 
     # FA4's epilogue: stage each output via 8x stmatrix.x4

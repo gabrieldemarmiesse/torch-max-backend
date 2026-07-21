@@ -41,14 +41,11 @@ itself already uses internally for its eager interpreter
   uses), so ordering with copies/other MAX work needs no extra
   synchronization.
 - `eager_kernels/aten_fast.py` wraps these kernels with
-  ATen-compatible signatures. When inputs qualify (realized,
-  contiguous, same shape/dtype/device, alpha == 1, ...) the op is one
-  extension call; otherwise it **falls back to the existing
-  `aten_functions` implementation**, so behavior is unchanged for
-  everything the fast path doesn't cover.
-- `mojo_device_aten_ops.py` registers the fast versions for
-  add/sub/mul/div/maximum/minimum/relu/exp, gated by
-  `TORCH_MOJO_BACKEND_FAST_EAGER` (default on).
+  ATen-compatible signatures. Supported inputs execute through Mojo
+  extension calls; unsupported inputs raise an actionable
+  `NotImplementedError` rather than entering the deleted graph fallback.
+- `mojo_device_aten_ops.py` registers the eager implementations
+  unconditionally.
   **The torch.compile backend is untouched.**
 
 ## Measured results (RTX 2000 Ada, WSL2)
@@ -57,7 +54,7 @@ Per-op call, (64, 64) float32 on the GPU mojo_device:
 
 | path | µs/call |
 |---|---|
-| current graph-based eager | ~2,200 |
+| former graph-based eager (historical) | ~2,200 |
 | fast path, bare extension call (launch only) | 6.5 |
 | fast path, incl. out-alloc + wrap (MaxEagerTensor level) | ~20 |
 | fast path, end-to-end `x + y` at the torch level | ~44 |

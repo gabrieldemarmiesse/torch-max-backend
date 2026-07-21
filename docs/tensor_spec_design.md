@@ -133,7 +133,7 @@ promotion, bool-mul, rank>4 flat, f64 via `_parallel_for_dt`), reduction
 (operand temporaries) families are spec-only; their classic kernels and
 Python chains are deleted. Classic entries that remain, deliberately:
 `Add` (the in-place `add_` fast path writes into an existing buffer),
-`SoftmaxRows`/`Bmm`/`Matmul`/`MatmulBias` (the SDPA chain and convolution
+`SoftmaxRows`/`Bmm`/`Matmul` (the SDPA chain and convolution
 drive them with offsets/shared-A modes), `BatchNormInference` (fallback
 for strided stats), `CopyStrided`/`StridedFill`/`Arange`, and the
 unconverted ternary family (where/masked_fill/addcmul/addcdiv/clamp/isin

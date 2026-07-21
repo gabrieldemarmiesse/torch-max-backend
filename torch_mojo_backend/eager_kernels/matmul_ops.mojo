@@ -6,7 +6,7 @@
 # the fast path works with only the NVIDIA driver — no cuBLAS. All kernels
 # accumulate in float32 and handle dynamic shapes with edge guards.
 #
-# `Matmul` / `MatmulBias` / `Bmm` also run on the CPU MAX device, via
+# `Matmul` / `MatmulBiasSpec` / `Bmm` also run on the CPU MAX device, via
 # modular's production CPU matmul (`linalg.matmul.matmul` target="cpu"; see
 # `_cpu_gemm` below), since there is no graph fallback to lean on anymore.
 # ===----------------------------------------------------------------------=== #
@@ -43,12 +43,12 @@ from std.utils.static_tuple import StaticTuple
 
 from std.algorithm.functional import elementwise, parallelize
 
-from layout import Coord, Idx, TileTensor, row_major
+from layout import Coord, TileTensor, row_major
 from layout.tensor_core import get_mma_shape
 
 from linalg.gemv import gemv_gpu
 from linalg.matmul import matmul as cpu_lib_matmul
-from linalg.matmul.gpu import multistage_gemm, multistage_gemm_kernel
+from linalg.matmul.gpu import multistage_gemm_kernel
 from linalg.utils import elementwise_epilogue_type
 from linalg.utils_gpu import MatmulConfig
 from std.sys import llvm_intrinsic
@@ -94,7 +94,6 @@ from op_utils import (
     TensorSpec,
     _enqueue_cached,
     _get_ctx,
-    _get_dtype,
     _make_ptr,
     _raw_ctx,
     _raw_dtype_int,
@@ -912,7 +911,6 @@ def _amd_dynamic_mfma_edge_kernel[
     a: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
     b: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
     bias: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
-    m: Int,
     n: Int,
     k: Int,
     row_start: Int,
@@ -1082,7 +1080,6 @@ def _amd_dynamic_mfma_gemm[
             a_raw,
             b_raw,
             bias_ptr.as_unsafe_any_origin(),
-            m,
             n,
             k,
             0,
@@ -3085,60 +3082,6 @@ def _bias_add_row[
             raise Error("no GPU accelerator available at compile time")
 
 
-def _bias_add_row_dispatcher(
-    out_buffer: PythonObject,
-    bias_buffer: PythonObject,
-    cols: PythonObject,
-    device_context_ptr: PythonObject,
-) raises:
-    var dtype = _get_dtype(out_buffer)
-    var out_addr = Int(py=out_buffer._data_ptr())
-    var bias_addr = Int(py=bias_buffer._data_ptr())
-    var total = Int(py=out_buffer.num_elements)
-    var cols_val = Int(py=cols)
-    var ctx = _get_ctx(device_context_ptr)
-
-    var handled = False
-    comptime for dt in FLOAT_DTYPES:
-        if dtype == dt:
-            _bias_add_row[dt](out_addr, bias_addr, total, cols_val, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast bias add: " + String(dtype))
-
-
-def _matmul_bias_go(
-    out_ptr: PyObjectPtr,
-    a_ptr: PyObjectPtr,
-    b_ptr: PyObjectPtr,
-    bias_ptr: PyObjectPtr,
-    # (m, n, k, transpose_b)
-    params: PyObjectPtr,
-    dtype_obj: PyObjectPtr,
-    device_context_ptr: PyObjectPtr,
-) raises:
-    """C = A @ B (+ bias broadcast over rows) in one Python-visible call.
-
-    Equivalent to Matmul followed by BiasAddRow; fused at the dispatcher
-    level because addmm/linear call both back to back on every transformer
-    layer and each Python->Mojo binding call costs a few microseconds of
-    argument unwrapping.
-    """
-    var dtype = _raw_dtype_int(dtype_obj)
-    var c_addr = _raw_int(out_ptr)
-    var a_addr = _raw_int(a_ptr)
-    var b_addr = _raw_int(b_ptr)
-    var bias_addr = _raw_int(bias_ptr)
-    var m = _raw_tuple_int(params, 0)
-    var n = _raw_tuple_int(params, 1)
-    var k = _raw_tuple_int(params, 2)
-    var transpose_b = _raw_tuple_int(params, 3)
-    var ctx = _raw_ctx(device_context_ptr)
-    _matmul_bias_run(
-        dtype, c_addr, a_addr, b_addr, bias_addr, m, n, k, transpose_b, ctx
-    )
-
-
 def _matmul_bias_run(
     dtype: DType,
     c_addr: Int,
@@ -3151,8 +3094,8 @@ def _matmul_bias_run(
     transpose_b: Int,
     ctx: DeviceContext,
 ) raises:
-    """The MatmulBias tier ladder (shared by the raw entry and the spec
-    entry): CPU library / m==1 gemv+bias / f32 fused-epilogue / GEMM+bias."""
+    """The MatmulBiasSpec tier ladder: CPU library / m==1 gemv+bias /
+    f32 fused-epilogue / GEMM+bias."""
     if ctx.api() == "cpu":
         _cpu_gemm_dtype_dispatch(
             dtype,
@@ -3301,20 +3244,6 @@ def _bmm_dispatcher(
 ) abi("C") -> PyObjectPtr:
     try:
         _bmm_go(args[0], args[1], args[2], args[3], args[4], args[5])
-    except:
-        pass
-    return _raw_ret_none()
-
-
-def _matmul_bias_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _matmul_bias_go(
-            args[0], args[1], args[2], args[3], args[4], args[5], args[6]
-        )
     except:
         pass
     return _raw_ret_none()
@@ -3737,14 +3666,6 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
             ),
         )
         b.def_py_c_function(
-            _matmul_bias_dispatcher,
-            "MatmulBias",
-            docstring=(
-                "C = A @ B + bias (bias broadcast over rows); one call"
-                " instead of Matmul + BiasAddRow"
-            ),
-        )
-        b.def_py_c_function(
             _bmm_dispatcher,
             "Bmm",
             docstring=(
@@ -3761,9 +3682,6 @@ def PyInit_matmul_ops() abi("C") -> PythonObject:
         b.def_function[_amd_bf16_tune_dispatcher](
             "AmdBf16Tune",
             docstring="BF16 MFMA tile sweep — benchmarking only",
-        )
-        b.def_function[_bias_add_row_dispatcher](
-            "BiasAddRow", docstring="in-place out[i] += bias[i % cols]"
         )
         return b.finalize()
     except e:

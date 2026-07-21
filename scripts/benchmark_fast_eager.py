@@ -1,18 +1,12 @@
-"""Benchmark the Mojo-extension fast eager path against the graph-based path.
+"""Benchmark per-op-call overhead of mojo eager mode.
 
 Usage:
     uv run python scripts/benchmark_fast_eager.py
 
-Compares, per op call on mojo:
-  - the fast path (TORCH_MOJO_BACKEND_FAST_EAGER=1, default)
-  - the graph-based path (TORCH_MOJO_BACKEND_FAST_EAGER=0)
-by re-running itself in a subprocess for each mode, plus torch-native CPU
-and CUDA references in-process.
+Times a few elementwise ops on the mojo device, plus torch-native CPU and
+CUDA references.
 """
 
-import os
-import subprocess
-import sys
 import time
 
 N_ITERS = 500
@@ -34,11 +28,9 @@ def run_mojo_device_benchmarks():
     import torch
 
     from torch_mojo_backend import register_mojo_devices
-    from torch_mojo_backend.flags import fast_eager_enabled
 
     register_mojo_devices()
-    mode = "fast (mojo extensions)" if fast_eager_enabled() else "graph-based"
-    print(f"  mojo eager mode: {mode}")
+    print("  mojo eager mode")
     dev = torch.device("mojo")
     for shape in SHAPES:
         x = torch.randn(*shape).to(dev)
@@ -64,13 +56,5 @@ def run_torch_references():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--mojo-device-only":
-        run_mojo_device_benchmarks()
-        sys.exit(0)
-
-    for flag in ("1", "0"):
-        env = os.environ | {"TORCH_MOJO_BACKEND_FAST_EAGER": flag}
-        subprocess.run(
-            [sys.executable, __file__, "--mojo-device-only"], env=env, check=True
-        )
+    run_mojo_device_benchmarks()
     run_torch_references()

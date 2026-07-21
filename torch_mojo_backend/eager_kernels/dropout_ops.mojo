@@ -7,7 +7,6 @@
 # It performs no host reads or synchronization.
 # ===----------------------------------------------------------------------=== #
 
-from std.gpu.host import DeviceContext
 from std.os import abort
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
@@ -134,9 +133,7 @@ def _native_dropout_backward_dispatcher(
 ) abi("C") -> PyObjectPtr:
     try:
         if nargs != 6:
-            raise Error(
-                "NativeDropoutBackwardF32 expects exactly 6 arguments"
-            )
+            raise Error("NativeDropoutBackwardF32 expects exactly 6 arguments")
         _native_dropout_backward_go(
             args[0], args[1], args[2], args[3], args[4], args[5]
         )

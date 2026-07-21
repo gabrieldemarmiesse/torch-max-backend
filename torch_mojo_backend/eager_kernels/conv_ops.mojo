@@ -13,10 +13,7 @@ from std.gpu.host import DeviceContext
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator
 from std.utils.coord import Coord as StdCoord
-
-from std.algorithm.functional import elementwise
 
 from op_utils import (
     FLOAT_DTYPES,

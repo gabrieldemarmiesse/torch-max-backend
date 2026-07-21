@@ -29,7 +29,6 @@ from fa4_tma4 import create_split_tma_3d_strided
 
 from fa4_bwd_kernel import bwd_main_kernel, bwd_preprocess_kernel, bwd_convert_kernel
 from fa4_bwd_common import (
-    kBwdBlockM,
     kBwdTileM,
     kBwdBlockN,
     kBwdCvtThreads,

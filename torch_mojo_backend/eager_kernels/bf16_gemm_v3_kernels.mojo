@@ -55,9 +55,6 @@ comptime _V3_BN = 128
 comptime _V3_BK = 64
 comptime _V3_SWIZZLE = TensorMapSwizzle.SWIZZLE_128B
 comptime _V3_NO_SWIZZLE = TensorMapSwizzle.SWIZZLE_NONE
-comptime _V3_A_LAYOUT = tile_layout_k_major[
-    _V3_BF16, _V3_BM, _V3_BK, _V3_SWIZZLE
-]()
 comptime _V3_TN_A_RAW_LAYOUT = Layout.row_major(_V3_BK, _V3_BM)
 comptime _V3_TN_A_LAYOUT = tile_layout_k_major[
     _V3_BF16, _V3_BM, _V3_BK, _V3_NO_SWIZZLE
@@ -66,9 +63,6 @@ comptime _V3_B_MN_LAYOUT = tile_layout_mn_major[
     _V3_BF16, _V3_BN, _V3_BK, _V3_SWIZZLE
 ]()
 comptime _V3_WGMMA_SHAPE = Index(64, 128, 16)
-comptime _V3_A_TMA = TMATensorTile[
-    _V3_BF16, 2, Index(_V3_BM, _V3_BK), Index(_V3_BM, _V3_BK)
-]
 comptime _V3_TN_A_TMA = TMATensorTile[
     _V3_BF16,
     2,

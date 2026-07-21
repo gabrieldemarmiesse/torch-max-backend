@@ -23,17 +23,6 @@ def verbose_enabled():
     return x in POSITIVE_VALUES or py_x in POSITIVE_VALUES
 
 
-def fast_eager_enabled():
-    """
-    Check if the Mojo-extension fast path for mojo_device eager mode is
-    enabled. Defaults to on; set TORCH_MOJO_BACKEND_FAST_EAGER=0 to use the
-    graph-based eager path for every op.
-    """
-    x = os.environ.get("TORCH_MOJO_BACKEND_FAST_EAGER", "1").lower()
-
-    return x in POSITIVE_VALUES
-
-
 def debug_graph():
     """
     Check if graph debugging is enabled by looking for the environment variable.

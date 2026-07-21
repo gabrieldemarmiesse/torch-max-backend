@@ -40,7 +40,6 @@ from std.utils.index import IndexList
 from std.utils.numerics import min_or_neg_inf, max_or_inf
 from std.utils.static_tuple import StaticTuple
 
-from std.algorithm.functional import elementwise
 from std.algorithm.reduction import product, sum
 from std.algorithm.reduction import max as reduce_max
 from std.algorithm.reduction import min as reduce_min
@@ -54,11 +53,7 @@ from op_utils import (
     _enqueue_cached,
     _make_ptr,
     _parallel_for,
-    _raw_ctx,
-    _raw_dtype_int,
     _raw_f64,
-    _raw_int,
-    _raw_ret_none,
     _raw_tuple_int,
     _raw_tuple_len,
     _reduce_spec_geom,
@@ -973,36 +968,6 @@ def _anyall_rows[
                 )
         else:
             raise Error("no GPU accelerator available at compile time")
-
-
-@always_inline
-def _anyall_rows_dispatch[
-    is_all: Bool
-](
-    dtype: DType,
-    out_addr: Int,
-    in_addr: Int,
-    rows: Int,
-    cols: Int,
-    ctx: DeviceContext,
-) raises:
-    var handled = False
-    comptime for dt in [
-        DType.float32,
-        DType.float16,
-        DType.bfloat16,
-        DType.int64,
-        DType.int32,
-        DType.int16,
-        DType.int8,
-        DType.uint8,
-        DType.bool,
-    ]:
-        if dtype == dt:
-            _anyall_rows[dt, is_all](out_addr, in_addr, rows, cols, ctx)
-            handled = True
-    if not handled:
-        raise Error("unsupported dtype for fast any/all: " + String(dtype))
 
 
 # ---------------------------------------------------------------------------

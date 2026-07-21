@@ -7,7 +7,6 @@
 # synchronization.
 # ===----------------------------------------------------------------------=== #
 
-from std.gpu.host import DeviceContext
 from std.os import abort
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
