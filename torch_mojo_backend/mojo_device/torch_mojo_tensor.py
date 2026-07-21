@@ -324,6 +324,70 @@ class TorchMojoTensor(torch.Tensor):
         return super().__repr__()
 
     @property
+    def shape(self):
+        """Logical eager shape, including an out= resize rebind.
+
+        The lightweight PrivateUse1 TensorImpl used as the Python wrapper has
+        no backend storage to resize. Eager kernels therefore keep their
+        authoritative metadata in Python; expose that same metadata through
+        the normal tensor API after a sanctioned payload rebind.
+        """
+        if hasattr(self, "_shape"):
+            return torch.Size(self._shape)
+        return super().shape
+
+    @property
+    def ndim(self):
+        if hasattr(self, "_shape"):
+            return len(self._shape)
+        return super().ndim
+
+    def dim(self):
+        if hasattr(self, "_shape"):
+            return len(self._shape)
+        return super().dim()
+
+    ndimension = dim
+
+    def size(self, dim=None):
+        if not hasattr(self, "_shape"):
+            return super().size() if dim is None else super().size(dim)
+        size = torch.Size(self._shape)
+        return size if dim is None else size[dim]
+
+    def stride(self, dim=None):
+        if not hasattr(self, "_strides"):
+            return super().stride() if dim is None else super().stride(dim)
+        strides = tuple(self._strides)
+        return strides if dim is None else strides[dim]
+
+    def is_contiguous(self, memory_format=torch.contiguous_format):
+        if not hasattr(self, "_is_contiguous"):
+            return super().is_contiguous(memory_format=memory_format)
+        if memory_format in (torch.contiguous_format, torch.preserve_format):
+            return self._is_contiguous
+        # A meta tensor gives PyTorch's exact channels-last layout answer
+        # without touching device data or requiring a GPU-enabled torch build.
+        return torch.empty_strided(
+            self._shape,
+            self._strides,
+            dtype=_torch_dtype_of(self._dtype),
+            device="meta",
+        ).is_contiguous(memory_format=memory_format)
+
+    def numel(self):
+        if hasattr(self, "_numel"):
+            return self._numel
+        return super().numel()
+
+    nelement = numel
+
+    def storage_offset(self):
+        if hasattr(self, "_offset"):
+            return self._offset
+        return super().storage_offset()
+
+    @property
     def device(self):
         # A plain attribute read so dynamo can trace `x.device` in compiled
         # functions (e.g. `torch.arange(T, device=idx.device)`).
@@ -336,29 +400,65 @@ class TorchMojoTensor(torch.Tensor):
 
 @no_type_check
 def _rebind_payload(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
-    """Point dst's payload at src's data — the out-variant "resize" pattern.
+    """Move ``src``'s eager payload into ``dst`` without changing identity.
 
-    torch's out= ops resize `out` when the shape doesn't match; our meta
-    wrapper's torch-side shape is frozen, but nothing ever reads it — all
-    consumers use the Python-side metadata rebound here (this mirrors the
-    old `out._max_data = result` behavior).
+    Both the Python payload and the real TensorImpl must move together. The
+    CPU ``resize_`` kernel only updates TensorImpl/storage metadata here (the
+    wrapper's dummy storage uses the Meta allocator); redispatch it explicitly
+    to retain the original TensorImpl, then move the authoritative Mojo
+    payload. No CPU tensor data is allocated or read.
     """
-    dst._holder = src._holder
-    dst._ptr = src._ptr
-    dst._shape = src._shape
-    dst._strides = src._strides
-    dst._offset = src._offset
-    dst._dtype = src._dtype
-    dst._itemsize = src._itemsize
-    dst._numel = src._numel
-    dst._is_contiguous = src._is_contiguous
-    # The cached Mojo TensorSpec describes the OLD payload; rebinding is the
-    # one sanctioned metadata mutation, so swap (or drop) the spec here too.
-    spec = src.__dict__.get("_spec")
-    if spec is not None:
-        dst._spec = spec
+    torch.ops.aten.resize_.default.redispatch(
+        torch._C.DispatchKeySet(torch._C.DispatchKey.CPU),
+        dst,
+        src._shape,
+        memory_format=None,
+    )
+    for name in (
+        "_holder",
+        "_ptr",
+        "_shape",
+        "_strides",
+        "_offset",
+        "_dtype",
+        "_itemsize",
+        "_numel",
+        "_device",
+        "_torch_device",
+        "_is_contiguous",
+    ):
+        setattr(dst, name, getattr(src, name))
+    # Any cached spec describes the old allocation or layout. Rebuild it on
+    # the next spec operation instead of retaining stale pointer metadata.
+    dst.__dict__.pop("_spec", None)
+
+
+@no_type_check
+def _resize_payload(dst: TorchMojoTensor, shape) -> None:
+    """Resize an eager out tensor and keep aliases when storage is sufficient."""
+    shape = tuple(shape)
+    if shape == tuple(dst._shape):
+        return
+
+    required_bytes = math.prod(shape) * dst._itemsize
+    allocation_bytes = int(dst._holder.get_nbytes())
+    available_bytes = allocation_bytes - dst._offset * dst._itemsize
+    if available_bytes < 0:
+        available_bytes = 0
+    if required_bytes <= available_bytes:
+        replacement = TorchMojoTensor._make(
+            dst._holder,
+            dst._ptr,
+            shape,
+            _row_major_strides(shape),
+            dst._offset,
+            dst._dtype,
+            dst._device,
+            contiguous=True,
+        )
     else:
-        dst.__dict__.pop("_spec", None)
+        replacement = TorchMojoTensor._alloc(shape, dst._dtype, dst._device)
+    _rebind_payload(dst, replacement)
 
 
 @no_type_check
