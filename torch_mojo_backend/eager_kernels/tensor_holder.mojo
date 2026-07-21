@@ -21,8 +21,8 @@
 # ===----------------------------------------------------------------------=== #
 
 from std.os import abort
-from std.gpu.host import DeviceContext, DeviceBuffer
-from std.memory import OpaquePointer
+from std.gpu.host import DeviceContext, DeviceBuffer, HostBuffer
+from std.memory import OpaquePointer, memcpy
 from std.python import Python, PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
@@ -72,6 +72,54 @@ comptime ALL_DTYPES = [
 ]
 
 
+struct _PinnedHostTransfer(Movable, Writable):
+    """Owns one page-locked staging allocation until Python drops it.
+
+    For H2D, host-side memcpy into this MAX-owned pinned allocation is
+    synchronous only with the calling CPU and the following DMA stays
+    asynchronous. For D2H, Python exposes this allocation directly as a CPU
+    tensor through DLPack, avoiding both a pageable destination and a host-side
+    copy. Python retains asynchronous owners behind stream events.
+    """
+
+    var buf: HostBuffer[DType.uint8]
+
+    def __init__(out self, buf: HostBuffer[DType.uint8]):
+        self.buf = buf
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write("PinnedHostTransfer(nbytes=", len(self.buf), ")")
+
+
+def _stage_pageable_h2d(
+    ctx: DeviceContext,
+    dst: DeviceBuffer[DType.uint8],
+    host_ptr: Int,
+    nbytes: Int,
+) raises -> PythonObject:
+    """Copy pageable CPU bytes to pinned memory, then enqueue pinned H2D."""
+    var staging = ctx.enqueue_create_host_buffer[DType.uint8](nbytes)
+    memcpy(
+        dest=staging.unsafe_ptr(),
+        src=_u8_ptr(host_ptr),
+        count=nbytes,
+    )
+    # Construct the Python owner before enqueue: if wrapping/allocation fails,
+    # there is no live DMA yet. Keep an extra reference through the exception
+    # handler so even a return-path failure cannot release pinned storage before
+    # the conservative stream drain.
+    var owner = PythonObject(alloc=_PinnedHostTransfer(staging^))
+    var owner_guard = PythonObject(copy=owner)
+    var transfer = owner.downcast_value_ptr[_PinnedHostTransfer]()
+    try:
+        dst.enqueue_copy_from(transfer[].buf)
+        return owner^
+    except e:
+        ctx.synchronize()
+        _ = owner_guard
+        raise e^
+
+
 @always_inline
 def _u8_ptr(
     addr: Int,
@@ -109,20 +157,40 @@ def alloc(ctx_ptr: PythonObject, nbytes: PythonObject) raises -> PythonObject:
 def alloc_from_host(
     ctx_ptr: PythonObject, host_ptr: PythonObject, nbytes: PythonObject
 ) raises -> PythonObject:
-    """Allocate + H2D copy from raw host memory. Returns (holder, data_ptr).
+    """Allocate + H2D copy. Returns (holder, data_ptr, transfer_owner).
 
-    Synchronizes before returning: the host memory (typically a CPU torch
-    tensor's storage) is only guaranteed alive for the duration of the call.
+    On GPU, ``transfer_owner`` owns an exact-size MAX pinned-host staging
+    allocation. Python records an event immediately after this call and retains
+    that owner until the DMA completes. This keeps pageable PyTorch CPU tensors
+    independent of torch-cuda while avoiding a default-stream drain.
     """
     var ctx = _get_ctx(ctx_ptr)
     var n = Int(py=nbytes)
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(n, 1))
+    var transfer_owner = Python.none()
     if n > 0:
-        buf.enqueue_copy_from(_u8_ptr(Int(py=host_ptr)))
-        ctx.synchronize()
+        # CPU copies run on a worker pool that is not ordered with later kernel
+        # launches. Preserve the established blocking behavior on that device.
+        if ctx.api() == "cpu":
+            buf.enqueue_copy_from(_u8_ptr(Int(py=host_ptr)))
+            ctx.synchronize()
+        else:
+            transfer_owner = _stage_pageable_h2d(ctx, buf, Int(py=host_ptr), n)
     var addr = Int(buf.unsafe_ptr())
-    var holder = PythonObject(alloc=TensorHolder(buf=buf^, nbytes=n))
-    return Python.tuple(holder^, PythonObject(addr))
+    var transfer_guard = PythonObject(copy=transfer_owner)
+    var holder_guard = Python.none()
+    try:
+        var holder = PythonObject(alloc=TensorHolder(buf=buf^, nbytes=n))
+        holder_guard = PythonObject(copy=holder)
+        return Python.tuple(holder^, PythonObject(addr), transfer_owner^)
+    except e:
+        # H2D may already be queued. The guards above retain both allocations
+        # until this drain finishes, even if tuple construction consumed its
+        # arguments before failing.
+        ctx.synchronize()
+        _ = holder_guard
+        _ = transfer_guard
+        raise e^
 
 
 def copy_from_host(
@@ -130,15 +198,18 @@ def copy_from_host(
     dev_ptr: PythonObject,
     host_ptr: PythonObject,
     nbytes: PythonObject,
-) raises:
-    """H2D copy into existing device memory. Synchronizes (see above)."""
+) raises -> PythonObject:
+    """Enqueue H2D and return a pinned transfer owner for Python to retain."""
     var n = Int(py=nbytes)
     if n == 0:
-        return
+        return Python.none()
     var ctx = _get_ctx(ctx_ptr)
     var dst = _wrap_raw(ctx, Int(py=dev_ptr), n)
-    dst.enqueue_copy_from(_u8_ptr(Int(py=host_ptr)))
-    ctx.synchronize()
+    if ctx.api() == "cpu":
+        dst.enqueue_copy_from(_u8_ptr(Int(py=host_ptr)))
+        ctx.synchronize()
+        return Python.none()
+    return _stage_pageable_h2d(ctx, dst, Int(py=host_ptr), n)
 
 
 def copy_to_host(
@@ -147,7 +218,7 @@ def copy_to_host(
     host_ptr: PythonObject,
     nbytes: PythonObject,
 ) raises:
-    """D2H copy into raw host memory. Synchronizes before returning."""
+    """Blocking D2H into caller-owned ordinary host memory."""
     var n = Int(py=nbytes)
     if n == 0:
         return
@@ -155,6 +226,40 @@ def copy_to_host(
     var src = _wrap_raw(ctx, Int(py=dev_ptr), n)
     src.enqueue_copy_to(_u8_ptr(Int(py=host_ptr)))
     ctx.synchronize()
+
+
+def copy_to_pinned_host(
+    ctx_ptr: PythonObject,
+    dev_ptr: PythonObject,
+    nbytes: PythonObject,
+) raises -> PythonObject:
+    """Enqueue D2H into a new pinned buffer; return ``(owner, data_ptr)``.
+
+    The returned owner must survive until a stream event recorded behind the
+    DMA is ready. Python only calls this for a non-blocking GPU transfer.
+    """
+    var n = Int(py=nbytes)
+    var ctx = _get_ctx(ctx_ptr)
+    var host = ctx.enqueue_create_host_buffer[DType.uint8](max(n, 1))
+    # Allocate/wrap the Python owner before enqueue so a wrapping failure has
+    # no outstanding DMA. Access the HostBuffer through that stable owner.
+    var owner = PythonObject(alloc=_PinnedHostTransfer(host^))
+    var owner_guard = PythonObject(copy=owner)
+    var transfer = owner.downcast_value_ptr[_PinnedHostTransfer]()
+    var addr = Int(transfer[].buf.unsafe_ptr())
+    if n == 0:
+        return Python.tuple(owner^, PythonObject(addr))
+
+    var src = _wrap_raw(ctx, Int(py=dev_ptr), n)
+    try:
+        src.enqueue_copy_to(transfer[].buf)
+        return Python.tuple(owner^, PythonObject(addr))
+    except e:
+        # ``owner_guard`` remains live even if tuple construction stole
+        # ``owner`` before failing.
+        ctx.synchronize()
+        _ = owner_guard
+        raise e^
 
 
 def copy_d2d(
@@ -438,6 +543,7 @@ def _make_spec_dispatcher(
 def PyInit_tensor_holder() abi("C") -> PythonObject:
     try:
         var m = PythonModuleBuilder("tensor_holder")
+        _ = m.add_type[_PinnedHostTransfer]("PinnedHostTransfer")
         _ = (
             m.add_type[TensorHolder]("TensorHolder")
             .def_method[TensorHolder.data_ptr]("data_ptr")
@@ -456,6 +562,7 @@ def PyInit_tensor_holder() abi("C") -> PythonObject:
         m.def_function[alloc_from_host]("alloc_from_host")
         m.def_function[copy_from_host]("copy_from_host")
         m.def_function[copy_to_host]("copy_to_host")
+        m.def_function[copy_to_pinned_host]("copy_to_pinned_host")
         m.def_function[copy_d2d]("copy_d2d")
         m.def_function[synchronize]("synchronize")
         m.def_function[read_scalar]("read_scalar")
