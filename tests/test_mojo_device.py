@@ -30,6 +30,41 @@ def setup_max_device():
     register_mojo_devices()
 
 
+def test_mojo_is_the_default_torch_accelerator():
+    assert torch.accelerator.current_accelerator(check_available=True) == torch.device(
+        "mojo"
+    )
+
+
+def test_torch_accelerator_synchronize_uses_mojo_device_module(monkeypatch):
+    calls = []
+    original_synchronize = torch.mojo.synchronize
+    original_device = torch.mojo.current_device()
+
+    def recording_synchronize(device=None):
+        calls.append(device)
+        return original_synchronize(device)
+
+    monkeypatch.setattr(torch.mojo, "synchronize", recording_synchronize)
+
+    try:
+        torch.accelerator.synchronize()
+        torch.accelerator.synchronize("mojo")
+        torch.accelerator.synchronize(0)
+
+        if torch.accelerator.device_count() > 1:
+            torch.mojo.set_device(1)
+            torch.accelerator.synchronize()
+    finally:
+        torch.mojo.set_device(original_device)
+
+    assert calls[:3] == [original_device, original_device, 0]
+    if torch.accelerator.device_count() > 1:
+        assert calls[3:] == [1]
+    with pytest.raises(ValueError, match="doesn't match the current accelerator mojo"):
+        torch.accelerator.synchronize("cpu")
+
+
 def test_tensor_to_max_device(mojo_device):
     """Test converting regular tensor to mojo_device"""
     # Create CPU tensor
@@ -165,7 +200,7 @@ def test_non_blocking_cpu_to_mojo_transfers(mojo_device):
     via_copy = torch.empty_like(via_to)
     via_copy.copy_(source, non_blocking=True)
 
-    torch.mojo.synchronize(mojo_device)
+    torch.accelerator.synchronize(mojo_device)
     torch.testing.assert_close(via_to.cpu(), source)
     torch.testing.assert_close(via_copy.cpu(), source)
 
@@ -184,7 +219,7 @@ def test_non_blocking_cpu_source_lifetime(mojo_device):
     for _ in range(8):
         torch.empty_like(expected).fill_(-1)
 
-    torch.mojo.synchronize(mojo_device)
+    torch.accelerator.synchronize(mojo_device)
     assert uploaded._device not in _PENDING_H2D
     torch.testing.assert_close(uploaded.cpu(), expected)
 

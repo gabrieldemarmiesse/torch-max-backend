@@ -1,8 +1,62 @@
+from functools import wraps
+
 import torch
 
 from .mojo_device_aten_ops import _aten_ops_registry
 
 _registered = False
+
+
+def _install_torch_accelerator_synchronize(torch_mojo_device_module):
+    """Route the generic accelerator synchronization API to MAX.
+
+    Registering PrivateUse1 already makes Mojo the process's current
+    ``torch.accelerator`` (PrivateUse1 intentionally has priority over compiled
+    accelerators in PyTorch).  PyTorch's experimental Python PrivateUse1 device
+    guard does not yet forward ``synchronizeDevice`` to the registered Python
+    device module, though, so the stock generic API can silently no-op before
+    lazy initialization or raise once initialized.
+    Keep the public device-validation semantics and delegate the actual queue
+    drain to the Mojo module until PyTorch's Python device guard grows that
+    forwarding hook.
+    """
+    original_synchronize = torch.accelerator.synchronize
+    if getattr(original_synchronize, "_torch_mojo_backend", False):
+        return
+
+    mojo_device = torch.device("mojo")
+    current_accelerator = torch.accelerator.current_accelerator()
+    if current_accelerator != mojo_device:
+        raise RuntimeError(
+            "registering Mojo did not make it the current torch.accelerator: "
+            f"{current_accelerator}"
+        )
+
+    @wraps(original_synchronize)
+    def synchronize(device=None):
+        current = torch.accelerator.current_accelerator()
+        if current != mojo_device:
+            return original_synchronize(device)
+
+        if device is None:
+            device_index = torch_mojo_device_module.current_device()
+        elif isinstance(device, int):
+            device_index = device
+        else:
+            selected = torch.device(device)
+            if selected.type != "mojo":
+                raise ValueError(
+                    f"{selected.type} doesn't match the current accelerator {current}."
+                )
+            device_index = (
+                torch_mojo_device_module.current_device()
+                if selected.index is None
+                else selected.index
+            )
+        return torch_mojo_device_module.synchronize(device_index)
+
+    synchronize._torch_mojo_backend = True
+    torch.accelerator.synchronize = synchronize
 
 
 def _declare_mojo_tensor_as_plain_tensor():
@@ -112,6 +166,7 @@ def register_mojo_devices():
     _setup_privateuseone_for_python_backend(
         "mojo", backend_module=torch_mojo_device_module
     )
+    _install_torch_accelerator_synchronize(torch_mojo_device_module)
 
     # PyTorch deliberately uses exact-type checks before selecting foreach
     # optimizers. TorchMojoTensor is a plain PrivateUse1 tensor subclass, so
