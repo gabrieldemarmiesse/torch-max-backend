@@ -165,6 +165,10 @@ def register_mojo_devices():
     for op_name, func in _aten_ops_registry:
         torch.library.impl(op_name, "privateuseone")(func)
 
+    from .mojo_device_autograd import register_autograd_ops
+
+    register_autograd_ops()
+
     _declare_mojo_tensor_as_plain_tensor()
     _keep_mojo_kernels_out_of_fake_tensor_construction()
 

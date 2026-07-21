@@ -1,5 +1,7 @@
 """Tests for the Mojo-extension fast path used by mojo eager mode."""
 
+import weakref
+
 import pytest
 import torch
 
@@ -735,3 +737,96 @@ def test_fast_sdpa_decode(mojo_gpu, dtype):
     ).cpu()
     ref = torch.nn.functional.scaled_dot_product_attention(q, k, v)
     torch.testing.assert_close(dev, ref, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("with_bias", [False, True])
+def test_fast_linear_training_backward(mojo_gpu, with_bias):
+    generator = torch.Generator().manual_seed(20260718)
+    x = torch.randn(2, 16, 32, generator=generator)
+    weight = torch.randn(64, 32, generator=generator)
+    bias = torch.randn(64, generator=generator) if with_bias else None
+    grad_output = torch.randn(2, 16, 64, generator=generator)
+
+    reference_inputs = [x.clone().requires_grad_(), weight.clone().requires_grad_()]
+    reference_bias = bias.clone().requires_grad_() if bias is not None else None
+    torch.nn.functional.linear(*reference_inputs, reference_bias).backward(grad_output)
+
+    mojo_inputs = [tensor.to(mojo_gpu).requires_grad_() for tensor in (x, weight)]
+    mojo_bias = bias.to(mojo_gpu).requires_grad_() if bias is not None else None
+    torch.nn.functional.linear(*mojo_inputs, mojo_bias).backward(
+        grad_output.to(mojo_gpu)
+    )
+
+    for actual, expected in zip(mojo_inputs, reference_inputs, strict=True):
+        assert actual.grad is not None
+        torch.testing.assert_close(
+            actual.grad.cpu(), expected.grad, atol=2e-4, rtol=2e-4
+        )
+    if mojo_bias is not None:
+        assert mojo_bias.grad is not None
+        torch.testing.assert_close(
+            mojo_bias.grad.cpu(), reference_bias.grad, atol=2e-4, rtol=2e-4
+        )
+
+
+def test_fast_log_softmax_training_backward(mojo_gpu):
+    """Autograd must retain a valid Mojo payload for the saved forward output."""
+    generator = torch.Generator().manual_seed(20260718)
+    x = torch.randn(32, 65, generator=generator)
+    grad_output = torch.randn(32, 65, generator=generator)
+
+    reference = x.clone().requires_grad_()
+    torch.nn.functional.log_softmax(reference, dim=-1).backward(grad_output)
+
+    actual = x.to(mojo_gpu).requires_grad_()
+    torch.nn.functional.log_softmax(actual, dim=-1).backward(grad_output.to(mojo_gpu))
+
+    assert actual.grad is not None
+    torch.testing.assert_close(actual.grad.cpu(), reference.grad, atol=2e-5, rtol=2e-5)
+
+
+def test_fast_log_softmax_uses_saved_tensor_hooks(mojo_gpu):
+    generator = torch.Generator().manual_seed(20260718)
+    x = torch.randn(8, 17, generator=generator)
+    grad_output = torch.randn(8, 17, generator=generator)
+    reference = x.clone().requires_grad_()
+    torch.nn.functional.log_softmax(reference, dim=-1).backward(grad_output)
+    hook_calls = []
+
+    def pack(tensor):
+        hook_calls.append(("pack", tensor.device.type))
+        return tensor.cpu()
+
+    def unpack(tensor):
+        hook_calls.append(("unpack", tensor.device.type))
+        return tensor
+
+    actual = x.to(mojo_gpu).requires_grad_()
+    with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
+        torch.nn.functional.log_softmax(actual, dim=-1).backward(
+            grad_output.to(mojo_gpu)
+        )
+
+    assert hook_calls == [("pack", "mojo"), ("unpack", "cpu")]
+    torch.testing.assert_close(actual.grad.cpu(), reference.grad, atol=2e-5, rtol=2e-5)
+
+
+def test_fast_log_softmax_backward_rejects_mutated_saved_output(mojo_gpu):
+    output = torch.nn.functional.log_softmax(
+        torch.randn(8, 17).to(mojo_gpu).requires_grad_(), dim=-1
+    )
+    with torch.no_grad():
+        output.add_(torch.ones_like(output))
+
+    with pytest.raises(RuntimeError, match="modified by an inplace operation"):
+        output.backward(torch.randn(8, 17).to(mojo_gpu))
+
+
+def test_fast_log_softmax_does_not_retain_python_output_cycle(mojo_gpu):
+    input = torch.randn(8, 17).to(mojo_gpu).requires_grad_()
+    output = torch.nn.functional.log_softmax(input, dim=-1)
+    output_ref = weakref.ref(output)
+
+    del output
+
+    assert output_ref() is None
