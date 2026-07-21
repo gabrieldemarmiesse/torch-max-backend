@@ -19,6 +19,7 @@ import torch_mojo_backend.is_running_tests
 from torch_mojo_backend.mojo_device.torch_mojo_tensor import (
     TorchMojoTensor,
     _copy_strided_into,
+    _record_h2d_source,
     _resize_payload,
     find_equivalent_max_device,
 )
@@ -206,14 +207,16 @@ def _out_variant(op_name: str, fast_name: str, *, dtype_policy: str = "safe_cast
 
 @register_aten_op("aten::_copy_from")
 @no_type_check
-def mojo_device__copy_from(self, dest):
+def mojo_device__copy_from(self, dest, non_blocking: bool = False):
     src_is_mojo = isinstance(self, TorchMojoTensor)
     dest_is_mojo = isinstance(dest, TorchMojoTensor)
 
     if src_is_mojo and dest_is_mojo:
         if self._device != dest._device:
             # Cross mojo-device: bounce through the host.
-            bounced = TorchMojoTensor._from_cpu(self._to_cpu_tensor(), dest._device)
+            bounced = TorchMojoTensor._from_cpu(
+                self._to_cpu_tensor(), dest._device, non_blocking=non_blocking
+            )
             _copy_into_tensor(dest, bounced)
             return dest
         _copy_into_tensor(dest, self)
@@ -237,14 +240,17 @@ def mojo_device__copy_from(self, dest):
             if dest._numel > 0:
                 from torch_mojo_backend import eager_kernels
 
-                eager_kernels.tensor_holder.copy_from_host(
+                transfer_owner = eager_kernels.tensor_holder.copy_from_host(
                     eager_kernels._ctx_ptr(dest._device),
                     dest._ptr,
                     cpu.data_ptr(),
                     dest._numel * dest._itemsize,
                 )
+                _record_h2d_source(dest._device, transfer_owner, non_blocking)
         else:
-            staged = TorchMojoTensor._from_cpu(cpu, dest._device)
+            staged = TorchMojoTensor._from_cpu(
+                cpu, dest._device, non_blocking=non_blocking
+            )
             _copy_strided_into(dest, staged)
         return dest
 
@@ -278,7 +284,9 @@ def mojo_device__to_copy(
         t = tensor.detach()
         if dtype is not None and t.dtype != dtype:
             t = t.to(dtype)
-        return TorchMojoTensor._from_cpu(t, find_equivalent_max_device(device))
+        return TorchMojoTensor._from_cpu(
+            t, find_equivalent_max_device(device), non_blocking=non_blocking
+        )
 
     result = tensor
     if dtype is not None:
@@ -299,13 +307,15 @@ def mojo_device__to_copy(
                     if device is not None
                     else result._device
                 )
-                return TorchMojoTensor._from_cpu(cpu, target)
+                return TorchMojoTensor._from_cpu(cpu, target, non_blocking=non_blocking)
     if device is not None and device.type == "cpu":
-        return result._to_cpu_tensor()
+        return result._to_cpu_tensor(non_blocking=non_blocking)
     if device is not None:
         target = find_equivalent_max_device(device)
         if target != result._device:
-            return TorchMojoTensor._from_cpu(result._to_cpu_tensor(), target)
+            return TorchMojoTensor._from_cpu(
+                result._to_cpu_tensor(), target, non_blocking=non_blocking
+            )
     if result is tensor:
         # _to_copy always returns a fresh tensor.
         result = tensor._materialize_contiguous()

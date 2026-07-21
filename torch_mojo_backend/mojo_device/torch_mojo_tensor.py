@@ -1,5 +1,7 @@
 import functools
 import math
+import threading
+from collections import deque
 from typing import no_type_check
 
 import max.driver
@@ -27,6 +29,26 @@ def _holder_mod():
 
 _data_movement = None
 
+# GPU H2D copies consume a MAX-owned pinned staging allocation asynchronously.
+# Keep that transfer owner alive until an event recorded behind its DMA
+# completes. This mirrors the lifetime tracking performed by CUDA's pinned
+# memory allocator without depending on torch-cuda.
+_PENDING_H2D: dict[max.driver.Device, deque] = {}
+_PENDING_H2D_LOCK = threading.Lock()
+
+# A non-blocking D2H returns a CPU tensor that aliases a MAX-owned pinned host
+# allocation. DLPack ties that owner to the returned tensor, while this queue
+# also retains it until the DMA event completes if the tensor dies early.
+_PENDING_D2H: dict[max.driver.Device, deque] = {}
+_PENDING_D2H_LOCK = threading.Lock()
+
+# A stream/event failure is already a fatal device condition, but raw-pointer
+# lifetime must remain safe while the exception propagates. If both event
+# recording and recovery synchronization fail, retain that transfer owner for
+# the process lifetime rather than risk freeing memory still used by DMA.
+_FAILED_TRANSFER_OWNERS: dict[max.driver.Device, list[tuple[object, object]]] = {}
+_FAILED_TRANSFER_OWNERS_LOCK = threading.Lock()
+
 
 def _data_movement_mod():
     global _data_movement
@@ -46,6 +68,112 @@ def _ctx_ptr(device):
 
     _ctx_ptr = real_ctx_ptr
     return real_ctx_ptr(device)
+
+
+@no_type_check
+def _retain_failed_transfer_owner(device, owner: object) -> object:
+    token = object()
+    with _FAILED_TRANSFER_OWNERS_LOCK:
+        _FAILED_TRANSFER_OWNERS.setdefault(device, []).append((token, owner))
+    return token
+
+
+@no_type_check
+def _forget_failed_transfer_owner(device, token: object) -> None:
+    with _FAILED_TRANSFER_OWNERS_LOCK:
+        retained = _FAILED_TRANSFER_OWNERS.get(device)
+        if retained is None:
+            return
+        retained[:] = [entry for entry in retained if entry[0] is not token]
+        if not retained:
+            _FAILED_TRANSFER_OWNERS.pop(device, None)
+
+
+@no_type_check
+def _record_h2d_source(device, source: object, non_blocking: bool) -> None:
+    """Retain a pinned transfer owner until its default-stream H2D ends."""
+    # MAX's CPU device uses a worker pool whose copies are not stream-ordered
+    # with kernels. The Mojo helper drains it before returning; keep the Python
+    # side blocking as well rather than advertising unsupported async behavior.
+    if device == CPU():
+        non_blocking = False
+
+    try:
+        event = device.default_stream.record_event()
+    except Exception:
+        # Stash before recovery: if synchronization also fails, retaining for
+        # process lifetime is safer than freeing a raw DMA source prematurely.
+        token = _retain_failed_transfer_owner(device, source)
+        device.default_stream.synchronize()
+        _forget_failed_transfer_owner(device, token)
+        _release_synchronized_h2d_sources(device)
+        raise
+
+    if not non_blocking:
+        event.synchronize()
+        _release_synchronized_h2d_sources(device)
+        return
+
+    with _PENDING_H2D_LOCK:
+        pending = _PENDING_H2D.setdefault(device, deque())
+        # Retain the current DMA owner before querying older events. Event
+        # queries can fail; unwinding must not free the just-enqueued source.
+        pending.append((event, source))
+        while pending and pending[0][0].is_ready():
+            pending.popleft()
+        # Do not impose a count-based wait here: a burst can legitimately have
+        # many copies behind long-running GPU work. The FIFO is reaped on every
+        # transfer and after explicit/blocking synchronization, while each
+        # event keeps its exact source alive until DMA completion.
+
+
+@no_type_check
+def _release_synchronized_h2d_sources(device) -> None:
+    """Drop ready sources after the caller synchronized ``device``'s stream.
+
+    Another thread may enqueue a transfer between the stream synchronization
+    and this cleanup. Checking each event under the queue lock preserves that
+    post-sync source until its own DMA completes.
+    """
+    with _PENDING_H2D_LOCK:
+        pending = _PENDING_H2D.get(device)
+        while pending and pending[0][0].is_ready():
+            pending.popleft()
+        if not pending:
+            _PENDING_H2D.pop(device, None)
+
+
+@no_type_check
+def _record_d2h_owner(device, owner: object) -> None:
+    """Retain a pinned D2H allocation until its default-stream DMA ends."""
+    try:
+        event = device.default_stream.record_event()
+    except Exception:
+        token = _retain_failed_transfer_owner(device, owner)
+        device.default_stream.synchronize()
+        _forget_failed_transfer_owner(device, token)
+        _release_synchronized_h2d_sources(device)
+        _release_synchronized_d2h_owners(device)
+        raise
+
+    with _PENDING_D2H_LOCK:
+        pending = _PENDING_D2H.setdefault(device, deque())
+        # Retain the current source/destination before querying older events;
+        # an event-query exception must not drop memory still used by DMA.
+        pending.append((event, owner))
+        while pending and pending[0][0].is_ready():
+            pending.popleft()
+
+
+@no_type_check
+def _release_synchronized_d2h_owners(device) -> None:
+    """Drop pinned D2H owners whose stream events have completed."""
+    with _PENDING_D2H_LOCK:
+        pending = _PENDING_D2H.get(device)
+        while pending and pending[0][0].is_ready():
+            pending.popleft()
+        if not pending:
+            _PENDING_D2H.pop(device, None)
 
 
 # The helpers below run several times per op dispatch (hundreds of times per
@@ -209,9 +337,13 @@ class TorchMojoTensor(torch.Tensor):
     @classmethod
     @no_type_check
     def _from_cpu(
-        cls, cpu_tensor: torch.Tensor, device: max.driver.Device
+        cls,
+        cpu_tensor: torch.Tensor,
+        device: max.driver.Device,
+        *,
+        non_blocking: bool = False,
     ) -> "TorchMojoTensor":
-        """H2D: allocate + copy from a CPU torch tensor (synchronizes)."""
+        """H2D: allocate and enqueue a copy from a CPU torch tensor."""
         from max.experimental.torch.torch import torch_dtype_to_max
 
         t = cpu_tensor.detach()
@@ -222,9 +354,10 @@ class TorchMojoTensor(torch.Tensor):
         if nbytes == 0:
             # Nothing to transfer; skip alloc_from_host's full queue drain.
             return cls._alloc(tuple(t.shape), dtype, device)
-        holder, ptr = _holder_mod().alloc_from_host(
+        holder, ptr, transfer_owner = _holder_mod().alloc_from_host(
             _ctx_ptr(device), t.data_ptr(), nbytes
         )
+        _record_h2d_source(device, transfer_owner, non_blocking)
         return cls._make(
             holder,
             ptr,
@@ -237,18 +370,46 @@ class TorchMojoTensor(torch.Tensor):
         )
 
     @no_type_check
-    def _to_cpu_tensor(self) -> torch.Tensor:
-        """D2H: a CPU torch tensor with this tensor's data (synchronizes)."""
+    def _to_cpu_tensor(self, *, non_blocking: bool = False) -> torch.Tensor:
+        """D2H into MAX-owned pinned storage exposed as a CPU tensor.
+
+        With ``non_blocking=True`` on a GPU, the returned tensor aliases the
+        pinned destination immediately and the caller must synchronize before
+        consuming it, matching PyTorch's asynchronous accelerator-to-CPU
+        contract. Blocking and CPU-device copies are ready on return.
+        """
         src = self if self._is_contiguous else self._materialize_contiguous()
-        out = torch.empty(self._shape, dtype=max_dtype_to_torch(self._dtype))
-        if src._numel > 0:
+        if src._numel == 0:
+            return torch.empty(self._shape, dtype=max_dtype_to_torch(self._dtype))
+
+        nbytes = src._numel * src._itemsize
+        if not non_blocking or src._device == CPU():
+            out = torch.empty(src._shape, dtype=max_dtype_to_torch(src._dtype))
             _holder_mod().copy_to_host(
-                _ctx_ptr(src._device),
-                src._ptr,
-                out.data_ptr(),
-                src._numel * src._itemsize,
+                _ctx_ptr(src._device), src._ptr, out.data_ptr(), nbytes
             )
-        return out
+            _release_synchronized_h2d_sources(src._device)
+            _release_synchronized_d2h_owners(src._device)
+            return out
+
+        owner, ptr = _holder_mod().copy_to_pinned_host(
+            _ctx_ptr(src._device), src._ptr, nbytes
+        )
+        # Record and retain both ends before DLPack adoption, which can raise.
+        # A non-contiguous input may make ``src`` a temporary whose holder must
+        # remain alive until the non-owning DeviceBuffer copy has completed.
+        _record_d2h_owner(src._device, (owner, src._holder))
+        try:
+            from torch_mojo_backend.mojo_device import dlpack
+
+            return torch.from_dlpack(
+                dlpack.make_capsule(owner, ptr, src._shape, src._dtype, CPU())
+            )
+        except Exception:
+            src._device.default_stream.synchronize()
+            _release_synchronized_h2d_sources(src._device)
+            _release_synchronized_d2h_owners(src._device)
+            raise
 
     @no_type_check
     def _materialize_contiguous(self) -> "TorchMojoTensor":
@@ -506,13 +667,13 @@ def get_ordered_accelerators():
     return gpu_accelerators + cpu_accelerators
 
 
-@functools.cache
 @no_type_check
 def find_equivalent_max_device(device: torch.device) -> max.driver.Device:
     """Find the equivalent MAX device for a given torch device
 
     Device mapping:
-    - mojo:0 (or mojo) -> First GPU (or CPU if no GPUs)
+    - mojo (no index) -> torch.mojo.current_device()
+    - mojo:0 -> First GPU (or CPU if no GPUs)
     - mojo:1, mojo:2, ... -> Additional GPUs
     - mojo:<last_index> -> CPU device
     """
@@ -521,8 +682,9 @@ def find_equivalent_max_device(device: torch.device) -> max.driver.Device:
     if device.type == "mojo":
         # mojo with specific index
         if device.index is None:
-            # Default to first accelerator (first GPU or CPU if no GPUs)
-            return ordered_accelerators[0]
+            # Match PyTorch device semantics: an indexless backend device means
+            # the backend's current device, not permanently device zero.
+            return ordered_accelerators[torch_mojo_device_module.current_device()]
         else:
             if device.index < len(ordered_accelerators):
                 return ordered_accelerators[device.index]
