@@ -23,6 +23,7 @@ backend keeps using `aten_functions` directly.
 import math
 from typing import no_type_check
 
+import torch
 from max.dtype import DType
 
 from torch_mojo_backend import eager_kernels, is_running_tests
@@ -138,8 +139,9 @@ _view_of = TorchMojoTensor._view_of
 # kernels (binary/comparison in logic_ops, relu/batch_norm still in
 # tensor_holder) and do checks, broadcast, output alloc and kernel launch
 # in one boundary call, raising a real NotImplementedError when the inputs
-# don't qualify — the callers below treat any exception as "take the
-# classic path". make_spec (the constructor) stays in tensor_holder.
+# don't qualify — the callers below treat unsupported-input exceptions as
+# "take the classic path", while allocator OOMs propagate. make_spec (the
+# constructor) stays in tensor_holder.
 # ---------------------------------------------------------------------------
 
 
@@ -221,7 +223,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
                     keep_b, spec_b, _, _ = eager_kernels.data_movement_ops.CastSpec(
                         _spec_of(b), dtype.value
                     )
-            except Exception:
+            except Exception as exc:
+                _raise_if_device_oom(exc)
                 return None
     elif a is not None:
         device = a._device
@@ -233,7 +236,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
             keep_b, spec_b, _, _ = eager_kernels.elementwise_ops.FillSpec(
                 _pad8((), 1), 0, 1, value, dtype.value, _ctx_ptr(device)
             )
-        except Exception:
+        except Exception as exc:
+            _raise_if_device_oom(exc)
             return None
     elif b is not None:
         # Scalar-first calls, e.g. rsub-style `1 - tensor`.
@@ -246,7 +250,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
             keep_a, spec_a, _, _ = eager_kernels.elementwise_ops.FillSpec(
                 _pad8((), 1), 0, 1, value, dtype.value, _ctx_ptr(device)
             )
-        except Exception:
+        except Exception as exc:
+            _raise_if_device_oom(exc)
             return None
     else:
         return None
@@ -255,7 +260,8 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
             spec_a if spec_a is not None else _spec_of(a),
             spec_b if spec_b is not None else _spec_of(b),
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     _ = keep_a, keep_b  # intermediates must outlive the enqueued launch
     return _wrap_spec_result(result, out_dtype or dtype, device)
@@ -272,7 +278,8 @@ def _try_spec_unary(spec_fn_name, x, out_dtype=None, module_name="elementwise_op
         return None
     try:
         result = getattr(getattr(eager_kernels, module_name), spec_fn_name)(_spec_of(a))
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
 
@@ -288,7 +295,8 @@ def _try_spec_reduce(
         result = getattr(getattr(eager_kernels, module_name), spec_fn_name)(
             _spec_of(a), tuple(rdims), 1 if keepdim else 0, *extra
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
 
@@ -302,6 +310,31 @@ def _wrap_spec_pair(result, dtype0, dtype1, device):
     )
 
 
+_DEVICE_OOM_MARKERS = (
+    "cuda_error_out_of_memory",
+    "hiperroroutofmemory",
+    "out of memory",
+    "failed to allocate device memory",
+    "halerror (code = -13",
+)
+
+
+@no_type_check
+def _raise_if_device_oom(exc):
+    """Keep TensorSpec fallbacks from disguising allocator exhaustion.
+
+    Mojo TensorSpec dispatch reports both unsupported metadata and runtime
+    launch/allocation failures as ``NotImplementedError``. Unsupported
+    metadata should retain the classic fallback, but retrying after a device
+    OOM only replaces the useful allocator error with a misleading
+    ``aten::<op> is not supported`` message.
+    """
+    message = str(exc)
+    folded = message.casefold()
+    if any(marker in folded for marker in _DEVICE_OOM_MARKERS):
+        raise torch.OutOfMemoryError(message) from exc
+
+
 @no_type_check
 def _try_spec_matmul(spec_fn_name, tensors, transpose_b):
     """Matmul-family spec op over already-typed operands, or None. The spec
@@ -313,7 +346,8 @@ def _try_spec_matmul(spec_fn_name, tensors, transpose_b):
         result = getattr(eager_kernels.matmul_ops, spec_fn_name)(
             *[_spec_of(t) for t in ts], transpose_b
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, ts[0]._dtype, ts[0]._device)
 
@@ -330,7 +364,8 @@ def _try_spec_scalar(spec_fn_name, x, scalar):
         result = getattr(eager_kernels.elementwise_ops, spec_fn_name)(
             _spec_of(a), float(scalar)
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, a._dtype, a._device)
 
@@ -347,7 +382,8 @@ def _try_spec_int_scalar(spec_fn_name, x, scalar):
         result = getattr(eager_kernels.elementwise_ops, spec_fn_name)(
             _spec_of(a), scalar
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     return _wrap_spec_result(result, a._dtype, a._device)
 
@@ -1063,7 +1099,8 @@ def _try_logical(spec_fn_name, input, other):
                 _spec_of(b), DType.bool.value
             )
         result = getattr(eager_kernels.logic_ops, spec_fn_name)(spec_a, spec_b)
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         return None
     _ = keep_a, keep_b  # intermediates must outlive the enqueued launch
     return _wrap_spec_result(result, DType.bool, a._device)
@@ -2035,7 +2072,8 @@ def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, e
                 _spec_of(stats[3]),
                 float(eps),
             )
-        except Exception:
+        except Exception as exc:
+            _raise_if_device_oom(exc)
             pass
         else:
             out = _wrap_spec_result(result, a._dtype, a._device)
@@ -2321,7 +2359,8 @@ def fast_aten_min_dim(input, dim, keepdim=False):
         result = eager_kernels.reduction_ops.MinDimSpec(
             _spec_of(a), (dim % rank,), 1 if keepdim else 0
         )
-    except Exception:
+    except Exception as exc:
+        _raise_if_device_oom(exc)
         result = None
     if result is not None:
         return _wrap_spec_pair(result, a._dtype, DType.int64, a._device)
@@ -3087,7 +3126,8 @@ def fast_aten_scaled_dot_product_attention(
                 result = eager_kernels.nn_ops.AttnDecodeSpec(
                     _spec_of(q), _spec_of(k), _spec_of(v), float(scale_val)
                 )
-            except Exception:
+            except Exception as exc:
+                _raise_if_device_oom(exc)
                 result = None
             if result is not None:
                 return _wrap_spec_result(result, q._dtype, q._device)
