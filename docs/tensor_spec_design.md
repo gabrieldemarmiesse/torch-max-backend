@@ -78,7 +78,8 @@ points to; nothing ever mutates a spec in place.
 - Spec ops return a fresh spec for their output; `_wrap_spec_result`
   attaches it eagerly when minting the wrapper.
 - `_rebind_payload` (the **single sanctioned metadata mutation**, used by
-  the `out=` resize pattern) swaps the cached spec from `src` or drops it.
+  the `out=` resize pattern) invalidates the destination's cached spec so
+  `_spec_of` rebuilds it from the new pointer and layout on first reuse.
   Invariant for all future code: any path that changes an existing
   tensor's pointer or layout must go through `_rebind_payload`. Data-only
   mutation (`fill_`, `zero_`, in-place arithmetic, `copy_` into a tensor)

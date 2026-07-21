@@ -19,7 +19,7 @@ import torch_mojo_backend.is_running_tests
 from torch_mojo_backend.mojo_device.torch_mojo_tensor import (
     TorchMojoTensor,
     _copy_strided_into,
-    _rebind_payload,
+    _resize_payload,
     find_equivalent_max_device,
 )
 
@@ -148,20 +148,52 @@ def _copy_into_tensor(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
 
 
 @no_type_check
-def _out_variant(op_name: str, fast_name: str):
+def _out_variant(op_name: str, fast_name: str, *, dtype_policy: str = "safe_cast"):
     """Wrap a functional fast implementation as an out= variant: compute,
     then copy into `out` (strided-safe)."""
 
     def dispatcher(*args, out: TorchMojoTensor, **kwargs):
+        if not isinstance(out, TorchMojoTensor):
+            raise RuntimeError(f"{op_name}: expected out to be a mojo tensor")
+
+        input_device = next(
+            (arg._device for arg in args if isinstance(arg, TorchMojoTensor)), None
+        )
+        if input_device is not None and out._device != input_device:
+            raise RuntimeError(
+                f"{op_name}: expected out and input tensors to be on the same device"
+            )
+
         aten_fast = _fast()
         result = getattr(aten_fast, fast_name)(*args, **kwargs)
         if result is aten_fast.NOT_HANDLED:
             raise _unsupported(op_name, args, kwargs)
+
+        if out._device != result._device:
+            raise RuntimeError(
+                f"{op_name}: expected out and result tensors to be on the same device"
+            )
+        result_dtype = max_dtype_to_torch_dtype(result._dtype)
+        out_dtype = max_dtype_to_torch_dtype(out._dtype)
+        if dtype_policy == "exact":
+            valid_dtype = result_dtype == out_dtype
+        elif dtype_policy == "bool_or_uint8":
+            valid_dtype = out_dtype in (torch.bool, torch.uint8)
+        elif dtype_policy == "safe_cast":
+            valid_dtype = torch.can_cast(result_dtype, out_dtype)
+        else:
+            raise AssertionError(f"unknown out dtype policy: {dtype_policy}")
+        if not valid_dtype:
+            raise RuntimeError(
+                f"result type {result_dtype} can't be cast to the desired "
+                f"output type {out_dtype}"
+            )
+
         if tuple(result._shape) == tuple(out._shape):
             _copy_into_tensor(out, result)
         else:
-            # torch resizes mismatched out= tensors; rebind the payload.
-            _rebind_payload(out, result)
+            _resize_payload(out, result._shape)
+            _copy_into_tensor(out, result)
         return out
 
     return dispatcher
@@ -604,7 +636,8 @@ def mojo_device_arange_start_out(start, end, step=1, *, out) -> TorchMojoTensor:
     if tuple(staged._shape) == tuple(out._shape):
         _copy_into_tensor(out, staged)
     else:
-        _rebind_payload(out, staged)
+        _resize_payload(out, staged._shape)
+        _copy_into_tensor(out, staged)
     return out
 
 
@@ -681,11 +714,21 @@ def mojo_device_zero_(self: TorchMojoTensor) -> TorchMojoTensor:
 # Out-variants
 # ----------------------------------------------------------------------------------
 
+register_aten_op("aten::addcdiv.out")(
+    _out_variant("aten::addcdiv.out", "fast_aten_addcdiv")
+)
+register_aten_op("aten::addcmul.out")(
+    _out_variant("aten::addcmul.out", "fast_aten_addcmul")
+)
+register_aten_op("aten::div.out")(_out_variant("aten::div.out", "fast_aten_div"))
 register_aten_op("aten::mul.out")(_out_variant("aten::mul.out", "fast_aten_mul"))
 register_aten_op("aten::mean.out")(_out_variant("aten::mean.out", "fast_aten_mean"))
-register_aten_op("aten::any.out")(_out_variant("aten::any.out", "fast_aten_any"))
+register_aten_op("aten::sub.out")(_out_variant("aten::sub.out", "fast_aten_sub"))
+register_aten_op("aten::any.out")(
+    _out_variant("aten::any.out", "fast_aten_any", dtype_policy="bool_or_uint8")
+)
 register_aten_op("aten::isin.Tensor_Tensor_out")(
-    _out_variant("aten::isin.Tensor_Tensor_out", "fast_aten_isin")
+    _out_variant("aten::isin.Tensor_Tensor_out", "fast_aten_isin", dtype_policy="exact")
 )
 
 
@@ -732,7 +775,8 @@ def mojo_device_min_dim_min(
         if tuple(dst._shape) == tuple(src._shape):
             _copy_into_tensor(dst, src)
         else:
-            _rebind_payload(dst, src)
+            _resize_payload(dst, src._shape)
+            _copy_into_tensor(dst, src)
     return (min, min_indices)
 
 
