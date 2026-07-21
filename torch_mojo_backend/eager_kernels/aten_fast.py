@@ -1477,6 +1477,19 @@ def fast_aten_gelu(input, approximate="none"):
         spec = "GeluTanhSpec"
     else:
         return NOT_HANDLED
+
+    a = _t(input)
+    if a is not None and a._dtype == DType.bfloat16 and _on_gpu(a) and a._is_contiguous:
+        out = _alloc(a._shape, a._dtype, a._device)
+        if out._numel > 0:
+            eager_kernels.activation_forward_ops.GeluForwardBF16(
+                out._ptr,
+                a._ptr,
+                out._numel,
+                int(approximate == "tanh"),
+                _ctx_ptr(a._device),
+            )
+        return out
     return _unary_spec_op(spec, input)
 
 

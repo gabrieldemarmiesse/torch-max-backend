@@ -1759,6 +1759,201 @@ def test_fast_scalar_elementwise(mojo_device):
 
 
 @pytest.mark.parametrize("approximate", ["none", "tanh"])
+@pytest.mark.parametrize("storage_offset", [0, 1])
+@pytest.mark.parametrize("shape", [(257,), (3, 5, 7)])
+def test_fast_gelu_forward_bf16_direct_runtime_layout(
+    mojo_gpu, monkeypatch, approximate, storage_offset, shape
+):
+    """The direct BF16 bridge covers aligned and two-byte-offset tails."""
+    from torch_mojo_backend import eager_kernels
+    from torch_mojo_backend.eager_kernels.aten_fast import _ctx_ptr
+
+    elements = math.prod(shape)
+    backing = torch.linspace(-8.0, 8.0, elements + storage_offset, dtype=torch.bfloat16)
+    input = backing[storage_offset:].view(shape)
+    device_backing = backing.to(mojo_gpu)
+    device_input = device_backing[storage_offset:].view(shape)
+    input_ptr = device_input._ptr
+    input_version = device_input._version
+    calls = []
+    original = eager_kernels.activation_forward_ops.GeluForwardBF16
+
+    def spy(*args):
+        calls.append(args)
+        return original(*args)
+
+    monkeypatch.setattr(eager_kernels.activation_forward_ops, "GeluForwardBF16", spy)
+    actual = torch.nn.functional.gelu(device_input, approximate=approximate)
+    expected = torch.nn.functional.gelu(input, approximate=approximate)
+
+    assert calls == [
+        (
+            actual._ptr,
+            device_input._ptr,
+            elements,
+            int(approximate == "tanh"),
+            _ctx_ptr(device_input._device),
+        )
+    ]
+    assert actual.shape == input.shape
+    assert actual.stride() == input.stride()
+    assert actual.dtype == torch.bfloat16
+    assert actual._ptr != device_input._ptr
+    assert actual._version == 0
+    assert device_input._ptr == input_ptr
+    assert device_input._version == input_version
+    torch.testing.assert_close(device_backing.cpu(), backing, atol=0, rtol=0)
+    torch.testing.assert_close(actual.cpu(), expected, atol=2e-2, rtol=2e-2)
+
+
+@pytest.mark.parametrize("approximate", ["none", "tanh"])
+def test_fast_gelu_forward_bf16_cuda_special_semantics(mojo_h100, approximate):
+    """Signed zero, non-finites, and mode probes use frozen H100 results."""
+    input_bits = torch.tensor(
+        [
+            0x0000,
+            0x8000,
+            0x7F80,
+            0xFF80,
+            0x7FC0,
+            0x0001,
+            0x8001,
+            0x7F7F,
+            0xFF7F,
+            0x4005,
+            0x4030,
+        ],
+        dtype=torch.uint16,
+    )
+    input = input_bits.view(torch.bfloat16)
+    device_input = input.to(mojo_h100)
+
+    actual = torch.nn.functional.gelu(device_input, approximate=approximate).cpu()
+    actual_bits = actual.view(torch.uint16)
+
+    assert int(actual_bits[0]) == 0x0000
+    assert int(actual_bits[1]) == 0x8000
+    assert torch.isposinf(actual[2])
+    assert torch.isnan(actual[3])
+    assert torch.isnan(actual[4])
+    expected_probes = (0x4002, 0x402F) if approximate == "none" else (0x4003, 0x4030)
+    assert tuple(int(value) for value in actual_bits[-2:]) == expected_probes
+    torch.testing.assert_close(
+        device_input.cpu().view(torch.int16), input.view(torch.int16), atol=0, rtol=0
+    )
+
+
+@pytest.mark.parametrize("approximate", ["none", "tanh"])
+@pytest.mark.parametrize(
+    "case", ["fp32_contiguous", "fp16_contiguous", "bf16_transpose", "bf16_gapped"]
+)
+def test_fast_gelu_forward_preserves_generic_fallbacks(
+    mojo_gpu, monkeypatch, case, approximate
+):
+    """Other regimes retain the existing generic path and value behavior.
+
+    Layout parity for noncontiguous inputs is outside this optimization: the
+    existing generic path currently returns a row-major output.
+    """
+    from torch_mojo_backend import eager_kernels
+
+    if case == "fp32_contiguous":
+        input = torch.randn(5, 7)
+        device_input = input.to(mojo_gpu)
+    elif case == "fp16_contiguous":
+        input = torch.randn(5, 7, dtype=torch.float16)
+        device_input = input.to(mojo_gpu)
+    elif case == "bf16_transpose":
+        backing = torch.randn(7, 5, dtype=torch.bfloat16)
+        input = backing.t()
+        device_input = backing.to(mojo_gpu).t()
+        assert not device_input.is_contiguous()
+    else:
+        backing = torch.randn(71, dtype=torch.bfloat16)
+        input = backing[1:71:2]
+        device_input = backing.to(mojo_gpu)[1:71:2]
+        assert not device_input.is_contiguous()
+
+    def reject_direct(*_args):
+        raise AssertionError("unsupported GELU input used the direct BF16 bridge")
+
+    monkeypatch.setitem(
+        eager_kernels.__dict__,
+        "activation_forward_ops",
+        SimpleNamespace(GeluForwardBF16=reject_direct),
+    )
+    actual = torch.nn.functional.gelu(device_input, approximate=approximate)
+    expected = torch.nn.functional.gelu(input, approximate=approximate)
+
+    tolerance = 5e-5 if input.dtype == torch.float32 else 2e-2
+    torch.testing.assert_close(actual.cpu(), expected, atol=tolerance, rtol=tolerance)
+
+
+@pytest.mark.parametrize("approximate", ["none", "tanh"])
+def test_fast_gelu_forward_bf16_cpu_preserves_generic_path(monkeypatch, approximate):
+    """BF16 on the MAX CPU device must not enter the accelerator bridge."""
+    from torch_mojo_backend import eager_kernels
+
+    cpu_device = f"mojo:{len(list(get_accelerators())) - 1}"
+    input = torch.randn(5, 7, dtype=torch.bfloat16)
+
+    def reject_direct(*_args):
+        raise AssertionError("MAX CPU GELU used the direct GPU bridge")
+
+    monkeypatch.setitem(
+        eager_kernels.__dict__,
+        "activation_forward_ops",
+        SimpleNamespace(GeluForwardBF16=reject_direct),
+    )
+    actual = torch.nn.functional.gelu(
+        input.to(cpu_device), approximate=approximate
+    ).cpu()
+    expected = torch.nn.functional.gelu(input, approximate=approximate)
+
+    torch.testing.assert_close(actual, expected, atol=2e-2, rtol=2e-2)
+
+
+def test_fast_gelu_forward_bf16_empty_does_not_enqueue(mojo_gpu, monkeypatch):
+    """Empty BF16 tensors preserve metadata without launching a GPU kernel."""
+    from torch_mojo_backend import eager_kernels
+
+    def reject_direct(*_args):
+        raise AssertionError("empty GELU forward enqueued a kernel")
+
+    monkeypatch.setattr(
+        eager_kernels.activation_forward_ops, "GeluForwardBF16", reject_direct
+    )
+    input = torch.empty(0, 7, dtype=torch.bfloat16).to(mojo_gpu)
+
+    actual = torch.nn.functional.gelu(input)
+
+    assert actual.shape == input.shape
+    assert actual.stride() == input.stride()
+    assert actual.dtype == torch.bfloat16
+    assert actual.device.type == "mojo"
+
+
+def test_fast_gelu_forward_invalid_mode_rejects_before_materialization(
+    mojo_gpu, monkeypatch
+):
+    """Invalid metadata is rejected before tensor or output work begins."""
+    from torch_mojo_backend.eager_kernels import aten_fast
+
+    input = torch.randn(17, dtype=torch.bfloat16).to(mojo_gpu)
+
+    def reject_work(*_args, **_kwargs):
+        raise AssertionError("invalid GELU mode performed tensor work")
+
+    monkeypatch.setattr(aten_fast, "_t", reject_work)
+    monkeypatch.setattr(aten_fast, "_alloc", reject_work)
+    monkeypatch.setattr(aten_fast, "_unary_spec_op", reject_work)
+
+    assert aten_fast.fast_aten_gelu(input, "invalid") is aten_fast.NOT_HANDLED
+    with pytest.raises(NotImplementedError):
+        torch.ops.aten.gelu.default(input, approximate="invalid")
+
+
+@pytest.mark.parametrize("approximate", ["none", "tanh"])
 @pytest.mark.parametrize("layout", ["contiguous_offset", "strided"])
 def test_fast_gelu_backward_runtime_layouts(mojo_gpu, approximate, layout):
     """Cover arbitrary tails, storage offsets, and materialized strides."""
@@ -1842,7 +2037,7 @@ def test_fast_gelu_training_uses_direct_backward(mojo_gpu, monkeypatch, approxim
 def test_fast_gelu_training_bf16_uses_direct_backward(
     mojo_h100, monkeypatch, approximate
 ):
-    """BF16 autograd must call the Fable-owned BF16 bridge exactly once."""
+    """BF16 autograd must call both dedicated Mojo bridges exactly once."""
     from torch_mojo_backend import eager_kernels
 
     input = torch.linspace(-8.0, 8.0, 257, dtype=torch.bfloat16)
@@ -1851,20 +2046,33 @@ def test_fast_gelu_training_bf16_uses_direct_backward(
     reference_output = torch.nn.functional.gelu(reference, approximate=approximate)
     reference_output.backward(grad_output)
 
-    calls = 0
-    original = eager_kernels.activation_backward_ops.GeluBackwardBF16
+    forward_calls = 0
+    backward_calls = 0
+    original_forward = eager_kernels.activation_forward_ops.GeluForwardBF16
+    original_backward = eager_kernels.activation_backward_ops.GeluBackwardBF16
 
-    def spy(*args):
-        nonlocal calls
-        calls += 1
-        return original(*args)
+    def forward_spy(*args):
+        nonlocal forward_calls
+        forward_calls += 1
+        return original_forward(*args)
 
-    monkeypatch.setattr(eager_kernels.activation_backward_ops, "GeluBackwardBF16", spy)
+    def backward_spy(*args):
+        nonlocal backward_calls
+        backward_calls += 1
+        return original_backward(*args)
+
+    monkeypatch.setattr(
+        eager_kernels.activation_forward_ops, "GeluForwardBF16", forward_spy
+    )
+    monkeypatch.setattr(
+        eager_kernels.activation_backward_ops, "GeluBackwardBF16", backward_spy
+    )
     actual = input.to(mojo_h100).requires_grad_()
     actual_output = torch.nn.functional.gelu(actual, approximate=approximate)
     actual_output.backward(grad_output.to(mojo_h100))
 
-    assert calls == 1
+    assert forward_calls == 1
+    assert backward_calls == 1
     torch.testing.assert_close(
         actual_output.cpu(), reference_output, atol=2e-2, rtol=2e-2
     )
