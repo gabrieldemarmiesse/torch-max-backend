@@ -101,6 +101,11 @@ def register_mojo_devices():
         # Already registered
         return
 
+    # Module._apply otherwise replaces a shared CPU Parameter independently in
+    # each child module when its converted tensor has a different subclass.
+    # Swapping preserves tied weights as one Parameter and one Mojo allocation.
+    torch.__future__.set_swap_module_params_on_conversion(True)
+
     _setup_privateuseone_for_python_backend("mojo")
 
     # Register all collected aten operations
