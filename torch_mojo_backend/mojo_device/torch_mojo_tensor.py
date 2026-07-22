@@ -481,13 +481,13 @@ class TorchMojoTensor(torch.Tensor):
 
     @no_type_check
     def __reduce_ex__(self, protocol):
-        """Pickle as a plain CPU tensor.
+        """Pickle as a portable plain CPU tensor.
 
-        torch.Tensor's reduce would pickle this subclass's `__dict__`,
-        which holds the unpicklable Mojo `TensorHolder`. Checkpoints
-        written from the mojo device load as CPU tensors anywhere
-        (`torch.load(..., map_location='cpu')`); moving them back is the
-        caller's `.to('mojo')` / `load_state_dict` onto a mojo model.
+        torch.Tensor's reduce would pickle this subclass's `__dict__`, which
+        holds the unpicklable Mojo `TensorHolder`. Checkpoints written from
+        this device therefore serialize tensor values on the CPU and can be
+        loaded without this backend being installed. Moving them back is the
+        caller's `.to('mojo')` or `load_state_dict` onto a Mojo model.
         """
         if hasattr(self, "_holder"):
             return self._to_cpu_tensor().__reduce_ex__(protocol)
@@ -503,7 +503,7 @@ class TorchMojoTensor(torch.Tensor):
         """Logical eager shape, including an out= resize rebind.
 
         The lightweight PrivateUse1 TensorImpl used as the Python wrapper has
-        no backend storage to resize.  Eager kernels therefore keep their
+        no backend storage to resize. Eager kernels therefore keep their
         authoritative metadata in Python; expose that same metadata through
         the normal tensor API after a sanctioned payload rebind.
         """
@@ -541,9 +541,8 @@ class TorchMojoTensor(torch.Tensor):
             return super().is_contiguous(memory_format=memory_format)
         if memory_format in (torch.contiguous_format, torch.preserve_format):
             return self._is_contiguous
-        # Channels-last queries are uncommon on the eager path.  A meta
-        # tensor gives PyTorch's exact layout answer without touching device
-        # data or introducing a dependency on a GPU-enabled torch build.
+        # A meta tensor gives PyTorch's exact channels-last layout answer
+        # without touching device data or requiring a GPU-enabled torch build.
         return torch.empty_strided(
             self._shape,
             self._strides,
@@ -578,18 +577,18 @@ class TorchMojoTensor(torch.Tensor):
 def _rebind_payload(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """Move ``src``'s eager payload into ``dst`` without changing identity.
 
-    Both the Python payload and the real TensorImpl must move together.  A
+    Both the Python payload and the real TensorImpl must move together. A
     manual ``__dict__`` rebind makes direct properties look right while APIs
     such as ``torch.numel``, ``mT`` and ``flatten`` continue reading the stale
     TensorImpl.
 
     Swapping TensorImpl pointers is not valid inside an out kernel: the boxed
     dispatcher retains the original TensorImpl to enforce the schema's alias
-    return, so a swap would make the call return the discarded wrapper.  The
+    return, so a swap would make the call return the discarded wrapper. The
     CPU ``resize_`` kernel only updates TensorImpl/storage metadata here (the
     wrapper's dummy storage uses the Meta allocator); redispatch it explicitly
     to retain the original TensorImpl, then move the authoritative Mojo
-    payload.  No CPU tensor data is allocated or read.
+    payload. No CPU tensor data is allocated or read.
     """
     torch.ops.aten.resize_.default.redispatch(
         torch._C.DispatchKeySet(torch._C.DispatchKey.CPU),
@@ -611,6 +610,9 @@ def _rebind_payload(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
         "_is_contiguous",
     ):
         setattr(dst, name, getattr(src, name))
+    # Any cached spec describes the old allocation or layout. Rebuild it on
+    # the next spec operation instead of retaining stale pointer metadata.
+    dst.__dict__.pop("_spec", None)
 
 
 @no_type_check
@@ -618,9 +620,9 @@ def _resize_payload(dst: TorchMojoTensor, shape) -> None:
     """Resize an eager out tensor and keep aliases when storage is sufficient.
 
     PyTorch resets a resized view to contiguous strides at its existing
-    storage offset.  Reuse that same allocation when the requested logical
+    storage offset. Reuse that same allocation when the requested logical
     bytes fit; this preserves writes observed through another view such as
-    ``base[:0]``.  Otherwise use an ordinary context allocation.  The final
+    ``base[:0]``. Otherwise use an ordinary context allocation. The final
     swap synchronizes Python metadata and TensorImpl metadata without changing
     ``dst``'s Python identity.
     """

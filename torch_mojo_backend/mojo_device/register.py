@@ -8,17 +8,11 @@ _registered = False
 
 
 def _install_torch_accelerator_synchronize(torch_mojo_device_module):
-    """Route the generic accelerator synchronization API to MAX.
+    """Route generic accelerator synchronization to the Mojo device module.
 
-    Registering PrivateUse1 already makes Mojo the process's current
-    ``torch.accelerator`` (PrivateUse1 intentionally has priority over compiled
-    accelerators in PyTorch).  PyTorch's experimental Python PrivateUse1 device
-    guard does not yet forward ``synchronizeDevice`` to the registered Python
-    device module, though, so the stock generic API can silently no-op before
-    lazy initialization or raise once initialized.
-    Keep the public device-validation semantics and delegate the actual queue
-    drain to the Mojo module until PyTorch's Python device guard grows that
-    forwarding hook.
+    PyTorch's Python PrivateUse1 guard does not yet forward synchronizeDevice
+    to the registered Python module, so preserve public device validation and
+    delegate the actual queue drain here until that hook exists upstream.
     """
     original_synchronize = torch.accelerator.synchronize
     if getattr(original_synchronize, "_torch_mojo_backend", False):
