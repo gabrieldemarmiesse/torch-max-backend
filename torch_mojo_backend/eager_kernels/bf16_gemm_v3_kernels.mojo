@@ -45,6 +45,7 @@ from bf16_gemm_kernels import (
     enqueue_bf16_bmm as _enqueue_accepted_bf16_bmm,
     enqueue_bf16_gemm as _enqueue_accepted_bf16_gemm,
 )
+from bf16_gemm_tn_v4_kernels import try_enqueue_bf16_gemm_tn_v4
 
 
 comptime _V3_BF16 = DType.bfloat16
@@ -1631,6 +1632,15 @@ def enqueue_bf16_gemm(
                 DeviceAttribute.COMPUTE_CAPABILITY_MINOR
             )
             if cc_major == 9 and cc_minor == 0:
+                # V4 TN (wgrad) route: split-K and narrow-tile kernels for
+                # the deep-K, underfilled-output regime (huge K, small m*n;
+                # see bf16_gemm_tn_v4_kernels.mojo).  The dispatcher checks
+                # its own alignment/regime gates and returns False whenever
+                # it declines, so every existing TN path below remains the
+                # fallback.
+                if transpose_a and not transpose_b and not has_bias:
+                    if try_enqueue_bf16_gemm_tn_v4(output, a, b, m, n, k, ctx):
+                        return
                 # A 64x128 tile preserves the prior aligned-NN coverage and
                 # increases available CTAs when the 128x256 grid would be
                 # severely underfilled on the current GPU.  This predicate is
