@@ -26,15 +26,18 @@ from std.gpu import (
     MAX_THREADS_PER_BLOCK_METADATA,
     barrier,
     block_idx,
+    grid_dim,
     thread_idx,
 )
 from std.gpu.host import DeviceContext
 from std.gpu.primitives import block
 from std.math import exp, log
 from std.memory import stack_allocation
+from std.memory.unsafe import bitcast
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator
+from std.sys._assembly import inlined_assembly
+from std.sys.info import has_accelerator, is_nvidia_gpu, size_of
 from std.utils.coord import Coord
 from std.utils.index import IndexList
 from std.utils.numerics import min_or_neg_inf, max_or_inf
@@ -735,66 +738,131 @@ def _var_rows[
 # ---------------------------------------------------------------------------
 
 
+# Keep the concurrent input footprint under L2 (H100: 50 MB) with headroom, so
+# a row survives from its pass-1 read to its pass-2 re-read.
+comptime LSM_L2_BUDGET = 23_000_000
+# Rows whose bytes exceed this need the grid capped below full 256-thread
+# occupancy to fit L2; recover the lost parallelism with 1024-thread blocks.
+# Below it, 256-thread blocks keep every thread busy and reductions cheap.
+comptime LSM_BIG_ROW_BYTES = 25_000
+
+
+@always_inline
+def _lsm_store_out_16B[
+    dtype: DType, width: Int, //, vec_align: Int
+](ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin], val: SIMD[dtype, width]):
+    """128-bit output store. On NVIDIA use a streaming (evict-first)
+    `st.global.cs` store so the writes do not evict the input rows we re-read in
+    pass 2; elsewhere fall back to a normal vectorized store."""
+    comptime if is_nvidia_gpu():
+        var u = bitcast[DType.uint32, 4](val)
+        inlined_assembly[
+            "st.global.cs.v4.b32 [$0], {$1, $2, $3, $4};",
+            NoneType,
+            constraints="l,r,r,r,r",
+            has_side_effect=True,
+        ](ptr, u[0], u[1], u[2], u[3])
+    else:
+        ptr.store[width=width, alignment=vec_align](val)
+
+
+# Fused online (single-read) log-softmax. The reduction reads each row ONCE
+# (vectorized 16-byte loads; per-lane running max m + running sum s rescaled on
+# a new max), then the output pass re-reads that row — kept resident in L2 by
+# the grid cap in `_log_softmax_rows` — and writes with a streaming store.
+# Odd cols: a per-row scalar head reaches a 16-byte-aligned element index, plus
+# a scalar tail. Correct for any rows/cols >= 1, bf16/f16/f32.
 @__llvm_metadata(
-    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(ROWRED_THREADS))
+    MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(threads))
 )
-@__name(t"log_softmax_rows_block_{dtype}")
+@__name(t"log_softmax_rows_block_{dtype}_{threads}")
 def _log_softmax_rows_block_kernel[
-    dtype: DType
+    dtype: DType, threads: Int
 ](
     out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
     in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
     cols: Int,
+    rows: Int,
 ):
-    var r = block_idx.x
-    var tid = thread_idx.x
-    var base = r * cols
+    comptime V = 16 // size_of[dtype]()
+    comptime vec_align = V * size_of[dtype]()  # 16 bytes
+    var tid = Int(thread_idx.x)
 
-    var red = stack_allocation[
-        ROWRED_THREADS, DType.float32, address_space=AddressSpace.SHARED
-    ]()
-    var bcast = stack_allocation[
-        2, DType.float32, address_space=AddressSpace.SHARED
-    ]()
+    var row = Int(block_idx.x)
+    while row < rows:
+        var base = row * cols
 
-    var m = Float32.MIN
-    for j in range(tid, cols, ROWRED_THREADS):
-        var x = in_ptr[base + j].cast[DType.float32]()
-        if x > m:
-            m = x
-    red[tid] = m
-    barrier()
-    var stride = ROWRED_THREADS // 2
-    for _ in range(ROWRED_STAGES):
-        if tid < stride:
-            if red[tid + stride] > red[tid]:
-                red[tid] = red[tid + stride]
-        barrier()
-        stride //= 2
-    if tid == 0:
-        bcast[0] = red[0]
-    barrier()
-    m = bcast[0]
+        var head = (V - (base % V)) % V
+        if head > cols:
+            head = cols
+        var n_vec = (cols - head) // V
+        var vec_start = base + head  # element index, V-aligned
+        var tail_start = head + n_vec * V  # first row-local index of the tail
 
-    var s = Float32(0)
-    for j in range(tid, cols, ROWRED_THREADS):
-        s += exp(in_ptr[base + j].cast[DType.float32]() - m)
-    red[tid] = s
-    barrier()
-    stride = ROWRED_THREADS // 2
-    for _ in range(ROWRED_STAGES):
-        if tid < stride:
-            red[tid] += red[tid + stride]
-        barrier()
-        stride //= 2
-    if tid == 0:
-        bcast[1] = log(red[0])
-    barrier()
-    var log_denom = bcast[1]
+        # ---- Pass 1: online max + sum over the row, one global read. ----
+        var m_vec = SIMD[DType.float32, V](Float32.MIN)
+        var s_vec = SIMD[DType.float32, V](0.0)
+        var v = tid
+        while v < n_vec:
+            var x = in_ptr.load[width=V, alignment=vec_align](
+                vec_start + v * V
+            ).cast[DType.float32]()
+            var new_m = max(m_vec, x)
+            s_vec = s_vec * exp(m_vec - new_m) + exp(x - new_m)
+            m_vec = new_m
+            v += threads
 
-    for j in range(tid, cols, ROWRED_THREADS):
-        var x = in_ptr[base + j].cast[DType.float32]()
-        out_ptr[base + j] = (x - m - log_denom).cast[dtype]()
+        # Collapse the per-lane accumulator to a thread-local (m, s).
+        var m_t = m_vec.reduce_max()
+        var s_t = (s_vec * exp(m_vec - m_t)).reduce_add()
+
+        # Fold in the unaligned scalar head/tail (each < V elements, one thread
+        # per element; no-ops when head == tail == 0).
+        var jh = tid
+        while jh < head:
+            var x = in_ptr[base + jh].cast[DType.float32]()
+            var nm = max(m_t, x)
+            s_t = s_t * exp(m_t - nm) + exp(x - nm)
+            m_t = nm
+            jh += threads
+        var jt = tail_start + tid
+        while jt < cols:
+            var x = in_ptr[base + jt].cast[DType.float32]()
+            var nm = max(m_t, x)
+            s_t = s_t * exp(m_t - nm) + exp(x - nm)
+            m_t = nm
+            jt += threads
+
+        # ---- Block combine: global max, then rescale + global sum. ----
+        var block_m = block.max[block_size=threads](m_t)
+        var s_scaled = s_t * exp(m_t - block_m)
+        var block_s = block.sum[block_size=threads](s_scaled)
+        var log_denom = log(block_s)
+
+        # ---- Pass 2: output = x - max - log_denom. Input read hits L2; the
+        # streaming store keeps the writes from evicting it. ----
+        var vo = tid
+        while vo < n_vec:
+            var x = in_ptr.load[width=V, alignment=vec_align](
+                vec_start + vo * V
+            ).cast[DType.float32]()
+            var y = (x - block_m - log_denom).cast[dtype]()
+            _lsm_store_out_16B[vec_align=vec_align](
+                out_ptr + (vec_start + vo * V), y
+            )
+            vo += threads
+        var jho = tid
+        while jho < head:
+            var x = in_ptr[base + jho].cast[DType.float32]()
+            out_ptr[base + jho] = (x - block_m - log_denom).cast[dtype]()
+            jho += threads
+        var jto = tail_start + tid
+        while jto < cols:
+            var x = in_ptr[base + jto].cast[DType.float32]()
+            out_ptr[base + jto] = (x - block_m - log_denom).cast[dtype]()
+            jto += threads
+
+        row += Int(grid_dim.x)
 
 
 @always_inline
@@ -828,17 +896,40 @@ def _log_softmax_rows[
         _parallel_for[func](rows, ctx)
     else:
         comptime if has_accelerator():
-            _enqueue_cached[_log_softmax_rows_block_kernel[dtype]](
-                ctx,
-                String(t"log_softmax_rows_{dtype}"),
-                rows,
-                1,
-                1,
-                ROWRED_THREADS,
-                out_ptr.as_unsafe_any_origin(),
-                in_ptr.as_unsafe_any_origin().as_immutable(),
-                cols,
-            )
+            # Cap concurrent rows so their input bytes stay resident in L2 for
+            # the pass-2 re-read; grid-stride over the rest.
+            var esize = size_of[dtype]()
+            var blocks = min(rows, max(1, LSM_L2_BUDGET // (cols * esize)))
+            var mout = out_ptr.as_unsafe_any_origin()
+            var min_ = in_ptr.as_unsafe_any_origin().as_immutable()
+            # Big rows: 1024-thread blocks so the small (L2-capped) grid still
+            # saturates memory. Small rows: 256 threads keep every thread busy.
+            if cols * esize > LSM_BIG_ROW_BYTES:
+                _enqueue_cached[_log_softmax_rows_block_kernel[dtype, 1024]](
+                    ctx,
+                    String(t"log_softmax_rows_{dtype}_1024"),
+                    blocks,
+                    1,
+                    1,
+                    1024,
+                    mout,
+                    min_,
+                    cols,
+                    rows,
+                )
+            else:
+                _enqueue_cached[_log_softmax_rows_block_kernel[dtype, 256]](
+                    ctx,
+                    String(t"log_softmax_rows_{dtype}_256"),
+                    blocks,
+                    1,
+                    1,
+                    256,
+                    mout,
+                    min_,
+                    cols,
+                    rows,
+                )
         else:
             raise Error("no GPU accelerator available at compile time")
 
