@@ -1,10 +1,10 @@
 """AutogradPrivateUse1 plumbing for eager Mojo operations.
 
-``TorchMojoTensor`` is a true wrapper subclass, so PyTorch's saved-variable
-plumbing now preserves its Python allocation payload. These custom Functions
-still provide backward formulas that are not registered as native Mojo ATen
-operators. Their sidecar metadata also validates saved-tensor hook results and
-restores values that hooks deliberately unpack onto the host.
+``TorchMojoTensor`` is a true wrapper subclass, so PyTorch's generated autograd
+can be used whenever it exposes a suitable native backward ATen operation. The
+custom Functions left here cover fused formulas or unsupported native routes;
+their sidecar metadata also validates saved-tensor hook results and restores
+values that hooks deliberately unpack onto the host.
 """
 
 import math
@@ -195,6 +195,10 @@ def _restore_saved_mojo_tensors(ctx):
     )
 
 
+# Native EmbeddingBackward0 already reaches our dense backward kernel for the
+# supported first-order case, but it can enter unsupported sparse/frequency
+# paths without a safe backend error, and its double backward needs index_select.
+# Keep this preflight boundary until all three native routes are safe.
 class _EmbeddingAutograd(torch.autograd.Function):
     @staticmethod
     @no_type_check
@@ -254,119 +258,9 @@ def _embedding_autograd(
     )
 
 
-class _NativeDropoutAutograd(torch.autograd.Function):
-    @staticmethod
-    @no_type_check
-    def forward(ctx, input, p, train):
-        output, mask = _require_handled(
-            _fast().fast_aten_native_dropout(input, p, train), "aten::native_dropout"
-        )
-        # Native dropout's input derivative depends only on the returned mask.
-        # Saving it normally preserves PyTorch's version-counter checks; the
-        # payload restores the eager Mojo allocation after SavedVariable unpack.
-        ctx.save_for_backward(mask)
-        ctx.saved_payloads = (_SavedMojoPayload(mask),)
-        ctx.scale = (0.0 if p == 1.0 else 1.0 / (1.0 - p)) if train is True else 1.0
-        ctx.set_materialize_grads(False)
-        ctx.mark_non_differentiable(mask)
-        return output, mask
-
-    @staticmethod
-    @no_type_check
-    def backward(ctx, grad_output, _grad_mask):
-        (mask,) = _restore_saved_mojo_tensors(ctx)
-        grad_input = _require_handled(
-            _fast().fast_aten_native_dropout_backward(grad_output, mask, ctx.scale),
-            "aten::native_dropout_backward",
-        )
-        return grad_input, None, None
-
-
-@no_type_check
-def _native_dropout_autograd(input, p, train):
-    if not input.requires_grad:
-        return _require_handled(
-            _fast().fast_aten_native_dropout(input, p, train), "aten::native_dropout"
-        )
-    return _NativeDropoutAutograd.apply(input, p, train)
-
-
-class _NativeLayerNormAutograd(torch.autograd.Function):
-    @staticmethod
-    @no_type_check
-    def forward(ctx, input, normalized_shape, weight, bias, eps):
-        output, mean, rstd = _require_handled(
-            _fast().fast_aten_native_layer_norm(
-                input, normalized_shape, weight, bias, eps
-            ),
-            "aten::native_layer_norm",
-        )
-        saved = [input, mean, rstd]
-        if weight is not None:
-            saved.append(weight)
-        if bias is not None:
-            saved.append(bias)
-        ctx.save_for_backward(*saved)
-        ctx.saved_payloads = tuple(_SavedMojoPayload(tensor) for tensor in saved)
-        ctx.normalized_shape = tuple(normalized_shape)
-        ctx.has_weight = weight is not None
-        ctx.has_bias = bias is not None
-        ctx.set_materialize_grads(False)
-        ctx.mark_non_differentiable(mean, rstd)
-        return output, mean, rstd
-
-    @staticmethod
-    @no_type_check
-    def backward(ctx, grad_output, _grad_mean, _grad_rstd):
-        # Restore every saved tensor first. Accessing ctx.saved_tensors performs
-        # the version checks even when a particular value is not needed by the
-        # requested gradient mask (matching native LayerNorm's safety rules).
-        saved = iter(_restore_saved_mojo_tensors(ctx))
-        input = next(saved)
-        mean = next(saved)
-        rstd = next(saved)
-        weight = next(saved) if ctx.has_weight else None
-        bias = next(saved) if ctx.has_bias else None
-
-        output_mask = (
-            bool(ctx.needs_input_grad[0]),
-            bool(ctx.needs_input_grad[2]) and ctx.has_weight,
-            bool(ctx.needs_input_grad[3]) and ctx.has_bias,
-        )
-        grad_input, grad_weight, grad_bias = _require_handled(
-            _fast().fast_aten_native_layer_norm_backward(
-                grad_output,
-                input,
-                ctx.normalized_shape,
-                mean,
-                rstd,
-                weight,
-                bias,
-                output_mask,
-            ),
-            "aten::native_layer_norm_backward",
-        )
-        return grad_input, None, grad_weight, grad_bias, None
-
-
-@no_type_check
-def _native_layer_norm_autograd(input, normalized_shape, weight, bias, eps):
-    if not (
-        input.requires_grad
-        or (weight is not None and weight.requires_grad)
-        or (bias is not None and bias.requires_grad)
-    ):
-        return _require_handled(
-            _fast().fast_aten_native_layer_norm(
-                input, normalized_shape, weight, bias, eps
-            ),
-            "aten::native_layer_norm",
-        )
-    return _NativeLayerNormAutograd.apply(
-        input, tuple(normalized_shape), weight, bias, eps
-    )
-
-
+# cross_entropy_loss has no native backward ATen op through which PyTorch could
+# pass the fused forward's private row statistics, so this custom node is the
+# actual fused-operation boundary rather than redundant dispatcher plumbing.
 class _Bf16CrossEntropyAutograd(torch.autograd.Function):
     @staticmethod
     @no_type_check
@@ -457,88 +351,9 @@ def _cross_entropy_loss_autograd(
     return loss
 
 
-@no_type_check
-def _nll_loss_forward_impl(input, target, weight, reduction, ignore_index):
-    """Allocate the two functional NLL outputs and enqueue the direct kernel."""
-    aten_fast = _fast()
-    inputs = aten_fast._nll_loss_inputs(input, target, weight, reduction, ignore_index)
-    if inputs is None:
-        raise NotImplementedError(
-            "aten::nll_loss_forward is not supported by Mojo eager autograd "
-            "for these inputs"
-        )
-
-    log_probs, _, rows, _ = inputs
-    output_shape = (rows,) if reduction == 0 else ()
-    output = TorchMojoTensor._alloc(output_shape, log_probs._dtype, log_probs._device)
-    total_weight = TorchMojoTensor._alloc((), log_probs._dtype, log_probs._device)
-    result = aten_fast.fast_aten_nll_loss_forward_output(
-        log_probs,
-        target,
-        weight,
-        reduction,
-        ignore_index,
-        output=output,
-        total_weight=total_weight,
-    )
-    if result is None or result is aten_fast.NOT_HANDLED:
-        raise NotImplementedError(
-            "aten::nll_loss_forward is not supported by Mojo eager autograd "
-            "for these inputs"
-        )
-    return result
-
-
-class _NllLossForwardAutograd(torch.autograd.Function):
-    @staticmethod
-    @no_type_check
-    def forward(ctx, input, target, weight, reduction, ignore_index):
-        output, total_weight = _nll_loss_forward_impl(
-            input, target, weight, reduction, ignore_index
-        )
-        ctx.save_for_backward(input, target, total_weight)
-        ctx.saved_payloads = tuple(
-            _SavedMojoPayload(tensor) for tensor in (input, target, total_weight)
-        )
-        ctx.reduction = reduction
-        ctx.ignore_index = ignore_index
-        ctx.set_materialize_grads(False)
-        ctx.mark_non_differentiable(total_weight)
-        return output, total_weight
-
-    @staticmethod
-    @no_type_check
-    def backward(ctx, grad_output, _grad_total_weight):
-        aten_fast = _fast()
-        input, target, total_weight = _restore_saved_mojo_tensors(ctx)
-        grad_input = TorchMojoTensor._alloc(input._shape, input._dtype, input._device)
-        result = aten_fast.fast_aten_nll_loss_backward_grad_input(
-            grad_output,
-            input,
-            target,
-            None,
-            ctx.reduction,
-            ctx.ignore_index,
-            total_weight,
-            grad_input=grad_input,
-        )
-        _require_handled(result, "aten::nll_loss_backward")
-        return grad_input, None, None, None, None
-
-
-@no_type_check
-def _nll_loss_forward_autograd(input, target, weight, reduction, ignore_index):
-    if weight is not None:
-        # The direct eager kernel currently has an explicit no-weight contract.
-        raise NotImplementedError(
-            "aten::nll_loss_forward is not supported by Mojo eager autograd "
-            "for weighted inputs"
-        )
-    if not input.requires_grad:
-        return _nll_loss_forward_impl(input, target, weight, reduction, ignore_index)
-    return _NllLossForwardAutograd.apply(input, target, weight, reduction, ignore_index)
-
-
+# Eligible FA4 calls are routed through PyTorch's native lower flash pair below.
+# This custom node remains only for the generic math/dropout implementation,
+# whose fused intermediate-saving backward has no native ATen schema.
 class _ScaledDotProductAttentionAutograd(torch.autograd.Function):
     @staticmethod
     @no_type_check
@@ -552,30 +367,6 @@ class _ScaledDotProductAttentionAutograd(torch.autograd.Function):
             )
 
         aten_fast = _fast()
-        fa4_result = aten_fast.fast_fa4_bf16_d64_causal_forward(
-            query, key, value, attn_mask, dropout_p, is_causal, scale, enable_gqa
-        )
-        if fa4_result is not aten_fast.NOT_HANDLED:
-            output, logsumexp, q_native, k_native, v_native = fa4_result
-            # Physical BTHD wrappers only need to survive the enqueued
-            # forward. Retaining copies across every transformer layer would
-            # duplicate unsupported QKV layouts; re-prepare from the
-            # version-checked public views immediately before backward.
-            del q_native, k_native, v_native
-            saved = (query, key, value, output, logsumexp)
-            ctx.save_for_backward(*saved)
-            ctx.saved_payloads = tuple(_SavedMojoPayload(tensor) for tensor in saved)
-            ctx.saved_names = ("query", "key", "value", "output", "logsumexp")
-            ctx.needed_input_gradients = tuple(
-                bool(ctx.needs_input_grad[index]) for index in range(3)
-            )
-            ctx.scale = (
-                float(scale) if scale is not None else 1.0 / math.sqrt(query._shape[-1])
-            )
-            ctx.fa4 = True
-            ctx.set_materialize_grads(False)
-            return output
-
         result = aten_fast._sdpa_math_forward_with_dropout(
             query, key, value, is_causal, scale, dropout_p
         )
@@ -622,7 +413,6 @@ class _ScaledDotProductAttentionAutograd(torch.autograd.Function):
             if ctx.has_dropout
             else 1.0
         )
-        ctx.fa4 = False
         ctx.set_materialize_grads(False)
         return output
 
@@ -630,49 +420,6 @@ class _ScaledDotProductAttentionAutograd(torch.autograd.Function):
     @no_type_check
     def backward(ctx, grad_output):
         aten_fast = _fast()
-        if getattr(ctx, "fa4", False):
-            if grad_output is None:
-                return (None,) * 8
-            restored = _restore_saved_mojo_tensors(ctx)
-            saved = dict(zip(ctx.saved_names, restored, strict=True))
-            # Unpacking invokes PyTorch's version checks. Eligible fused QKV
-            # become zero-copy BTHD views here; unsupported layouts retain the
-            # old contiguous materialization path.
-            query = saved.pop("query")
-            key = saved.pop("key")
-            value = saved.pop("value")
-            q_native = aten_fast._fa4_native_bthd(query)
-            k_native = aten_fast._fa4_native_bthd(key)
-            v_native = aten_fast._fa4_native_bthd(value)
-            if q_native is None or k_native is None or v_native is None:
-                raise RuntimeError("FA4 saved inputs could not be prepared as BTHD")
-            gradients = _require_handled(
-                aten_fast.fast_fa4_bf16_d64_causal_backward(
-                    q_native,
-                    k_native,
-                    v_native,
-                    saved.pop("output"),
-                    saved.pop("logsumexp"),
-                    grad_output,
-                    ctx.scale,
-                ),
-                "FA4 scaled_dot_product_attention backward",
-            )
-            if saved:
-                raise RuntimeError(f"unused Mojo FA4 saved tensors: {tuple(saved)}")
-            need_query, need_key, need_value = ctx.needed_input_gradients
-            grad_query, grad_key, grad_value = gradients
-            return (
-                grad_query if need_query else None,
-                grad_key if need_key else None,
-                grad_value if need_value else None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-
         restored = _restore_saved_mojo_tensors(ctx)
         saved = dict(zip(ctx.saved_names, restored, strict=True))
         del restored
@@ -848,9 +595,27 @@ def _scaled_dot_product_attention_autograd(
     scale=None,
     enable_gqa=False,
 ):
-    if not (query.requires_grad or key.requires_grad or value.requires_grad):
+    needs_backward = torch.is_grad_enabled() and (
+        query.requires_grad or key.requires_grad or value.requires_grad
+    )
+    aten_fast = _fast()
+    # The eligible FA4 regime already implements PyTorch's lower flash forward
+    # and backward pair. Dispatch through it so generated autograd owns the
+    # saves, version checks, and backward call; retain the custom Function only
+    # for the generic math/dropout fallback, which has no native backward op.
+    if (
+        needs_backward
+        and aten_fast._fa4_bf16_d64_causal_inputs(
+            query, key, value, attn_mask, dropout_p, is_causal, scale, enable_gqa
+        )
+        is not None
+    ):
+        return torch.ops.aten._scaled_dot_product_flash_attention.default(
+            query, key, value, dropout_p, is_causal, False, scale=scale
+        )[0]
+    if not needs_backward:
         return _require_handled(
-            _fast().fast_aten_scaled_dot_product_attention(
+            aten_fast.fast_aten_scaled_dot_product_attention(
                 query, key, value, attn_mask, dropout_p, is_causal, scale, enable_gqa
             ),
             "aten::scaled_dot_product_attention",
@@ -870,15 +635,6 @@ def register_autograd_ops() -> None:
         _cross_entropy_loss_autograd
     )
     torch.library.impl("aten::embedding", "AutogradPrivateUse1")(_embedding_autograd)
-    torch.library.impl("aten::native_dropout", "AutogradPrivateUse1")(
-        _native_dropout_autograd
-    )
-    torch.library.impl("aten::native_layer_norm", "AutogradPrivateUse1")(
-        _native_layer_norm_autograd
-    )
-    torch.library.impl("aten::nll_loss_forward", "AutogradPrivateUse1")(
-        _nll_loss_forward_autograd
-    )
     torch.library.impl("aten::scaled_dot_product_attention", "AutogradPrivateUse1")(
         _scaled_dot_product_attention_autograd
     )

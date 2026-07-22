@@ -718,6 +718,8 @@ def test_fast_native_layer_norm_backward_empty_rows(mojo_gpu):
 
 @pytest.mark.parametrize("affine", [False, True])
 def test_fast_layer_norm_training_backward(mojo_gpu, affine):
+    from torch_mojo_backend.mojo_device.mojo_device_aten_ops import EAGER_CALL_COUNTERS
+
     generator = torch.Generator().manual_seed(20260718)
     shape = (2, 16, 384)
     input = torch.randn(shape, generator=generator)
@@ -735,9 +737,15 @@ def test_fast_layer_norm_training_backward(mojo_gpu, affine):
     mojo_input = input.to(mojo_gpu).requires_grad_()
     mojo_weight = weight.to(mojo_gpu).requires_grad_() if affine else None
     mojo_bias = bias.to(mojo_gpu).requires_grad_() if affine else None
-    torch.nn.functional.layer_norm(
+    backward_counter = EAGER_CALL_COUNTERS["aten::native_layer_norm_backward"]
+    calls_before = backward_counter.call_count
+    mojo_output = torch.nn.functional.layer_norm(
         mojo_input, (384,), mojo_weight, mojo_bias, 1e-5
-    ).backward(grad_output.to(mojo_gpu))
+    )
+    assert type(mojo_output.grad_fn).__name__ == "NativeLayerNormBackward0"
+    assert backward_counter.call_count == calls_before
+    mojo_output.backward(grad_output.to(mojo_gpu))
+    assert backward_counter.call_count == calls_before + 1
 
     assert mojo_input.grad is not None
     torch.testing.assert_close(
@@ -765,21 +773,103 @@ def test_fast_layer_norm_autograd_requests_only_needed_output(
     bias = torch.randn(65).to(mojo_gpu)
     tensors = {"input": input, "weight": weight, "bias": bias}
     tensors[requires].requires_grad_()
-    seen_masks = []
-    original = aten_fast.fast_aten_native_layer_norm_backward
+    seen_mask_bits = []
+    backward_ops = aten_fast.eager_kernels.normalization_backward_ops
+    original = backward_ops.LayerNormBackwardF32
 
     def spy(*args):
-        seen_masks.append(tuple(args[-1]))
+        seen_mask_bits.append(args[-2])
         return original(*args)
 
-    monkeypatch.setattr(aten_fast, "fast_aten_native_layer_norm_backward", spy)
+    monkeypatch.setattr(backward_ops, "LayerNormBackwardF32", spy)
     output = torch.nn.functional.layer_norm(input, (65,), weight, bias, 1e-5)
     output.backward(torch.ones(3, 65).to(mojo_gpu))
 
-    expected_mask = tuple(requires == name for name in ("input", "weight", "bias"))
-    assert seen_masks == [expected_mask]
+    expected_mask_bits = 1 << ("input", "weight", "bias").index(requires)
+    assert seen_mask_bits == [expected_mask_bits]
     for name, tensor in tensors.items():
         assert (tensor.grad is not None) == (name == requires)
+
+
+def test_fast_layer_norm_native_saved_tensor_hooks(mojo_gpu):
+    generator = torch.Generator().manual_seed(20260722)
+    host_input = torch.randn(3, 7, generator=generator)
+    host_weight = torch.randn(7, generator=generator)
+    host_bias = torch.randn(7, generator=generator)
+    grad_output = torch.randn(3, 7, generator=generator)
+
+    reference = [
+        host_input.clone().requires_grad_(),
+        host_weight.clone().requires_grad_(),
+        host_bias.clone().requires_grad_(),
+    ]
+    torch.nn.functional.layer_norm(reference[0], (7,), *reference[1:]).backward(
+        grad_output
+    )
+
+    actual = [
+        host_input.to(mojo_gpu).requires_grad_(),
+        host_weight.to(mojo_gpu).requires_grad_(),
+        host_bias.to(mojo_gpu).requires_grad_(),
+    ]
+    hook_calls = []
+
+    def pack(tensor):
+        hook_calls.append(("pack", tensor.device.type))
+        return tensor.cpu()
+
+    def unpack(tensor):
+        hook_calls.append(("unpack", tensor.device.type))
+        return tensor.to(mojo_gpu)
+
+    with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
+        output = torch.nn.functional.layer_norm(actual[0], (7,), *actual[1:])
+        output.backward(grad_output.to(mojo_gpu))
+
+    assert hook_calls.count(("pack", "mojo")) == 5
+    assert hook_calls.count(("unpack", "cpu")) == 5
+    for got, want in zip(actual, reference, strict=True):
+        assert got.grad is not None
+        torch.testing.assert_close(got.grad.cpu(), want.grad, atol=2e-3, rtol=2e-3)
+
+
+def test_fast_layer_norm_native_double_backward(mojo_gpu):
+    generator = torch.Generator().manual_seed(20260722)
+    host_input = torch.randn(3, 7, generator=generator)
+    host_weight = torch.randn(7, generator=generator)
+    host_bias = torch.randn(7, generator=generator)
+    first_seed = torch.randn(3, 7, generator=generator)
+    second_seed = torch.randn(3, 7, generator=generator)
+
+    def derivatives(input, weight, bias, seed1, seed2):
+        output = torch.nn.functional.layer_norm(input, (7,), weight, bias)
+        (input_grad,) = torch.autograd.grad(
+            output, input, grad_outputs=seed1, create_graph=True
+        )
+        second_grads = torch.autograd.grad(
+            input_grad, (input, weight), grad_outputs=seed2
+        )
+        return input_grad, *second_grads
+
+    reference = [
+        host_input.clone().requires_grad_(),
+        host_weight.clone().requires_grad_(),
+        host_bias.clone().requires_grad_(),
+    ]
+    expected = derivatives(*reference, first_seed, second_seed)
+
+    actual = [
+        host_input.to(mojo_gpu).requires_grad_(),
+        host_weight.to(mojo_gpu).requires_grad_(),
+        host_bias.to(mojo_gpu).requires_grad_(),
+    ]
+    got = derivatives(*actual, first_seed.to(mojo_gpu), second_seed.to(mojo_gpu))
+
+    assert type(got[0].grad_fn).__name__ == "NativeLayerNormBackwardBackward0"
+    for actual_grad, expected_grad in zip(got, expected, strict=True):
+        torch.testing.assert_close(
+            actual_grad.cpu(), expected_grad, atol=2e-3, rtol=2e-3
+        )
 
 
 @pytest.mark.parametrize("mutated", ["input", "weight", "bias", "mean", "rstd"])
@@ -1031,11 +1121,18 @@ def test_fast_native_dropout_backward_multiplication_semantics(mojo_gpu):
 
 
 def test_fast_native_dropout_training_backward_and_saved_mask(mojo_gpu):
+    from torch_mojo_backend.mojo_device.mojo_device_aten_ops import EAGER_CALL_COUNTERS
+
     generator = torch.Generator().manual_seed(20260718)
     input = torch.randn(3, 17, generator=generator).to(mojo_gpu).requires_grad_()
     grad_output = torch.randn(3, 17, generator=generator)
+    backward_counter = EAGER_CALL_COUNTERS["aten::native_dropout_backward"]
+    calls_before = backward_counter.call_count
     output, mask = torch.ops.aten.native_dropout.default(input, 0.2, True)
+    assert type(output.grad_fn).__name__ == "NativeDropoutBackward0"
+    assert backward_counter.call_count == calls_before
     output.backward(grad_output.to(mojo_gpu))
+    assert backward_counter.call_count == calls_before + 1
 
     assert not mask.requires_grad
     assert input.grad is not None
@@ -1079,6 +1176,47 @@ def test_fast_native_dropout_backward_allows_mutated_output_and_input(mojo_gpu):
     torch.testing.assert_close(
         input.grad.cpu(), grad_output * mask.cpu() * 1.25, atol=1e-6, rtol=1e-6
     )
+
+
+def test_fast_native_dropout_double_backward(mojo_gpu):
+    input = torch.randn(3, 17).to(mojo_gpu).requires_grad_()
+    grad_output = torch.randn(3, 17).to(mojo_gpu).requires_grad_()
+    second_seed = torch.randn(3, 17).to(mojo_gpu)
+    output, mask = torch.ops.aten.native_dropout.default(input, 0.2, True)
+
+    (grad_input,) = torch.autograd.grad(
+        output, input, grad_outputs=grad_output, create_graph=True
+    )
+    (second_grad_output,) = torch.autograd.grad(
+        grad_input, grad_output, grad_outputs=second_seed
+    )
+
+    assert grad_input.requires_grad
+    torch.testing.assert_close(
+        second_grad_output.cpu(), second_seed.cpu() * mask.cpu() * 1.25
+    )
+
+
+def test_fast_native_dropout_saved_tensor_hooks(mojo_gpu):
+    input = torch.randn(3, 17).to(mojo_gpu).requires_grad_()
+    grad_output = torch.randn(3, 17)
+    hook_calls = []
+
+    def pack(tensor):
+        hook_calls.append(("pack", tensor.device.type, tuple(tensor.shape)))
+        return tensor.cpu()
+
+    def unpack(tensor):
+        hook_calls.append(("unpack", tensor.device.type, tuple(tensor.shape)))
+        return tensor.to(mojo_gpu)
+
+    with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
+        output, mask = torch.ops.aten.native_dropout.default(input, 0.2, True)
+        output.backward(grad_output.to(mojo_gpu))
+
+    shape = (3, 17)
+    assert hook_calls == [("pack", "mojo", shape), ("unpack", "cpu", shape)]
+    torch.testing.assert_close(input.grad.cpu(), grad_output * mask.cpu() * 1.25)
 
 
 def test_fast_nn_dropout_training_backward(mojo_gpu):
@@ -1772,6 +1910,21 @@ def test_fast_embedding_autograd_reports_nondeterminism_at_backward(mojo_gpu):
             output.sum().backward()
     finally:
         torch.use_deterministic_algorithms(was_deterministic, warn_only=was_warn_only)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"scale_grad_by_freq": True}, "scale_grad_by_freq"),
+        ({"sparse": True}, "sparse=True"),
+    ],
+)
+def test_fast_embedding_autograd_rejects_unsafe_native_modes(mojo_gpu, kwargs, match):
+    indices = torch.tensor([0, 1, 1], dtype=torch.int64).to(mojo_gpu)
+    weight = torch.randn(3, 4).to(mojo_gpu).requires_grad_()
+
+    with pytest.raises(NotImplementedError, match=match):
+        torch.nn.functional.embedding(indices, weight, **kwargs)
 
 
 def test_fast_scalar_elementwise(mojo_device):
@@ -2867,6 +3020,8 @@ def test_fast_cross_entropy_training_uses_direct_nll_kernel(
 
 
 def test_fast_nll_loss_autograd_uses_saved_tensor_hooks(mojo_gpu):
+    from torch_mojo_backend.mojo_device.mojo_device_aten_ops import EAGER_CALL_COUNTERS
+
     log_probs = torch.log_softmax(torch.randn(7, 11), dim=-1)
     target = torch.arange(7, dtype=torch.int64) % 11
     grad_output = torch.randn(())
@@ -2880,13 +3035,17 @@ def test_fast_nll_loss_autograd_uses_saved_tensor_hooks(mojo_gpu):
 
     def unpack(tensor):
         hook_calls.append(("unpack", tensor.device.type, tuple(tensor.shape)))
-        return tensor
+        return tensor.to(mojo_gpu)
 
     actual = log_probs.to(mojo_gpu).requires_grad_()
+    backward_counter = EAGER_CALL_COUNTERS["aten::nll_loss_backward.grad_input"]
+    calls_before = backward_counter.call_count
     with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
-        torch.nn.functional.nll_loss(actual, target.to(mojo_gpu)).backward(
-            grad_output.to(mojo_gpu)
-        )
+        output = torch.nn.functional.nll_loss(actual, target.to(mojo_gpu))
+        assert type(output.grad_fn).__name__ == "NllLossBackward0"
+        assert backward_counter.call_count == calls_before
+        output.backward(grad_output.to(mojo_gpu))
+        assert backward_counter.call_count == calls_before + 1
 
     expected_shapes = [(7, 11), (7,), ()]
     assert hook_calls == [("pack", "mojo", shape) for shape in expected_shapes] + [
@@ -2895,14 +3054,52 @@ def test_fast_nll_loss_autograd_uses_saved_tensor_hooks(mojo_gpu):
     torch.testing.assert_close(actual.grad.cpu(), reference.grad)
 
 
-def test_fast_nll_loss_backward_rejects_mutated_saved_input(mojo_gpu):
+def test_fast_nll_loss_native_double_backward(mojo_gpu):
+    generator = torch.Generator().manual_seed(20260722)
+    host_input = torch.randn(7, 11, generator=generator)
+    target = torch.arange(7, dtype=torch.int64) % 11
+    grad_output = torch.randn((), generator=generator)
+    second_seed = torch.randn(7, 11, generator=generator)
+
+    def derivatives(input, device_target, first_seed, seed2):
+        output = torch.nn.functional.nll_loss(input, device_target)
+        (input_grad,) = torch.autograd.grad(
+            output, input, grad_outputs=first_seed, create_graph=True
+        )
+        (second_grad_output,) = torch.autograd.grad(
+            input_grad, first_seed, grad_outputs=seed2
+        )
+        return input_grad, second_grad_output
+
+    reference_input = host_input.clone().requires_grad_()
+    reference_grad_output = grad_output.clone().requires_grad_()
+    expected = derivatives(reference_input, target, reference_grad_output, second_seed)
+
+    actual_input = host_input.to(mojo_gpu).requires_grad_()
+    actual_grad_output = grad_output.to(mojo_gpu).requires_grad_()
+    actual = derivatives(
+        actual_input, target.to(mojo_gpu), actual_grad_output, second_seed.to(mojo_gpu)
+    )
+
+    assert type(actual[0].grad_fn).__name__ == "NllLossBackwardBackward0"
+    for got, want in zip(actual, expected, strict=True):
+        torch.testing.assert_close(got.cpu(), want)
+
+
+@pytest.mark.parametrize("mutated", ["input", "target", "total_weight"])
+def test_fast_nll_loss_backward_rejects_mutated_saved_tensor(mojo_gpu, mutated):
     log_probs = torch.log_softmax(torch.randn(7, 11), dim=-1).to(mojo_gpu)
     log_probs.requires_grad_()
     target = (torch.arange(7, dtype=torch.int64) % 11).to(mojo_gpu)
-    output = torch.nn.functional.nll_loss(log_probs, target)
+    output, total_weight = torch.ops.aten.nll_loss_forward.default(
+        log_probs, target, None, 1, -100
+    )
 
     with torch.no_grad():
-        log_probs.add_(torch.ones_like(log_probs))
+        tensor = {"input": log_probs, "target": target, "total_weight": total_weight}[
+            mutated
+        ]
+        tensor.add_(torch.ones_like(tensor))
 
     with pytest.raises(RuntimeError, match="modified by an inplace operation"):
         output.backward()
@@ -5315,6 +5512,7 @@ def test_fast_sdpa(mojo_gpu, is_causal, kv_len, dtype):
 def test_fa4_bf16_causal_gapped_qkv_forward_backward(mojo_h100, monkeypatch):
     """The cached H100 path stays dynamic for nanoGPT's gapped QKV views."""
     from torch_mojo_backend.eager_flash_attention import load_fa4_ops
+    from torch_mojo_backend.mojo_device.mojo_device_aten_ops import EAGER_CALL_COUNTERS
 
     module = load_fa4_ops()
     calls = {"forward": 0, "backward": 0}
@@ -5372,13 +5570,22 @@ def test_fa4_bf16_causal_gapped_qkv_forward_backward(mojo_h100, monkeypatch):
 
         # The first shape populates the compiled-function cache; the second
         # changes B, S, and H while exercising all five cached launches.
+        backward_counter = EAGER_CALL_COUNTERS[
+            "aten::_scaled_dot_product_flash_attention_backward"
+        ]
+        calls_before = backward_counter.call_count
         actual_output = torch.nn.functional.scaled_dot_product_attention(
             *mojo_inputs, dropout_p=0.0, is_causal=True
         )
+        assert type(actual_output.grad_fn).__name__ == (
+            "ScaledDotProductFlashAttentionBackward0"
+        )
+        assert backward_counter.call_count == calls_before
         assert actual_output.dtype == torch.bfloat16
         assert not actual_output._is_contiguous
         assert actual_output.transpose(1, 2)._is_contiguous
         actual_output.backward(grad_output.to(mojo_h100))
+        assert backward_counter.call_count == calls_before + 1
 
         torch.testing.assert_close(
             actual_output.cpu().float(), reference_output, atol=2e-2, rtol=2e-2

@@ -5300,43 +5300,6 @@ def fast_aten_linear(input, weight, bias=None):
     # Keep linear as a concrete backend op alongside fast_aten_linear_backward.
     # The GEMM kernel reads B transposed for free, so the weight is never
     # materialized in transposed layout.
-    vector = _t(input)
-    if vector is not None and len(vector._shape) == 1:
-        matrix_weight = _t(weight)
-        vector_bias = _t(bias) if bias is not None else None
-        if (
-            matrix_weight is None
-            or len(matrix_weight._shape) != 2
-            or matrix_weight._shape[1] != vector._shape[0]
-            or matrix_weight._dtype != vector._dtype
-            or matrix_weight._device != vector._device
-            or (
-                bias is not None
-                and (
-                    vector_bias is None
-                    or vector_bias._shape != (matrix_weight._shape[0],)
-                    or vector_bias._dtype != vector._dtype
-                    or vector_bias._device != vector._device
-                )
-            )
-        ):
-            return NOT_HANDLED
-        output_features = matrix_weight._shape[0]
-        if output_features == 0:
-            return _alloc((0,), vector._dtype, vector._device)
-        if vector._shape[0] == 0:
-            if vector_bias is not None:
-                return fast_aten_clone(vector_bias)
-            return fast_filled((output_features,), 0.0, vector._dtype, vector._device)
-
-        matrix = fast_aten_view(_tc(vector), (1, vector._shape[0]))
-        if matrix is NOT_HANDLED:
-            return NOT_HANDLED
-        out = fast_aten_linear(matrix, weight, bias)
-        if out is NOT_HANDLED:
-            return NOT_HANDLED
-        return fast_aten_view(out, (out._shape[-1],))
-
     out = _try_bf16_linear(input, weight, bias)
     if out is not None:
         return out
@@ -5347,7 +5310,50 @@ def fast_aten_linear(input, weight, bias=None):
         out = _try_spec_matmul("MatmulSpec", (input, weight), 1)
     else:
         out = _try_spec_matmul("MatmulBiasSpec", (input, weight, bias), 1)
-    return out if out is not None else NOT_HANDLED
+    if out is not None:
+        return out
+
+    # TensorSpec deliberately owns the ordinary fallback above.  Inspect the
+    # input only after it declines so strict FP32 can reach its SIMT path
+    # without touching TF32 metadata, while rank-1 linear can still reuse the
+    # rank-2 implementation (the current TensorSpec ABI accepts rank >= 2).
+    vector = _t(input)
+    if vector is None or len(vector._shape) != 1:
+        return NOT_HANDLED
+    matrix_weight = _t(weight)
+    vector_bias = _t(bias) if bias is not None else None
+    if (
+        matrix_weight is None
+        or len(matrix_weight._shape) != 2
+        or matrix_weight._shape[1] != vector._shape[0]
+        or matrix_weight._dtype != vector._dtype
+        or matrix_weight._device != vector._device
+        or (
+            bias is not None
+            and (
+                vector_bias is None
+                or vector_bias._shape != (matrix_weight._shape[0],)
+                or vector_bias._dtype != vector._dtype
+                or vector_bias._device != vector._device
+            )
+        )
+    ):
+        return NOT_HANDLED
+    output_features = matrix_weight._shape[0]
+    if output_features == 0:
+        return _alloc((0,), vector._dtype, vector._device)
+    if vector._shape[0] == 0:
+        if vector_bias is not None:
+            return fast_aten_clone(vector_bias)
+        return fast_filled((output_features,), 0.0, vector._dtype, vector._device)
+
+    matrix = fast_aten_view(_tc(vector), (1, vector._shape[0]))
+    if matrix is NOT_HANDLED:
+        return NOT_HANDLED
+    out = fast_aten_linear(matrix, weight, bias)
+    if out is NOT_HANDLED:
+        return NOT_HANDLED
+    return fast_aten_view(out, (out._shape[-1],))
 
 
 @no_type_check
