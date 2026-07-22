@@ -2,7 +2,7 @@ import functools
 import math
 import threading
 from collections import deque
-from typing import no_type_check
+from typing import Protocol, runtime_checkable
 
 import max.driver
 import torch
@@ -65,7 +65,6 @@ def _data_movement_mod():
     return _data_movement
 
 
-@no_type_check
 def _ctx_ptr(device):
     # Rebinds this module-level name to the real (cached) implementation on
     # first use, so the lazy import costs one call, not one per call.
@@ -76,7 +75,6 @@ def _ctx_ptr(device):
     return real_ctx_ptr(device)
 
 
-@no_type_check
 def _retain_failed_transfer_owner(device, owner: object) -> object:
     token = object()
     with _FAILED_TRANSFER_OWNERS_LOCK:
@@ -84,7 +82,6 @@ def _retain_failed_transfer_owner(device, owner: object) -> object:
     return token
 
 
-@no_type_check
 def _forget_failed_transfer_owner(device, token: object) -> None:
     with _FAILED_TRANSFER_OWNERS_LOCK:
         retained = _FAILED_TRANSFER_OWNERS.get(device)
@@ -95,7 +92,6 @@ def _forget_failed_transfer_owner(device, token: object) -> None:
             _FAILED_TRANSFER_OWNERS.pop(device, None)
 
 
-@no_type_check
 def _record_h2d_source(device, source: object, non_blocking: bool) -> None:
     """Retain a pinned transfer owner until its default-stream H2D ends."""
     # MAX's CPU device uses a worker pool whose copies are not stream-ordered
@@ -133,7 +129,6 @@ def _record_h2d_source(device, source: object, non_blocking: bool) -> None:
         # event keeps its exact source alive until DMA completion.
 
 
-@no_type_check
 def _release_synchronized_h2d_sources(device) -> None:
     """Drop ready sources after the caller synchronized ``device``'s stream.
 
@@ -149,7 +144,6 @@ def _release_synchronized_h2d_sources(device) -> None:
             _PENDING_H2D.pop(device, None)
 
 
-@no_type_check
 def _record_d2h_owner(device, owner: object) -> None:
     """Retain a pinned D2H allocation until its default-stream DMA ends."""
     try:
@@ -171,7 +165,6 @@ def _record_d2h_owner(device, owner: object) -> None:
             pending.popleft()
 
 
-@no_type_check
 def _release_synchronized_d2h_owners(device) -> None:
     """Drop pinned D2H owners whose stream events have completed."""
     with _PENDING_D2H_LOCK:
@@ -182,12 +175,21 @@ def _release_synchronized_d2h_owners(device) -> None:
             _PENDING_D2H.pop(device, None)
 
 
-# The helpers below run several times per op dispatch (hundreds of times per
-# transformer decode step); @no_type_check keeps beartype's import hook from
-# adding a wrapper frame to each call.
+@runtime_checkable
+class MojoTensorLike(Protocol):
+    """Anything carrying the core Mojo eager payload metadata.
+
+    Payload-level helpers only read these attributes, and host-contract
+    tests exercise them with lightweight stand-ins, so their signatures
+    declare this structural contract rather than the concrete wrapper.
+    """
+
+    _shape: tuple[int, ...]
+    _strides: tuple[int, ...]
+    _dtype: DType
+    _device: object
 
 
-@no_type_check
 def _row_major_strides(shape) -> tuple[int, ...]:
     strides = [1] * len(shape)
     for i in range(len(shape) - 2, -1, -1):
@@ -195,7 +197,6 @@ def _row_major_strides(shape) -> tuple[int, ...]:
     return tuple(strides)
 
 
-@no_type_check
 def _compute_contiguous(shape, strides) -> bool:
     """torch's relaxed contiguity: size-1 dims never break contiguity."""
     expected = 1
@@ -213,7 +214,6 @@ def _compute_contiguous(shape, strides) -> bool:
 _TORCH_DTYPE_OF: dict = {}
 
 
-@no_type_check
 def _torch_dtype_of(dtype):
     td = _TORCH_DTYPE_OF.get(dtype)
     if td is None:
@@ -228,7 +228,6 @@ def _torch_dtype_of(dtype):
 _TORCH_DEVICE_OF: dict = {}
 
 
-@no_type_check
 def _torch_device_of(device):
     td = _TORCH_DEVICE_OF.get(device)
     if td is None:
@@ -244,7 +243,6 @@ def _torch_device_of(device):
 MAX_RANK = 8
 
 
-@no_type_check
 def _pad8(values, fill: int) -> tuple[int, ...]:
     values = tuple(values)
     if len(values) > MAX_RANK:
@@ -276,7 +274,6 @@ class TorchMojoTensor(torch.Tensor):
     """
 
     @classmethod
-    @no_type_check
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
         """Redispatch wrapper operations to the existing Mojo backend kernels."""
         # Give higher-priority wrappers such as FakeTensor and
@@ -290,7 +287,6 @@ class TorchMojoTensor(torch.Tensor):
             return func(*args, **(kwargs or {}))
 
     @classmethod
-    @no_type_check
     def _make(
         cls, holder, ptr, shape, strides, offset, dtype, device, contiguous=None
     ) -> "TorchMojoTensor":
@@ -322,7 +318,6 @@ class TorchMojoTensor(torch.Tensor):
         return res
 
     @classmethod
-    @no_type_check
     def _alloc(
         cls, shape, dtype: DType, device: max.driver.Device
     ) -> "TorchMojoTensor":
@@ -342,7 +337,6 @@ class TorchMojoTensor(torch.Tensor):
         )
 
     @classmethod
-    @no_type_check
     def _view_of(
         cls, base: "TorchMojoTensor", shape, strides, offset, contiguous=None
     ) -> "TorchMojoTensor":
@@ -364,7 +358,6 @@ class TorchMojoTensor(torch.Tensor):
         )
 
     @classmethod
-    @no_type_check
     def _from_cpu(
         cls,
         cpu_tensor: torch.Tensor,
@@ -398,7 +391,6 @@ class TorchMojoTensor(torch.Tensor):
             contiguous=True,
         )
 
-    @no_type_check
     def _to_cpu_tensor(self, *, non_blocking: bool = False) -> torch.Tensor:
         """D2H into MAX-owned pinned storage exposed as a CPU tensor.
 
@@ -440,7 +432,6 @@ class TorchMojoTensor(torch.Tensor):
             _release_synchronized_d2h_owners(src._device)
             raise
 
-    @no_type_check
     def _materialize_contiguous(self) -> "TorchMojoTensor":
         """A new contiguous tensor with this tensor's (strided) contents."""
         out = TorchMojoTensor._alloc(self._shape, self._dtype, self._device)
@@ -466,12 +457,10 @@ class TorchMojoTensor(torch.Tensor):
                 _copy_strided_into(out, self)
         return out
 
-    @no_type_check
     def _contig(self) -> "TorchMojoTensor":
         """self if already contiguous, else a materialized copy."""
         return self if self._is_contiguous else self._materialize_contiguous()
 
-    @no_type_check
     def __dlpack__(self, *, stream=None, **_unused):
         """Export the device allocation as a "dltensor" capsule.
 
@@ -489,13 +478,11 @@ class TorchMojoTensor(torch.Tensor):
             src._holder, src._ptr, src._shape, src._dtype, src._device
         )
 
-    @no_type_check
     def __dlpack_device__(self):
         from torch_mojo_backend.mojo_device import dlpack
 
         return dlpack.dlpack_device(self._device)
 
-    @no_type_check
     def __coerce_same_metadata_as_tangent__(self, expected_meta, expected_type=None):
         """Accept mojo tensors as backward tangents under torch.compile.
 
@@ -508,7 +495,6 @@ class TorchMojoTensor(torch.Tensor):
             return None
         return self
 
-    @no_type_check
     def __reduce_ex__(self, protocol):
         """Pickle as a portable plain CPU tensor.
 
@@ -602,7 +588,6 @@ class TorchMojoTensor(torch.Tensor):
     __torch_function__ = torch._C._disabled_torch_function_impl
 
 
-@no_type_check
 def _rebind_payload(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """Move ``src``'s eager payload into ``dst`` without changing identity.
 
@@ -644,7 +629,6 @@ def _rebind_payload(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     dst.__dict__.pop("_spec", None)
 
 
-@no_type_check
 def _resize_payload(dst: TorchMojoTensor, shape) -> None:
     """Resize an eager out tensor and keep aliases when storage is sufficient.
 
@@ -680,7 +664,6 @@ def _resize_payload(dst: TorchMojoTensor, shape) -> None:
     _rebind_payload(dst, replacement)
 
 
-@no_type_check
 def _copy_strided_into(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """dst[coords] = src[coords]; same shape and dtype, any strides.
 
@@ -713,7 +696,6 @@ def get_ordered_accelerators():
     return gpu_accelerators + cpu_accelerators
 
 
-@no_type_check
 def find_equivalent_max_device(device: torch.device) -> max.driver.Device:
     """Find the equivalent MAX device for a given torch device
 

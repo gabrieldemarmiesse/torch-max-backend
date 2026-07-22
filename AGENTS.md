@@ -163,6 +163,21 @@ When adding an operation, you need to update **two files**:
 This ensures the operation works in both `torch.compile()` and on the `mojo` device.
 
 
+## Type hints
+
+Every function written must have type hints in its signature: annotate all
+arguments and the return type. Do not put type hints in the function body
+(no annotated local variables like `x: Foo = ...`).
+
+Use `: object` only when no other option is possible. Prefer precise types,
+unions, `Protocol`s (e.g. `MojoTensorLike` for payload-level helpers), or a
+`TypeVar` for pass-through functions.
+
+These hints are enforced at runtime by beartype, but only while running the
+unit tests: `tests/conftest.py` sets `TORCH_MOJO_BACKEND_BEARTYPE=1`, and
+production imports leave it off so no wrapper frames are added to hot paths.
+Set the variable explicitly to enable or disable checking in other contexts.
+
 ## To find the correct type hints for a function
 It may be hard to find the correct type hints for a function. What you should do in this case is:
 1) Add an obviously wrong type hint, for example datetime.timezone in an aten function.

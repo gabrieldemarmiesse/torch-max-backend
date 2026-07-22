@@ -156,7 +156,7 @@ number_of_decompositions_removed = 0
 
 def map_to(func):
     def decorator(func_to_map):
-        if os.environ.get("TORCH_MOJO_BACKEND_BEARTYPE", "1") == "1":
+        if os.environ.get("TORCH_MOJO_BACKEND_BEARTYPE", "0") == "1":
             from beartype import beartype
 
             func_to_map = beartype(func_to_map)

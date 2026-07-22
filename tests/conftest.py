@@ -3,6 +3,8 @@ import os
 os.environ["MODULAR_TELEMETRY_ENABLED"] = "0"
 os.environ["MAX_USE_EAGER_INTERPRETER"] = "1"
 os.environ["TORCH_MOJO_BACKEND_TESTING"] = "1"
+# Type-check the whole package under tests; production imports leave it off.
+os.environ.setdefault("TORCH_MOJO_BACKEND_BEARTYPE", "1")
 import pytest
 
 # must be called before importing torch_mojo_backend

@@ -26,7 +26,6 @@ import hashlib
 import importlib
 import sys
 from pathlib import Path
-from typing import no_type_check
 
 import mojo.importer  # noqa: F401  — installs the .mojo meta-path importer
 from max import driver
@@ -118,7 +117,6 @@ def __getattr__(name: str):
 _CTX_PTR_CACHE: dict[driver.Device, int] = {}
 
 
-@no_type_check
 def _ctx_ptr(device: driver.Device) -> int:
     ptr = _CTX_PTR_CACHE.get(device)
     if ptr is None:
