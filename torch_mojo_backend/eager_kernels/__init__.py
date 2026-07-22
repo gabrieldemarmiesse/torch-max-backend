@@ -49,6 +49,7 @@ _MOJO_MODULES = (
     "conv_ops",
     "reduction_ops",
     "loss_ops",
+    "softmax_backward_ops",
     "normalization_forward_ops",
     "normalization_backward_ops",
     "optimizer_ops",
