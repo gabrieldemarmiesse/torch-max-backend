@@ -23,7 +23,6 @@ backend keeps using `aten_functions` directly.
 import math
 import struct
 import warnings
-from typing import no_type_check
 
 import torch
 from max.dtype import DType
@@ -34,6 +33,7 @@ from torch_mojo_backend.mojo_device.torch_mojo_device_module import (
     _reserve_philox_state,
 )
 from torch_mojo_backend.mojo_device.torch_mojo_tensor import (
+    MojoTensorLike,
     TorchMojoTensor,
     _copy_strided_into,
     _pad8,
@@ -155,13 +155,11 @@ _FOREACH_NORM_RECORD_FIELDS = 3
 _FOREACH_MUL_RECORD_FIELDS = 2
 
 
-@no_type_check
 def _t(x) -> TorchMojoTensor | None:
     """x as a TorchMojoTensor (any layout), or None."""
     return x if isinstance(x, TorchMojoTensor) else None
 
 
-@no_type_check
 def _tc(x) -> TorchMojoTensor | None:
     """x as a *contiguous* TorchMojoTensor (materializing views), or None."""
     if isinstance(x, TorchMojoTensor):
@@ -173,7 +171,6 @@ _alloc = TorchMojoTensor._alloc
 _view_of = TorchMojoTensor._view_of
 
 
-@no_type_check
 def fast_aten__foreach_norm(self, ord=2, dtype=None):
     """Fast homogeneous FP32 L2 norms with one independent scalar output.
 
@@ -222,7 +219,6 @@ def fast_aten__foreach_norm(self, ord=2, dtype=None):
     return outputs
 
 
-@no_type_check
 def foreach_norm_sequential_fallback(self, ord=2, dtype=None):
     """Device-index-correct L2 fallback using existing scalar eager ops.
 
@@ -251,7 +247,6 @@ def foreach_norm_sequential_fallback(self, ord=2, dtype=None):
     return outputs
 
 
-@no_type_check
 def _foreach_tensors_overlap(tensors) -> bool:
     """Whether contiguous mutable tensor byte intervals overlap."""
     intervals = sorted(
@@ -265,7 +260,6 @@ def _foreach_tensors_overlap(tensors) -> bool:
     )
 
 
-@no_type_check
 def _is_non_overlapping_and_dense(shape, strides) -> bool:
     """Match TensorImpl's sorted-stride dense-layout classification."""
     required_stride = 1
@@ -279,7 +273,6 @@ def _is_non_overlapping_and_dense(shape, strides) -> bool:
     return True
 
 
-@no_type_check
 def _foreach_scalar_overlap_kind(tensor, scalar) -> str:
     """Classify scalar overlap as none, full, or forbidden partial overlap.
 
@@ -307,7 +300,6 @@ def _foreach_scalar_overlap_kind(tensor, scalar) -> str:
     return "partial"
 
 
-@no_type_check
 def fast_aten__foreach_mul__tensor(self, other):
     """Fast homogeneous FP32 in-place multiply by a device scalar tensor."""
     if len(self) == 0:
@@ -356,7 +348,6 @@ def fast_aten__foreach_mul__tensor(self, other):
     return None
 
 
-@no_type_check
 def _fused_adamw_scalar_tensor(value, name, device):
     """Validate an optional read-only scalar and return its device pointer."""
     if value is None:
@@ -376,7 +367,6 @@ def _fused_adamw_scalar_tensor(value, name, device):
     return tensor._ptr
 
 
-@no_type_check
 def fast_aten__fused_adamw(
     parameters,
     grads,
@@ -523,7 +513,6 @@ def fast_aten__fused_adamw(
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def _spec_of(t):
     """t's cached Mojo TensorSpec, built on first use."""
     spec = t.__dict__.get("_spec")
@@ -544,7 +533,6 @@ def _spec_of(t):
     return spec
 
 
-@no_type_check
 def _wrap_spec_result(result, dtype, device):
     """Mint the torch wrapper for a spec op's (holder, spec, shape, ptr)."""
     holder, spec, shape, ptr = result
@@ -555,7 +543,6 @@ def _wrap_spec_result(result, dtype, device):
     return out
 
 
-@no_type_check
 def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
     """Broadcast binary through a logic_ops spec op, or None.
 
@@ -666,7 +653,6 @@ def _try_spec_binary(spec_fn_name, lhs, rhs, out_dtype=None):
     return _wrap_spec_result(result, out_dtype or dtype, device)
 
 
-@no_type_check
 def _try_spec_add_f32_bf16(lhs, rhs):
     """One-launch contiguous FP32 + BF16 -> FP32 add, or None.
 
@@ -700,7 +686,6 @@ def _try_spec_add_f32_bf16(lhs, rhs):
     return _wrap_spec_result(result, DType.float32, a._device)
 
 
-@no_type_check
 def _try_spec_unary(spec_fn_name, x, out_dtype=None, module_name="elementwise_ops"):
     """Contiguous unary through a spec op, or None.
 
@@ -717,7 +702,6 @@ def _try_spec_unary(spec_fn_name, x, out_dtype=None, module_name="elementwise_op
     return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
 
 
-@no_type_check
 def _try_spec_reduce(
     spec_fn_name, a, rdims, keepdim, *extra, out_dtype=None, module_name="reduction_ops"
 ):
@@ -734,7 +718,6 @@ def _try_spec_reduce(
     return _wrap_spec_result(result, out_dtype or a._dtype, a._device)
 
 
-@no_type_check
 def _wrap_spec_pair(result, dtype0, dtype1, device):
     """Mint two torch wrappers from a two-group spec result."""
     return (
@@ -752,7 +735,6 @@ _DEVICE_OOM_MARKERS = (
 )
 
 
-@no_type_check
 def _raise_if_device_oom(exc):
     """Keep TensorSpec fallbacks from disguising allocator exhaustion.
 
@@ -768,7 +750,6 @@ def _raise_if_device_oom(exc):
         raise torch.OutOfMemoryError(message) from exc
 
 
-@no_type_check
 def _try_spec_matmul(spec_fn_name, tensors, transpose_b):
     """Matmul-family spec op over already-typed operands, or None. The spec
     raises on non-contiguous operands; the classic path materializes them."""
@@ -785,7 +766,6 @@ def _try_spec_matmul(spec_fn_name, tensors, transpose_b):
     return _wrap_spec_result(result, ts[0]._dtype, ts[0]._device)
 
 
-@no_type_check
 def _try_spec_scalar(spec_fn_name, x, scalar):
     """Contiguous tensor-with-float-scalar through a spec op, or None."""
     if not isinstance(scalar, int | float) or isinstance(scalar, bool):
@@ -803,7 +783,6 @@ def _try_spec_scalar(spec_fn_name, x, scalar):
     return _wrap_spec_result(result, a._dtype, a._device)
 
 
-@no_type_check
 def _try_spec_int_scalar(spec_fn_name, x, scalar):
     """Contiguous tensor-with-int-scalar through a spec op, or None."""
     if not isinstance(scalar, int) or isinstance(scalar, bool):
@@ -821,12 +800,10 @@ def _try_spec_int_scalar(spec_fn_name, x, scalar):
     return _wrap_spec_result(result, a._dtype, a._device)
 
 
-@no_type_check
-def _on_gpu(t: TorchMojoTensor) -> bool:
+def _on_gpu(t: MojoTensorLike) -> bool:
     return t._device.label == "gpu"
 
 
-@no_type_check
 def _alert_not_deterministic(caller: str) -> None:
     """Match PyTorch's deterministic-algorithm error/warn-only contract."""
     if not torch.are_deterministic_algorithms_enabled():
@@ -850,7 +827,6 @@ def _alert_not_deterministic(caller: str) -> None:
     )
 
 
-@no_type_check
 def _copy_into(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """dst[...] = src[...] for equal shapes/dtypes, any strides on both."""
     if dst._numel == 0:
@@ -863,14 +839,12 @@ def _copy_into(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
         _copy_strided_into(dst, src)
 
 
-@no_type_check
 def _valid_nll_out(tensor, dtype, device) -> bool:
     """Whether an NLL out= tensor may be written or resized in place."""
     out = _t(tensor)
     return out is not None and out._dtype == dtype and out._device == device
 
 
-@no_type_check
 def _prepare_nll_out(out: TorchMojoTensor, shape):
     """Return a contiguous NLL kernel destination for ``out``.
 
@@ -903,7 +877,6 @@ def _prepare_nll_out(out: TorchMojoTensor, shape):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def _bcast_meta(*tensors):
     """Broadcast metadata (rank <= 4) from the tensors' real strides.
 
@@ -938,7 +911,6 @@ def _bcast_meta(*tensors):
     return out, dims, all_strides
 
 
-@no_type_check
 def _scalar_tensor_0d(value, dtype, device) -> TorchMojoTensor:
     """A 0-d tensor holding `value`, for stride-0 broadcast operands."""
     result = eager_kernels.elementwise_ops.FillSpec(
@@ -947,7 +919,6 @@ def _scalar_tensor_0d(value, dtype, device) -> TorchMojoTensor:
     return _wrap_spec_result(result, dtype, device)
 
 
-@no_type_check
 def _cast_tensor(x: TorchMojoTensor, dtype: DType) -> TorchMojoTensor:
     """Dtype cast through CastSpec (strided inputs materialize Mojo-side).
 
@@ -957,7 +928,6 @@ def _cast_tensor(x: TorchMojoTensor, dtype: DType) -> TorchMojoTensor:
     return _wrap_spec_result(result, dtype, x._device)
 
 
-@no_type_check
 def _promoted_pair(a: TorchMojoTensor, b: TorchMojoTensor):
     """Same-dtype tensor pair following torch's promotion, or None.
 
@@ -977,7 +947,6 @@ def _promoted_pair(a: TorchMojoTensor, b: TorchMojoTensor):
     return None
 
 
-@no_type_check
 def _scalar_embed(value, dtype: DType) -> float | None:
     """`value` validated for lossless embedding into `dtype`, as a float,
     or None."""
@@ -998,7 +967,6 @@ def _scalar_embed(value, dtype: DType) -> float | None:
     return float(value)
 
 
-@no_type_check
 def _resolve_scalar(value, dtype: DType, device) -> TorchMojoTensor | None:
     """A 0-d stride-0 tensor holding a Python scalar in `dtype`, or None
     when the value doesn't embed losslessly."""
@@ -1008,7 +976,6 @@ def _resolve_scalar(value, dtype: DType, device) -> TorchMojoTensor | None:
     return _scalar_tensor_0d(v, dtype, device)
 
 
-@no_type_check
 def _launch_bcast(kernel, out, operands, meta, dtype):
     out_shape, dims, strides = meta
     params = tuple(dims) + tuple(s for st in strides for s in st)
@@ -1026,7 +993,6 @@ def _launch_bcast(kernel, out, operands, meta, dtype):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def _scaled_operand(other, alpha):
     """other * alpha as a tensor, for add/sub with alpha != 1, or None."""
     b = _t(other)
@@ -1040,7 +1006,6 @@ def _scaled_operand(other, alpha):
     return scaled
 
 
-@no_type_check
 def fast_aten_add(input, other, alpha=1):
     if alpha != 1:
         other = _scaled_operand(other, alpha)
@@ -1061,7 +1026,6 @@ def fast_aten_add(input, other, alpha=1):
 _fast_aten_add_default = fast_aten_add
 
 
-@no_type_check
 def fast_aten_add_apple(input, other, alpha=1):
     """Metal specialization for equal-shape contiguous tensor addition."""
     a = _t(input)
@@ -1087,7 +1051,6 @@ def fast_aten_add_apple(input, other, alpha=1):
     return _fast_aten_add_default(input, other, alpha)
 
 
-@no_type_check
 def fast_aten_add_(input, other, alpha=1):
     """In-place add into input. Returns None when unavailable."""
     dst = _t(input)
@@ -1127,7 +1090,6 @@ def fast_aten_add_(input, other, alpha=1):
     return input
 
 
-@no_type_check
 def fast_aten_sub(input, other, alpha=1):
     if alpha != 1:
         other = _scaled_operand(other, alpha)
@@ -1146,7 +1108,6 @@ def fast_aten_sub(input, other, alpha=1):
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_mul(input, other):
     result = _try_spec_scalar("MulScalarSpec", input, other)
     if result is None:
@@ -1158,7 +1119,6 @@ def fast_aten_mul(input, other):
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_mul_(input, other):
     """In-place multiply used by the foreach gradient-clipping slow path."""
     dst = _t(input)
@@ -1176,7 +1136,6 @@ def fast_aten_mul_(input, other):
     return input
 
 
-@no_type_check
 def fast_aten_div(input, other, *, rounding_mode=None):
     if rounding_mode is not None:
         return NOT_HANDLED
@@ -1206,7 +1165,6 @@ def fast_aten_div(input, other, *, rounding_mode=None):
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_lerp(self, end, weight):
     """FP32 scalar lerp composed from the existing asynchronous fast ops.
 
@@ -1251,7 +1209,6 @@ def fast_aten_lerp(self, end, weight):
     return fast_aten_sub(finish, difference, alpha=one_minus_weight)
 
 
-@no_type_check
 def fast_aten_fill_scalar(input, value):
     """Functional fill: new tensor, same shape/dtype, all elements = value."""
     # ``bool`` is a Python ``int`` subclass and ATen accepts it for every
@@ -1265,7 +1222,6 @@ def fast_aten_fill_scalar(input, value):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_fill__scalar(input, value):
     """In-place fill of input (any strides). Returns None when unavailable."""
     if not isinstance(value, int | float):
@@ -1287,34 +1243,28 @@ def fast_aten_fill__scalar(input, value):
     return input
 
 
-@no_type_check
 def fast_aten_maximum(x, y):
     result = _try_spec_binary("MaximumSpec", x, y)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_minimum(x, y):
     result = _try_spec_binary("MinimumSpec", x, y)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_relu(tensor):
     return _unary_spec_op("ReluSpec", tensor)
 
 
-@no_type_check
 def fast_aten_exp(input):
     return _unary_spec_op("ExpSpec", input)
 
 
-@no_type_check
 def fast_aten_tanh(x):
     return _unary_spec_op("TanhSpec", x)
 
 
-@no_type_check
 def fast_aten_pow(x, y):
     result = _try_spec_scalar("PowScalarSpec", x, y)
     return result if result is not None else NOT_HANDLED
@@ -1330,7 +1280,6 @@ def fast_aten_pow(x, y):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def _unary_spec_op(spec, x):
     """Float-only unary with no classic fallback: the spec entry provably
     covers the classic gate (_FLOAT_DTYPES, strided via Mojo-side
@@ -1339,22 +1288,18 @@ def _unary_spec_op(spec, x):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_abs(x):
     return _unary_spec_op("AbsSpec", x)
 
 
-@no_type_check
 def fast_aten_neg(x):
     return _unary_spec_op("NegSpec", x)
 
 
-@no_type_check
 def fast_aten_sign(x):
     return _unary_spec_op("SignSpec", x)
 
 
-@no_type_check
 def _int_unary_identity(x):
     """ceil/floor on integer tensors is the identity in torch; return a copy."""
     a = _t(x)
@@ -1363,7 +1308,6 @@ def _int_unary_identity(x):
     return None
 
 
-@no_type_check
 def fast_aten_ceil(x):
     result = _int_unary_identity(x)
     if result is not None:
@@ -1371,7 +1315,6 @@ def fast_aten_ceil(x):
     return _unary_spec_op("CeilSpec", x)
 
 
-@no_type_check
 def fast_aten_floor(x):
     result = _int_unary_identity(x)
     if result is not None:
@@ -1379,87 +1322,70 @@ def fast_aten_floor(x):
     return _unary_spec_op("FloorSpec", x)
 
 
-@no_type_check
 def fast_aten_acos(x):
     return _unary_spec_op("AcosSpec", x)
 
 
-@no_type_check
 def fast_aten_asinh(x):
     return _unary_spec_op("AsinhSpec", x)
 
 
-@no_type_check
 def fast_aten_atanh(x):
     return _unary_spec_op("AtanhSpec", x)
 
 
-@no_type_check
 def fast_aten_cos(x):
     return _unary_spec_op("CosSpec", x)
 
 
-@no_type_check
 def fast_aten_cosh(x):
     return _unary_spec_op("CoshSpec", x)
 
 
-@no_type_check
 def fast_aten_erf(x):
     return _unary_spec_op("ErfSpec", x)
 
 
-@no_type_check
 def fast_aten_log(x):
     return _unary_spec_op("LogSpec", x)
 
 
-@no_type_check
 def fast_aten_log1p(x):
     return _unary_spec_op("Log1pSpec", x)
 
 
-@no_type_check
 def fast_aten_reciprocal(x):
     return _unary_spec_op("ReciprocalSpec", x)
 
 
-@no_type_check
 def fast_aten_rsqrt(x):
     return _unary_spec_op("RsqrtSpec", x)
 
 
-@no_type_check
 def fast_aten_sigmoid(x):
     return _unary_spec_op("SigmoidSpec", x)
 
 
-@no_type_check
 def fast_aten_silu(x):
     return _unary_spec_op("SiluSpec", x)
 
 
-@no_type_check
 def fast_aten_sin(x):
     return _unary_spec_op("SinSpec", x)
 
 
-@no_type_check
 def fast_aten_sinh(x):
     return _unary_spec_op("SinhSpec", x)
 
 
-@no_type_check
 def fast_aten_sqrt(x):
     return _unary_spec_op("SqrtSpec", x)
 
 
-@no_type_check
 def fast_aten_tan(x):
     return _unary_spec_op("TanSpec", x)
 
 
-@no_type_check
 def fast_aten_gelu(input, approximate="none"):
     if approximate == "none":
         spec = "GeluNoneSpec"
@@ -1483,7 +1409,6 @@ def fast_aten_gelu(input, approximate="none"):
     return _unary_spec_op(spec, input)
 
 
-@no_type_check
 def fast_aten_gelu_backward(grad_output, self, *, approximate="none"):
     """Float32/BFloat16 GPU GELU backward through Fable-owned Mojo kernels."""
     grad = _t(grad_output)
@@ -1521,13 +1446,11 @@ def fast_aten_gelu_backward(grad_output, self, *, approximate="none"):
     return out
 
 
-@no_type_check
 def fast_aten_isnan(x):
     result = _try_spec_unary("IsNanSpec", x, DType.bool)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_logical_not(x):
     result = _try_spec_unary("LogicalNotSpec", x, DType.bool)
     return result if result is not None else NOT_HANDLED
@@ -1540,61 +1463,51 @@ def fast_aten_logical_not(x):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_aten_eq(input, other):
     result = _try_spec_binary("EqSpec", input, other, DType.bool)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_ne(input, other):
     result = _try_spec_binary("NeSpec", input, other, DType.bool)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_lt(input, other):
     result = _try_spec_binary("LtSpec", input, other, DType.bool)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_le(input, other):
     result = _try_spec_binary("LeSpec", input, other, DType.bool)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_gt(input, other):
     result = _try_spec_binary("GtSpec", input, other, DType.bool)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_ge(input, other):
     result = _try_spec_binary("GeSpec", input, other, DType.bool)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_bitwise_and(input, other):
     result = _try_spec_binary("BitwiseAndSpec", input, other)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_bitwise_or(input, other):
     result = _try_spec_binary("BitwiseOrSpec", input, other)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_bitwise_xor(input, other):
     result = _try_spec_binary("BitwiseXorSpec", input, other)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_bitwise_not(input):
     a = _tc(input)
     if a is None or a._dtype not in _BITWISE_DTYPES:
@@ -1611,7 +1524,6 @@ def fast_aten_bitwise_not(input):
     return out
 
 
-@no_type_check
 def fast_aten_isin(elements, test_elements, *, assume_unique=False, invert=False):
     el = _tc(elements)
     te = _tc(test_elements)
@@ -1649,21 +1561,18 @@ def fast_aten_isin(elements, test_elements, *, assume_unique=False, invert=False
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_aten_remainder(input, other):
     # Divisor-signed remainder (Python/torch `%`), float and int dtypes.
     result = _try_spec_binary("RemainderSpec", input, other)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_floor_divide(input, other):
     # floor(input / other), float and int dtypes.
     result = _try_spec_binary("FloorDivSpec", input, other)
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_pow_tensor_tensor(input, exponent):
     # Float-only (the kernel raises on ints, which would leave the output
     # unwritten); gate here so unsupported dtypes fall through cleanly.
@@ -1674,7 +1583,6 @@ def fast_aten_pow_tensor_tensor(input, exponent):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def _try_logical(spec_fn_name, input, other):
     """Mixed-dtype logical_and / logical_xor: reduce each operand to bool
     (the nonzero test) spec-to-spec via CastSpec, then the bool spec path
@@ -1708,7 +1616,6 @@ def _try_logical(spec_fn_name, input, other):
     return _wrap_spec_result(result, DType.bool, a._device)
 
 
-@no_type_check
 def fast_aten_logical_and(input, other):
     result = _try_spec_binary("LogicalAndSpec", input, other, DType.bool)
     if result is None:
@@ -1716,7 +1623,6 @@ def fast_aten_logical_and(input, other):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_logical_xor(input, other):
     result = _try_spec_binary("LogicalXorSpec", input, other, DType.bool)
     if result is None:
@@ -1724,7 +1630,6 @@ def fast_aten_logical_xor(input, other):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_clamp(input, min=None, max=None):
     a = _tc(input)
     if a is None or a._dtype not in _BCAST_DTYPES:
@@ -1754,7 +1659,6 @@ def fast_aten_clamp(input, min=None, max=None):
     return out
 
 
-@no_type_check
 def _try_addc(kernel_name, self, tensor1, tensor2, value, allow_int):
     a = _t(self)
     b = _t(tensor1)
@@ -1800,17 +1704,14 @@ def _try_addc(kernel_name, self, tensor1, tensor2, value, allow_int):
     return out
 
 
-@no_type_check
 def fast_aten_addcmul(self, tensor1, tensor2, value=1):
     return _try_addc("AddcmulBcast", self, tensor1, tensor2, value, True)
 
 
-@no_type_check
 def fast_aten_addcdiv(self, tensor1, tensor2, value=1):
     return _try_addc("AddcdivBcast", self, tensor1, tensor2, value, False)
 
 
-@no_type_check
 def _binary_operands(input, other):
     """Resolve (lhs, rhs) TorchMojoTensors with equal dtypes for the ternary
     broadcast kernels (where / masked_fill). Either operand may be a Python
@@ -1831,7 +1732,6 @@ def _binary_operands(input, other):
     return None
 
 
-@no_type_check
 def fast_aten_where(condition, input, other):
     cond = _t(condition)
     if cond is None or cond._dtype != DType.bool:
@@ -1857,7 +1757,6 @@ def fast_aten_where(condition, input, other):
     return out
 
 
-@no_type_check
 def _masked_fill_operands(input, mask, value):
     """Resolve (in_t, mask_t, value_t, meta) for masked_fill, or None.
 
@@ -1896,7 +1795,6 @@ def _masked_fill_operands(input, mask, value):
     return a, m, val, meta
 
 
-@no_type_check
 def fast_aten_masked_fill(input, mask, value):
     resolved = _masked_fill_operands(input, mask, value)
     if resolved is None:
@@ -1914,7 +1812,6 @@ def fast_aten_masked_fill(input, mask, value):
     return out
 
 
-@no_type_check
 def fast_aten_masked_fill_(input, mask, value):
     """In-place masked fill into input. Returns None when unavailable."""
     resolved = _masked_fill_operands(input, mask, value)
@@ -1946,7 +1843,6 @@ def fast_aten_masked_fill_(input, mask, value):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def _resolve_sizes(shape, numel: int) -> list[int] | None:
     # Single pass; view is the hottest op in transformer forwards.
     prod = 1
@@ -1969,7 +1865,6 @@ def _resolve_sizes(shape, numel: int) -> list[int] | None:
     return sizes
 
 
-@no_type_check
 def _compute_view_strides(old_shape, old_strides, new_shape):
     """Port of ATen's computeStride: strides for viewing `old` as
     `new_shape` without a copy, or None when impossible."""
@@ -2009,7 +1904,6 @@ def _compute_view_strides(old_shape, old_strides, new_shape):
     return tuple(new_strides)
 
 
-@no_type_check
 def _fast_view(tensor, shape):
     if len(shape) == 1 and isinstance(shape[0], list | tuple):
         shape = shape[0]
@@ -2032,17 +1926,14 @@ def _fast_view(tensor, shape):
     return _view_of(t, sizes, new_strides, t._offset)
 
 
-@no_type_check
 def fast_aten_view(tensor, *shape):
     return _fast_view(tensor, shape)
 
 
-@no_type_check
 def fast_aten__unsafe_view(tensor, *shape):
     return _fast_view(tensor, shape)
 
 
-@no_type_check
 def fast_aten_unsqueeze(tensor, dim):
     t = _t(tensor)
     if t is None:
@@ -2058,7 +1949,6 @@ def fast_aten_unsqueeze(tensor, dim):
     return _view_of(t, new_shape, new_strides, t._offset)
 
 
-@no_type_check
 def fast_aten_squeeze_dim(tensor, dim):
     t = _t(tensor)
     if t is None:
@@ -2074,7 +1964,6 @@ def fast_aten_squeeze_dim(tensor, dim):
     return _view_of(t, new_shape, new_strides, t._offset)
 
 
-@no_type_check
 def fast_aten_alias(tensor):
     t = _t(tensor)
     if t is None:
@@ -2085,7 +1974,6 @@ def fast_aten_alias(tensor):
 fast_aten_detach = fast_aten_alias
 
 
-@no_type_check
 def fast_aten_permute(input, dims):
     t = _t(input)
     if t is None or not isinstance(dims, list | tuple):
@@ -2101,7 +1989,6 @@ def fast_aten_permute(input, dims):
     return _view_of(t, new_shape, new_strides, t._offset)
 
 
-@no_type_check
 def fast_aten_t(input):
     t = _t(input)
     if t is None or len(t._shape) > 2:
@@ -2111,7 +1998,6 @@ def fast_aten_t(input):
     return fast_aten_transpose(input, 0, 1)
 
 
-@no_type_check
 def fast_aten_transpose(input, dim0, dim1):
     t = _t(input)
     if t is None or not isinstance(dim0, int) or not isinstance(dim1, int):
@@ -2130,7 +2016,6 @@ def fast_aten_transpose(input, dim0, dim1):
     return _view_of(t, shape, strides, t._offset)
 
 
-@no_type_check
 def fast_aten_expand(tensor, sizes, *, implicit=False):
     t = _t(tensor)
     if t is None or not isinstance(sizes, list | tuple):
@@ -2162,7 +2047,6 @@ def fast_aten_expand(tensor, sizes, *, implicit=False):
     return _view_of(t, new_shape, new_strides, t._offset)
 
 
-@no_type_check
 def fast_aten_slice(input, dim=0, start=None, end=None, step=1):
     t = _t(input)
     if t is None or not isinstance(dim, int) or not isinstance(step, int) or step < 1:
@@ -2190,7 +2074,6 @@ def fast_aten_slice(input, dim=0, start=None, end=None, step=1):
     return _view_of(t, new_shape, new_strides, new_offset)
 
 
-@no_type_check
 def fast_aten_select(input, dim, index):
     t = _t(input)
     if t is None or not isinstance(dim, int) or not isinstance(index, int):
@@ -2210,7 +2093,6 @@ def fast_aten_select(input, dim, index):
     return _view_of(t, new_shape, new_strides, new_offset)
 
 
-@no_type_check
 def fast_aten_split(input, split_size, dim=0):
     t = _t(input)
     if t is None or not isinstance(dim, int):
@@ -2245,12 +2127,10 @@ def fast_aten_split(input, split_size, dim=0):
     return results
 
 
-@no_type_check
 def fast_aten_split_with_sizes(input, split_sizes, dim=0):
     return fast_aten_split(input, list(split_sizes), dim)
 
 
-@no_type_check
 def fast_aten_unbind(input, dim=0):
     t = _t(input)
     if t is None or not isinstance(dim, int):
@@ -2265,7 +2145,6 @@ def fast_aten_unbind(input, dim=0):
     return results
 
 
-@no_type_check
 def fast_aten_clone(input, *, memory_format=None):
     t = _t(input)
     if t is None:
@@ -2285,13 +2164,11 @@ def fast_aten_clone(input, *, memory_format=None):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def _is_legacy_empty(t) -> bool:
     x = _t(t)
     return x is not None and len(x._shape) == 1 and x._numel == 0
 
 
-@no_type_check
 def fast_aten_cat(tensors, dim=0):
     # PyTorch's cat skips legacy "empty" (1-D, size-0) tensors, e.g.
     # uninitialized KV-caches.
@@ -2398,7 +2275,6 @@ _SCATTER_DTYPES = _FLOAT_DTYPES + (
 )
 
 
-@no_type_check
 def fast_aten_stack(tensors, dim=0):
     # stack = unsqueeze each input at `dim`, then concatenate along `dim`.
     # Both helpers normalize `dim` against the SAME (rank + 1) base, so a raw
@@ -2416,7 +2292,6 @@ def fast_aten_stack(tensors, dim=0):
     return fast_aten_cat(unsqueezed, dim)
 
 
-@no_type_check
 def fast_aten_repeat(input, repeats):
     t = _tc(input)
     if t is None or t._dtype not in _COPYABLE_DTYPES:
@@ -2449,7 +2324,6 @@ def fast_aten_repeat(input, repeats):
     return out
 
 
-@no_type_check
 def _fast_triangular(input, diagonal, upper):
     if not isinstance(diagonal, int):
         return NOT_HANDLED
@@ -2477,17 +2351,14 @@ def _fast_triangular(input, diagonal, upper):
     return out
 
 
-@no_type_check
 def fast_aten_tril(input, diagonal=0):
     return _fast_triangular(input, diagonal, 0)
 
 
-@no_type_check
 def fast_aten_triu(input, diagonal=0):
     return _fast_triangular(input, diagonal, 1)
 
 
-@no_type_check
 def fast_aten_index(input, indices):
     t = _t(input)
     if t is None or not isinstance(indices, list | tuple):
@@ -2537,7 +2408,6 @@ def fast_aten_index(input, indices):
     return NOT_HANDLED
 
 
-@no_type_check
 def _fast_scatter(input, dim, index, src, value):
     a = _t(input)
     idx = _t(index)
@@ -2610,17 +2480,14 @@ def _fast_scatter(input, dim, index, src, value):
     return out
 
 
-@no_type_check
 def fast_aten_scatter_src(input, dim, index, src):
     return _fast_scatter(input, dim, index, src, None)
 
 
-@no_type_check
 def fast_aten_scatter_value(input, dim, index, value):
     return _fast_scatter(input, dim, index, None, value)
 
 
-@no_type_check
 def fast_aten_select_scatter(input, src, dim, index):
     a = _t(input)
     s = _t(src)
@@ -2644,7 +2511,6 @@ def fast_aten_select_scatter(input, src, dim, index):
     return out
 
 
-@no_type_check
 def fast_aten_nonzero(input):
     t = _t(input)
     if t is None:
@@ -2660,7 +2526,6 @@ def fast_aten_nonzero(input):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, eps):
     a = _t(input)
     stats = [_t(x) for x in (running_mean, running_var, weight, bias)]
@@ -2712,7 +2577,6 @@ def _fast_batch_norm_inference(input, weight, bias, running_mean, running_var, e
     return (out, _alloc((0,), a._dtype, a._device), _alloc((0,), a._dtype, a._device))
 
 
-@no_type_check
 def fast_aten_native_batch_norm(
     input, weight, bias, running_mean, running_var, training, momentum, eps
 ):
@@ -2723,7 +2587,6 @@ def fast_aten_native_batch_norm(
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten__native_batch_norm_legit_no_training(
     input, weight, bias, running_mean, running_var, momentum, eps
 ):
@@ -2732,7 +2595,6 @@ def fast_aten__native_batch_norm_legit_no_training(
     )
 
 
-@no_type_check
 def fast_aten_native_dropout(input, p, train):
     """Contiguous float32 GPU native dropout with host-owned RNG state.
 
@@ -2806,7 +2668,6 @@ def fast_aten_native_dropout(input, p, train):
     return output, mask
 
 
-@no_type_check
 def fast_aten_native_dropout_backward(grad_output, mask, scale):
     """Float32 GPU native-dropout backward through the saved bool mask."""
     grad = _t(grad_output)
@@ -2839,7 +2700,6 @@ def fast_aten_native_dropout_backward(grad_output, mask, scale):
     return grad_input
 
 
-@no_type_check
 def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
     a = _t(input)
     normalized_shape = tuple(normalized_shape)
@@ -2933,7 +2793,6 @@ def fast_aten_native_layer_norm(input, normalized_shape, weight, bias, eps):
     return out, mean, rstd
 
 
-@no_type_check
 def fast_aten_native_layer_norm_backward(
     grad_out, input, normalized_shape, mean, rstd, weight, bias, output_mask
 ):
@@ -3072,7 +2931,6 @@ _ANYALL_DTYPES = _FLOAT_DTYPES + (
 )
 
 
-@no_type_check
 def _torch_dtype_to_max(dtype):
     from max.experimental.torch.torch import torch_dtype_to_max
 
@@ -3082,7 +2940,6 @@ def _torch_dtype_to_max(dtype):
         return None
 
 
-@no_type_check
 def _norm_reduce_dims(dim, rank, empty_is_all):
     """Sorted unique normalized reduce dims, or None if the spec is invalid.
 
@@ -3115,7 +2972,6 @@ def _norm_reduce_dims(dim, rank, empty_is_all):
     return sorted(out)
 
 
-@no_type_check
 def _reduced_shape(shape, reduce_dims, keepdim):
     """The reduction output shape (keepdim already applied)."""
     rset = set(reduce_dims)
@@ -3124,7 +2980,6 @@ def _reduced_shape(shape, reduce_dims, keepdim):
     return tuple(s for i, s in enumerate(shape) if i not in rset)
 
 
-@no_type_check
 def fast_aten_mean(input, dim=None, keepdim=False, *, dtype=None):
     a = _t(input)
     if a is None:
@@ -3147,7 +3002,6 @@ def fast_aten_mean(input, dim=None, keepdim=False, *, dtype=None):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_sum(input, dim=None, keepdim=False, *, dtype=None):
     a = _t(input)
     if a is None:
@@ -3183,7 +3037,6 @@ def fast_aten_sum(input, dim=None, keepdim=False, *, dtype=None):
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_linalg_vector_norm(self, ord=2, dim=None, keepdim=False, *, dtype=None):
     """FP32 L2 norm composed from existing eager elementwise/reduction ops."""
     input = _t(self)
@@ -3207,7 +3060,6 @@ def fast_aten_linalg_vector_norm(self, ord=2, dim=None, keepdim=False, *, dtype=
     return fast_aten_sqrt(summed)
 
 
-@no_type_check
 def _amax_amin(input, dim, keepdim, spec_name):
     a = _t(input)
     if a is None or a._dtype not in _ROW_REDUCE_DTYPES:
@@ -3220,17 +3072,14 @@ def _amax_amin(input, dim, keepdim, spec_name):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_amax(input, dim=(), keepdim=False):
     return _amax_amin(input, dim, keepdim, "AmaxSpec")
 
 
-@no_type_check
 def fast_aten_amin(input, dim=(), keepdim=False):
     return _amax_amin(input, dim, keepdim, "AminSpec")
 
 
-@no_type_check
 def fast_aten_min(input):
     # Values-only full reduction: aten::min(Tensor) -> Tensor.
     t = _t(input)
@@ -3240,7 +3089,6 @@ def fast_aten_min(input):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_min_dim(input, dim, keepdim=False):
     """aten::min.dim -> (values, indices) along `dim` (first-min-wins)."""
     a = _t(input)
@@ -3261,7 +3109,6 @@ def fast_aten_min_dim(input, dim, keepdim=False):
     return NOT_HANDLED
 
 
-@no_type_check
 def _argreduce(input, dim, keepdim, is_min):
     a = _t(input)
     if a is None or a._numel == 0 or a._dtype not in _ROW_REDUCE_DTYPES:
@@ -3281,17 +3128,14 @@ def _argreduce(input, dim, keepdim, is_min):
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_argmax(input, dim=None, keepdim=False):
     return _argreduce(input, dim, keepdim, is_min=False)
 
 
-@no_type_check
 def fast_aten_argmin(input, dim=None, keepdim=False):
     return _argreduce(input, dim, keepdim, is_min=True)
 
 
-@no_type_check
 def fast_aten_max(input, *args, **kwargs):
     # Only the values-only overload max(Tensor) -> Tensor.
     if args or kwargs:
@@ -3305,7 +3149,6 @@ def fast_aten_max(input, *args, **kwargs):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_var(input, dim=None, *, correction=1, keepdim=False):
     a = _t(input)
     if a is None or a._dtype not in _FLOAT_DTYPES:
@@ -3322,7 +3165,6 @@ def fast_aten_var(input, dim=None, *, correction=1, keepdim=False):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def _any_all(input, dim, keepdim, is_all):
     a = _t(input)
     if a is None or a._dtype not in _ANYALL_DTYPES:
@@ -3347,17 +3189,14 @@ def _any_all(input, dim, keepdim, is_all):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_all(input, dim=None, keepdim=False):
     return _any_all(input, dim, keepdim, is_all=True)
 
 
-@no_type_check
 def fast_aten_any(input, dim=None, keepdim=False):
     return _any_all(input, dim, keepdim, is_all=False)
 
 
-@no_type_check
 def fast_aten__log_softmax(input, dim, half_to_float=False):
     t = _t(input)
     if (
@@ -3394,7 +3233,6 @@ def fast_aten__log_softmax(input, dim, half_to_float=False):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten__log_softmax_backward_data(grad_output, output, dim, input_dtype):
     grad = _t(grad_output)
     saved_output = _t(output)
@@ -3482,7 +3320,6 @@ def fast_aten__log_softmax_backward_data(grad_output, output, dim, input_dtype):
     return grad_input
 
 
-@no_type_check
 def _nll_loss_inputs(self, target, weight, reduction, ignore_index):
     """Validate the f32/i64 two-dimensional NLL kernel contract.
 
@@ -3520,7 +3357,6 @@ def _nll_loss_inputs(self, target, weight, reduction, ignore_index):
     return log_probs, labels, rows, classes
 
 
-@no_type_check
 def fast_aten_nll_loss_forward_output(
     self, target, weight, reduction, ignore_index, *, output, total_weight
 ):
@@ -3568,7 +3404,6 @@ def fast_aten_nll_loss_forward_output(
     return output, total_weight
 
 
-@no_type_check
 def fast_aten_nll_loss_backward_grad_input(
     grad_output,
     self,
@@ -3628,7 +3463,6 @@ def fast_aten_nll_loss_backward_grad_input(
     return grad_input
 
 
-@no_type_check
 def fast_aten_cumsum(input, dim, *, dtype=None):
     a = _t(input) if dtype is None else None
     if (
@@ -3649,7 +3483,6 @@ def fast_aten_cumsum(input, dim, *, dtype=None):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def _pair(x) -> tuple[int, int] | None:
     if isinstance(x, int):
         return (x, x)
@@ -3664,7 +3497,6 @@ def _pair(x) -> tuple[int, int] | None:
     return None
 
 
-@no_type_check
 def fast_aten_max_pool2d_with_indices(
     input, kernel_size, stride=None, padding=0, dilation=1, ceil_mode=False
 ):
@@ -3709,7 +3541,6 @@ def fast_aten_max_pool2d_with_indices(
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_aten_avg_pool2d(
     input,
     kernel_size,
@@ -3769,7 +3600,6 @@ def fast_aten_avg_pool2d(
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten__adaptive_avg_pool2d(input, output_size):
     a = _tc(input)
     osize = _pair(output_size)
@@ -3795,7 +3625,6 @@ def fast_aten__adaptive_avg_pool2d(input, output_size):
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_native_group_norm(input, weight, bias, N, C, HxW, group, eps):
     a = _tc(input)
     if (
@@ -3851,7 +3680,6 @@ def fast_aten_native_group_norm(input, weight, bias, N, C, HxW, group, eps):
     return NOT_HANDLED
 
 
-@no_type_check
 def _area_pixel_scale(in_size, out_size, align_corners, scale):
     """torch area_pixel_compute_scale for one axis."""
     if align_corners:
@@ -3861,7 +3689,6 @@ def _area_pixel_scale(in_size, out_size, align_corners, scale):
     return in_size / out_size
 
 
-@no_type_check
 def fast_aten_upsample_bilinear2d(
     input, output_size, align_corners, scales_h=None, scales_w=None
 ):
@@ -3900,7 +3727,6 @@ def fast_aten_upsample_bilinear2d(
     return NOT_HANDLED
 
 
-@no_type_check
 def _sdpa_math_forward_with_dropout(query, key, value, is_causal, scale, dropout_p):
     """Decomposed SDPA returning output, pre-dropout probabilities, and mask.
 
@@ -4032,7 +3858,6 @@ def _sdpa_math_forward_with_dropout(query, key, value, is_causal, scale, dropout
     return out4, probs4, mask4
 
 
-@no_type_check
 def _fa4_bf16_d64_causal_inputs(
     query,
     key,
@@ -4081,7 +3906,6 @@ def _fa4_bf16_d64_causal_inputs(
     return q, k, v
 
 
-@no_type_check
 def _fa4_strided_bthd_layout(tensor) -> bool:
     """Whether a physical BTHD view is safe for FA4's strided TMA ABI.
 
@@ -4119,7 +3943,6 @@ def _fa4_strided_bthd_layout(tensor) -> bool:
     )
 
 
-@no_type_check
 def _fa4_native_bthd(tensor):
     """Expose public BHTD storage as FA4-native BTHD, copying if required."""
     physical = fast_aten_transpose(tensor, 1, 2)
@@ -4130,7 +3953,6 @@ def _fa4_native_bthd(tensor):
     return _tc(physical)
 
 
-@no_type_check
 def _fa4_prepare_qkv_bridge(q_native, k_native, v_native):
     """Return prepared Q/K/V plus whether their strided ABI is required."""
     qkv = (q_native, k_native, v_native)
@@ -4146,7 +3968,6 @@ def _fa4_prepare_qkv_bridge(q_native, k_native, v_native):
     return qkv, False
 
 
-@no_type_check
 def fast_fa4_bf16_d64_causal_forward(
     query,
     key,
@@ -4222,7 +4043,6 @@ def fast_fa4_bf16_d64_causal_forward(
     return output, logsumexp, q_native, k_native, v_native
 
 
-@no_type_check
 def fast_fa4_bf16_d64_causal_backward(
     q_native, k_native, v_native, output, logsumexp, grad_output, scale
 ):
@@ -4312,7 +4132,6 @@ def fast_fa4_bf16_d64_causal_backward(
     return grad_query, grad_key, grad_value
 
 
-@no_type_check
 def _sdpa_math_forward(query, key, value, is_causal, scale):
     """Dropout-free compatibility wrapper returning ``(output, probs)``."""
     result = _sdpa_math_forward_with_dropout(query, key, value, is_causal, scale, 0.0)
@@ -4322,7 +4141,6 @@ def _sdpa_math_forward(query, key, value, is_causal, scale):
     return output, probabilities
 
 
-@no_type_check
 def fast_aten__scaled_dot_product_attention_math(
     query,
     key,
@@ -4349,7 +4167,6 @@ def fast_aten__scaled_dot_product_attention_math(
     return out, probs
 
 
-@no_type_check
 def fast_aten__scaled_dot_product_flash_attention(
     query,
     key,
@@ -4388,7 +4205,6 @@ def fast_aten__scaled_dot_product_flash_attention(
     return (out, logsumexp, None, None, sq, sk, rng_state, unused, debug_attn_mask)
 
 
-@no_type_check
 def fast_aten__scaled_dot_product_flash_attention_backward(
     grad_out,
     query,
@@ -4479,7 +4295,6 @@ def fast_aten__scaled_dot_product_flash_attention_backward(
     )
 
 
-@no_type_check
 def fast_aten__scaled_dot_product_efficient_attention(
     query,
     key,
@@ -4508,7 +4323,6 @@ def fast_aten__scaled_dot_product_efficient_attention(
     return (out, log_sumexp, philox_seed, philox_offset)
 
 
-@no_type_check
 def fast_sdpa_dropout_softmax_backward(
     probabilities, grad_after_dropout, dropout_mask, dropout_scale, score_scale
 ):
@@ -4597,8 +4411,7 @@ def fast_sdpa_dropout_softmax_backward(
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
-def _tf32_dense_2d_layout(tensor: TorchMojoTensor) -> bool | None:
+def _tf32_dense_2d_layout(tensor: MojoTensorLike) -> bool | None:
     """Return the physical-transpose flag for an exact dense 2-D layout."""
     if len(tensor._shape) != 2:
         return None
@@ -4611,8 +4424,7 @@ def _tf32_dense_2d_layout(tensor: TorchMojoTensor) -> bool | None:
     return None
 
 
-@no_type_check
-def _tf32_dense_batched_layout(tensor: TorchMojoTensor) -> tuple[bool, int] | None:
+def _tf32_dense_batched_layout(tensor: MojoTensorLike) -> tuple[bool, int] | None:
     """Classify dense matrices separated by a non-overlapping batch stride.
 
     The boolean is the physical per-matrix transpose flag and the integer is
@@ -4679,7 +4491,6 @@ def _resolve_tf32_bridge(name: str):
         return None
 
 
-@no_type_check
 def _try_bf16_gemm(a, b, bias=None, *, transpose_b=False, output_shape=None):
     """Enqueue the dense H100 BF16 GEMM, or return ``None``.
 
@@ -4747,7 +4558,6 @@ def _try_bf16_gemm(a, b, bias=None, *, transpose_b=False, output_shape=None):
     return out
 
 
-@no_type_check
 def _try_tf32_gemm(a, b, bias=None, *, transpose_b=False, output_shape=None):
     """Enqueue the opt-in dense H100 TF32 GEMM, or return ``None``.
 
@@ -4817,7 +4627,6 @@ def _try_tf32_gemm(a, b, bias=None, *, transpose_b=False, output_shape=None):
     return out
 
 
-@no_type_check
 def _try_bf16_bmm(a, b, *, transpose_b=False):
     """Enqueue dense H100 BF16 BMM over packed or padded batches."""
     lhs = _t(a)
@@ -4870,7 +4679,6 @@ def _try_bf16_bmm(a, b, *, transpose_b=False):
     return out
 
 
-@no_type_check
 def _try_tf32_bmm(a, b, *, transpose_b=False):
     """Enqueue the dormant dense H100 TF32 BMM, or return ``None``.
 
@@ -4931,7 +4739,6 @@ def _try_tf32_bmm(a, b, *, transpose_b=False):
     return out
 
 
-@no_type_check
 def _try_bf16_linear(input, weight, bias=None):
     """Route a dense rank >= 2 BF16 projection through GEMM without copies."""
     a = _t(input)
@@ -4962,7 +4769,6 @@ def _try_bf16_linear(input, weight, bias=None):
     )
 
 
-@no_type_check
 def _try_tf32_linear(input, weight, bias=None):
     """Route a dense rank >= 2 linear projection through TF32 without copies.
 
@@ -5001,7 +4807,6 @@ def _try_tf32_linear(input, weight, bias=None):
     )
 
 
-@no_type_check
 def fast_aten_mm(x, y):
     out = _try_bf16_gemm(x, y)
     if out is not None:
@@ -5013,7 +4818,6 @@ def fast_aten_mm(x, y):
     return out if out is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_addmm(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     # beta/alpha scaling isn't implemented by the fast path (falls through).
     if beta == 1 and alpha == 1:
@@ -5029,7 +4833,6 @@ def fast_aten_addmm(input, mat1, mat2, *, beta=1.0, alpha=1.0):
     return NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_linear(input, weight, bias=None):
     # Keep linear as a concrete backend op alongside fast_aten_linear_backward.
     # The GEMM kernel reads B transposed for free, so the weight is never
@@ -5090,7 +4893,6 @@ def fast_aten_linear(input, weight, bias=None):
     return fast_aten_view(out, (out._shape[-1],))
 
 
-@no_type_check
 def fast_aten_linear_backward(self, grad_output, weight, output_mask):
     input = _t(self)
     grad = _t(grad_output)
@@ -5186,7 +4988,6 @@ def fast_aten_linear_backward(self, grad_output, weight, output_mask):
     return grad_input, grad_weight, grad_bias
 
 
-@no_type_check
 def fast_aten_bmm(input, mat2):
     out = _try_bf16_bmm(input, mat2)
     if out is not None:
@@ -5198,7 +4999,6 @@ def fast_aten_bmm(input, mat2):
     return out if out is not None else NOT_HANDLED
 
 
-@no_type_check
 def _fast_aten_bmm_transpose_b(input, mat2):
     """Batched ``input @ mat2.transpose(-2, -1)`` without a transpose copy.
 
@@ -5224,7 +5024,6 @@ def _fast_aten_bmm_transpose_b(input, mat2):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_aten_convolution(
     input, weight, bias, stride, padding, dilation, transposed, output_padding, groups
 ):
@@ -5332,7 +5131,6 @@ def fast_aten_convolution(
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_aten_scaled_dot_product_attention(
     query,
     key,
@@ -5450,7 +5248,6 @@ def fast_aten_scaled_dot_product_attention(
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_aten__softmax(input, dim, half_to_float=False):
     t = _t(input)
     if (
@@ -5482,7 +5279,6 @@ def fast_aten__softmax(input, dim, half_to_float=False):
     return result if result is not None else NOT_HANDLED
 
 
-@no_type_check
 def fast_aten_softmax(input, dim=-1, dtype=None):
     if dtype is not None:
         return NOT_HANDLED
@@ -5494,7 +5290,6 @@ def fast_aten_softmax(input, dim=-1, dtype=None):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_aten_embedding(
     input, weight, padding_idx=-1, scale_grad_by_freq=False, sparse=False
 ):
@@ -5533,7 +5328,6 @@ def fast_aten_embedding(
     return out
 
 
-@no_type_check
 def fast_aten_embedding_dense_backward(
     grad_output, indices, num_weights, padding_idx, scale_grad_by_freq
 ):
@@ -5597,7 +5391,6 @@ def fast_aten_embedding_dense_backward(
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_filled(shape, value, dtype: DType, device):
     """A TorchMojoTensor of `shape` filled with `value`, or None."""
     if isinstance(value, bool):
@@ -5627,7 +5420,6 @@ def fast_filled(shape, value, dtype: DType, device):
 _ARANGE_DTYPES = _FILL_DTYPES[:-1]
 
 
-@no_type_check
 def fast_arange(numel, start, step, dtype: DType, device):
     """A 1-D TorchMojoTensor holding start + i*step (device kernel), or None.
 
@@ -5652,7 +5444,6 @@ def fast_arange(numel, start, step, dtype: DType, device):
 # ---------------------------------------------------------------------------
 
 
-@no_type_check
 def fast_aten__local_scalar_dense(tensor):
     t = _t(tensor)
     if t is None or t._numel != 1:
@@ -5674,7 +5465,6 @@ def _instrument_call_counts():
 
         def make_wrapper(wrapped):
             @functools.wraps(wrapped)
-            @no_type_check
             def wrapper(*args, **kwargs):
                 wrapper.call_count += 1
                 return wrapped(*args, **kwargs)

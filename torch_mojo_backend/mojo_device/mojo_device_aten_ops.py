@@ -10,7 +10,6 @@ docs/strided_owning_tensors_design.md.
 import functools
 import math
 from collections.abc import Callable
-from typing import no_type_check
 
 import torch
 from max.experimental.torch.torch import torch_dtype_to_max
@@ -140,7 +139,6 @@ def _register_missing(op_name: str):
     register_aten_op(op_name)(_not_implemented(op_name))
 
 
-@no_type_check
 def _copy_into_tensor(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     """dst[...] = src[...] with dtype cast + broadcast, any strides."""
     aten_fast = _fast()
@@ -154,7 +152,6 @@ def _copy_into_tensor(dst: TorchMojoTensor, src: TorchMojoTensor) -> None:
     aten_fast._copy_into(dst, src)
 
 
-@no_type_check
 def _out_variant(op_name: str, fast_name: str, *, dtype_policy: str = "safe_cast"):
     """Wrap a functional fast implementation as an out= variant: compute,
     then copy into `out` (strided-safe)."""
@@ -216,7 +213,6 @@ def _out_variant(op_name: str, fast_name: str, *, dtype_policy: str = "safe_cast
 
 
 @register_aten_op("aten::_copy_from")
-@no_type_check
 def mojo_device__copy_from(self, dest, non_blocking: bool = False):
     src_is_mojo = isinstance(self, TorchMojoTensor)
     dest_is_mojo = isinstance(dest, TorchMojoTensor)
@@ -269,7 +265,6 @@ def mojo_device__copy_from(self, dest, non_blocking: bool = False):
     )
 
 
-@no_type_check
 def max_dtype_to_torch_dtype(dtype):
     from max.experimental.torch import max_dtype_to_torch
 
@@ -277,7 +272,6 @@ def max_dtype_to_torch_dtype(dtype):
 
 
 @register_aten_op("aten::_to_copy")
-@no_type_check
 def mojo_device__to_copy(
     tensor,
     *,
@@ -338,7 +332,6 @@ def mojo_device__to_copy(
 
 
 @register_aten_op("aten::empty.memory_format")
-@no_type_check
 def mojo_device_empty_memory_format(
     size, *, dtype=None, layout=None, device=None, pin_memory=None, memory_format=None
 ) -> TorchMojoTensor:
@@ -350,7 +343,6 @@ def mojo_device_empty_memory_format(
 
 @register_aten_op("aten::empty_strided.memory_format")
 @register_aten_op("aten::empty_strided")
-@no_type_check
 def empty_strided(
     size, stride, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMojoTensor:
@@ -363,7 +355,6 @@ def empty_strided(
 
 
 @register_aten_op("aten::empty_permuted")
-@no_type_check
 def mojo_device_empty_permuted(
     size, physical_layout, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMojoTensor:
@@ -375,7 +366,6 @@ def mojo_device_empty_permuted(
 
 
 @register_aten_op("aten::empty_like")
-@no_type_check
 def mojo_device_empty_like(
     self: TorchMojoTensor,
     *,
@@ -390,7 +380,6 @@ def mojo_device_empty_like(
     return TorchMojoTensor._alloc(self._shape, max_dtype, mojo_device)
 
 
-@no_type_check
 def _new_factory_device(self: TorchMojoTensor, device):
     """Target MAX device for a `new_*` factory. torch passes `self`'s device
     (whose torch-side index is the phantom 0) when the caller doesn't
@@ -405,7 +394,6 @@ def _new_factory_device(self: TorchMojoTensor, device):
 
 
 @register_aten_op("aten::new_empty")
-@no_type_check
 def mojo_device_new_empty(
     self: TorchMojoTensor,
     size,
@@ -422,7 +410,6 @@ def mojo_device_new_empty(
 
 
 @register_aten_op("aten::new_zeros")
-@no_type_check
 def mojo_device_new_zeros(
     self: TorchMojoTensor,
     size,
@@ -440,7 +427,6 @@ def mojo_device_new_zeros(
 
 
 @register_aten_op("aten::new_ones")
-@no_type_check
 def mojo_device_new_ones(
     self: TorchMojoTensor,
     size,
@@ -458,7 +444,6 @@ def mojo_device_new_ones(
 
 
 @register_aten_op("aten::new_full")
-@no_type_check
 def mojo_device_new_full(
     self: TorchMojoTensor,
     size,
@@ -478,7 +463,6 @@ def mojo_device_new_full(
     return result
 
 
-@no_type_check
 def _fast_filled_tensor(size, value, dtype, device):
     """Filled-tensor factory (alloc + Fill), or raises."""
     try:
@@ -494,7 +478,6 @@ def _fast_filled_tensor(size, value, dtype, device):
 
 
 @register_aten_op("aten::full")
-@no_type_check
 def mojo_device_full(
     size, fill_value, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMojoTensor:
@@ -510,7 +493,6 @@ def mojo_device_full(
 
 
 @register_aten_op("aten::full_like")
-@no_type_check
 def mojo_device_full_like(
     self: TorchMojoTensor,
     fill_value,
@@ -530,7 +512,6 @@ def mojo_device_full_like(
 
 
 @register_aten_op("aten::ones")
-@no_type_check
 def mojo_device_ones(
     size, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMojoTensor:
@@ -539,7 +520,6 @@ def mojo_device_ones(
 
 
 @register_aten_op("aten::ones_like")
-@no_type_check
 def mojo_device_ones_like(
     self: TorchMojoTensor,
     *,
@@ -553,7 +533,6 @@ def mojo_device_ones_like(
 
 
 @register_aten_op("aten::zeros")
-@no_type_check
 def mojo_device_zeros(
     size, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMojoTensor:
@@ -562,7 +541,6 @@ def mojo_device_zeros(
 
 
 @register_aten_op("aten::zeros_like")
-@no_type_check
 def mojo_device_zeros_like(
     self: TorchMojoTensor,
     *,
@@ -576,7 +554,6 @@ def mojo_device_zeros_like(
 
 
 @register_aten_op("aten::scalar_tensor")
-@no_type_check
 def mojo_device_scalar_tensor(
     s, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMojoTensor:
@@ -584,13 +561,11 @@ def mojo_device_scalar_tensor(
     return _fast_filled_tensor((), s, resolved, device)
 
 
-@no_type_check
 def _host_arange_tensor(start, end, step, dtype: torch.dtype | None) -> torch.Tensor:
     """torch.arange built on the host (exact torch semantics)."""
     return torch.arange(start, end, step, dtype=dtype)
 
 
-@no_type_check
 def _device_arange(start, end, step, dtype: torch.dtype | None, device):
     """torch.arange computed by a device kernel, or None to use the host
     path. HF generation loops call torch.arange(..., device=...) every
@@ -629,7 +604,6 @@ _MAX_EXACT_F64_INT = 2**53
 
 
 @register_aten_op("aten::arange")
-@no_type_check
 def mojo_device_arange(
     start, end=None, step=1, *, dtype=None, layout=None, device=None, pin_memory=None
 ) -> TorchMojoTensor:
@@ -644,7 +618,6 @@ def mojo_device_arange(
 
 
 @register_aten_op("aten::arange.start_out")
-@no_type_check
 def mojo_device_arange_start_out(start, end, step=1, *, out) -> TorchMojoTensor:
     # torch.arange(start, end, step, device=...) dispatches to the out
     # variant with a pre-allocated `out` of the right size and dtype.
@@ -662,7 +635,6 @@ def mojo_device_arange_start_out(start, end, step=1, *, out) -> TorchMojoTensor:
 
 
 @register_aten_op("aten::embedding")
-@no_type_check
 def mojo_device_embedding(
     weight, indices, padding_idx=-1, scale_grad_by_freq=False, sparse=False
 ):
@@ -694,7 +666,6 @@ def mojo_device_embedding(
 
 
 @register_aten_op("aten::normal_")
-@no_type_check
 def mojo_device_normal_(
     self: TorchMojoTensor, mean: float = 0.0, std: float = 1.0, generator=None
 ) -> TorchMojoTensor:
@@ -714,7 +685,6 @@ def mojo_device_normal_(
 
 
 @register_aten_op("aten::add_.Tensor")
-@no_type_check
 def mojo_device_add_(
     self: TorchMojoTensor, other, alpha: float = 1.0
 ) -> TorchMojoTensor:
@@ -725,7 +695,6 @@ def mojo_device_add_(
 
 
 @register_aten_op("aten::fill_.Scalar")
-@no_type_check
 def mojo_device_fill__scalar(self: TorchMojoTensor, value) -> TorchMojoTensor:
     result = _fast().fast_aten_fill__scalar(self, value)
     if result is None:
@@ -735,7 +704,6 @@ def mojo_device_fill__scalar(self: TorchMojoTensor, value) -> TorchMojoTensor:
 
 @register_aten_op("aten::masked_fill_.Scalar")
 @register_aten_op("aten::masked_fill_.Tensor")
-@no_type_check
 def mojo_device_masked_fill_(
     self: TorchMojoTensor, mask: TorchMojoTensor, value
 ) -> TorchMojoTensor:
@@ -746,7 +714,6 @@ def mojo_device_masked_fill_(
 
 
 @register_aten_op("aten::mul_.Tensor")
-@no_type_check
 def mojo_device_mul_(self: TorchMojoTensor, other) -> TorchMojoTensor:
     result = _fast().fast_aten_mul_(self, other)
     if result is None:
@@ -755,7 +722,6 @@ def mojo_device_mul_(self: TorchMojoTensor, other) -> TorchMojoTensor:
 
 
 @register_aten_op("aten::relu_")
-@no_type_check
 def mojo_device_relu_(self: TorchMojoTensor) -> TorchMojoTensor:
     aten_fast = _fast()
     result = aten_fast.fast_aten_relu(self)
@@ -766,7 +732,6 @@ def mojo_device_relu_(self: TorchMojoTensor) -> TorchMojoTensor:
 
 
 @register_aten_op("aten::zero_")
-@no_type_check
 def mojo_device_zero_(self: TorchMojoTensor) -> TorchMojoTensor:
     return mojo_device_fill__scalar(self, 0)
 
@@ -809,7 +774,6 @@ register_aten_op("aten::isin.Tensor_Tensor_out")(
 
 
 @register_aten_op("aten::min.dim")
-@no_type_check
 def mojo_device_min_dim(
     input: TorchMojoTensor, dim: int, keepdim: bool = False
 ) -> tuple[TorchMojoTensor, TorchMojoTensor]:
@@ -824,7 +788,6 @@ def mojo_device_min_dim(
 
 
 @register_aten_op("aten::min.dim_min")
-@no_type_check
 def mojo_device_min_dim_min(
     input: TorchMojoTensor,
     dim: int,
@@ -859,7 +822,6 @@ _register_fast("aten::_adaptive_avg_pool2d", "fast_aten__adaptive_avg_pool2d")
 
 
 @register_aten_op("aten::_foreach_mul_.Tensor")
-@no_type_check
 def mojo_device__foreach_mul__tensor(self, other):
     aten_fast = _fast()
     result = aten_fast.fast_aten__foreach_mul__tensor(self, other)
@@ -880,7 +842,6 @@ def mojo_device__foreach_mul__tensor(self, other):
 
 
 @register_aten_op("aten::_foreach_norm.Scalar")
-@no_type_check
 def mojo_device__foreach_norm_scalar(self, ord=2, dtype=None):
     aten_fast = _fast()
     result = aten_fast.fast_aten__foreach_norm(self, ord, dtype=dtype)

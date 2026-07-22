@@ -8,7 +8,6 @@ while normalization and NLL run in FP32. Unlisted operations fall through.
 
 import functools
 from collections.abc import Mapping
-from typing import no_type_check
 
 import torch
 
@@ -19,7 +18,6 @@ _aten_library = None
 _AUTOCAST_KEYSET = torch._C.DispatchKeySet(torch._C.DispatchKey.AutocastPrivateUse1)
 
 
-@no_type_check
 def _cast_mojo_floating(value, dtype):
     """Recursively cast eligible Mojo floating tensors, leaving metadata alone."""
     if isinstance(value, torch.Tensor):
@@ -42,7 +40,6 @@ def _cast_mojo_floating(value, dtype):
 
 def _policy_wrapper(op, dtype_getter):
     @functools.wraps(op)
-    @no_type_check
     def wrapper(*args, **kwargs):
         # Casts themselves must redispatch below AutocastPrivateUse1, otherwise
         # their internal _to_copy calls would re-enter this policy layer.

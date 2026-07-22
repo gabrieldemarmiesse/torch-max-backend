@@ -8,11 +8,15 @@ values that hooks deliberately unpack onto the host.
 """
 
 import math
-from typing import no_type_check
+from typing import TypeVar
 
 import torch
 
 from .torch_mojo_tensor import TorchMojoTensor
+
+# _require_handled passes its argument through unchanged, including the
+# symbolic stand-ins host-contract tests route through it.
+_ResultT = TypeVar("_ResultT")
 
 _registered = False
 
@@ -23,8 +27,7 @@ def _fast():
     return aten_fast
 
 
-@no_type_check
-def _require_handled(result, operation: str) -> TorchMojoTensor:
+def _require_handled(result: _ResultT | None, operation: str) -> _ResultT:
     aten_fast = _fast()
     if result is None or result is aten_fast.NOT_HANDLED:
         raise NotImplementedError(
@@ -33,7 +36,6 @@ def _require_handled(result, operation: str) -> TorchMojoTensor:
     return result
 
 
-@no_type_check
 def _contiguous_view(tensor: TorchMojoTensor, shape) -> TorchMojoTensor:
     tensor = tensor._contig()
     return _require_handled(_fast().fast_aten_view(tensor, tuple(shape)), "view")
@@ -68,7 +70,6 @@ class _SavedMojoPayload:
         "is_contiguous",
     )
 
-    @no_type_check
     def __init__(self, tensor: TorchMojoTensor):
         self.holder = None if _saved_tensor_hooks_active() else tensor._holder
         self.ptr = tensor._ptr
@@ -82,7 +83,6 @@ class _SavedMojoPayload:
         self.torch_device = tensor._torch_device
         self.is_contiguous = tensor._is_contiguous
 
-    @no_type_check
     def restore(self, tensor: torch.Tensor) -> TorchMojoTensor:
         if isinstance(tensor, TorchMojoTensor) and hasattr(tensor, "_holder"):
             return self._validate_hook_result(tensor)
@@ -122,7 +122,6 @@ class _SavedMojoPayload:
             contiguous=self.is_contiguous,
         )
 
-    @no_type_check
     def _validate_hook_result(self, tensor: torch.Tensor) -> TorchMojoTensor:
         required = (
             "_holder",
@@ -181,7 +180,6 @@ def _saved_tensor_hooks_active() -> bool:
         return False
 
 
-@no_type_check
 def _restore_saved_mojo_tensors(ctx):
     saved_tensors = ctx.saved_tensors
     payloads = ctx.saved_payloads
@@ -198,7 +196,6 @@ def _restore_saved_mojo_tensors(ctx):
 # whose fused intermediate-saving backward has no native ATen schema.
 class _ScaledDotProductAttentionAutograd(torch.autograd.Function):
     @staticmethod
-    @no_type_check
     def forward(
         ctx, query, key, value, attn_mask, dropout_p, is_causal, scale, enable_gqa
     ):
@@ -259,7 +256,6 @@ class _ScaledDotProductAttentionAutograd(torch.autograd.Function):
         return output
 
     @staticmethod
-    @no_type_check
     def backward(ctx, grad_output):
         aten_fast = _fast()
         restored = _restore_saved_mojo_tensors(ctx)
@@ -425,7 +421,6 @@ class _ScaledDotProductAttentionAutograd(torch.autograd.Function):
         return grad_query, grad_key, grad_value, None, None, None, None, None
 
 
-@no_type_check
 def _scaled_dot_product_attention_autograd(
     query,
     key,
