@@ -1875,6 +1875,30 @@ def test_aten_isin_3d_tensor(conf: Conf):
     check_outputs(fn, conf, [elements, test_elements])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize(("shape", "dim"), [((64, 40), -1), ((4, 5, 64), 1)])
+def test_aten__log_softmax_backward_data_autograd(
+    conf: Conf,
+    call_checker: CallChecker,
+    dtype: torch.dtype,
+    shape: tuple[int, ...],
+    dim: int,
+):
+    """Backward through log_softmax reaches the dedicated backward op."""
+    call_checker.register(aten_functions.aten__log_softmax_backward_data)
+
+    def fn(x, grad_output):
+        leaf = x.detach().requires_grad_(True)
+        y = torch.log_softmax(leaf, dim=dim)
+        (grad_input,) = torch.autograd.grad(y, leaf, grad_output)
+        return grad_input
+
+    x = torch.randn(shape, dtype=dtype)
+    grad_output = torch.randn(shape, dtype=dtype)
+    tolerance = 2e-2 if dtype == torch.bfloat16 else 2e-3
+    check_outputs(fn, conf, [x, grad_output], atol=tolerance, rtol=tolerance)
+
+
 def test_aten_isin_with_assume_unique(conf: Conf):
     """Test aten.isin with assume_unique=True"""
 
