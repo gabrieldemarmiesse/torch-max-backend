@@ -45,6 +45,7 @@ from bf16_gemm_kernels import (
     enqueue_bf16_bmm as _enqueue_accepted_bf16_bmm,
     enqueue_bf16_gemm as _enqueue_accepted_bf16_gemm,
 )
+from bf16_gemm_nn_v4_kernels import maybe_enqueue_bf16_gemm_nn_v4
 
 
 comptime _V3_BF16 = DType.bfloat16
@@ -1631,6 +1632,26 @@ def enqueue_bf16_gemm(
                 DeviceAttribute.COMPUTE_CAPABILITY_MINOR
             )
             if cc_major == 9 and cc_minor == 0:
+                # NN dgrad route (v4): persistent warp-specialized kernel
+                # with 2-CTA-cluster B multicast and a TMA-store epilogue
+                # (bf16_gemm_nn_v4_kernels.mojo).  It gates itself on the
+                # same tall-m aligned NN regime (m // n >= 8, n % 256 == 0,
+                # k % 64 == 0; m may be ragged) and returns False for
+                # anything else, in which case the pre-existing NN paths
+                # below remain the fallback.
+                if maybe_enqueue_bf16_gemm_nn_v4(
+                    output,
+                    a,
+                    b,
+                    m,
+                    n,
+                    k,
+                    transpose_a,
+                    transpose_b,
+                    has_bias,
+                    ctx,
+                ):
+                    return
                 # A 64x128 tile preserves the prior aligned-NN coverage and
                 # increases available CTAs when the 128x256 grid would be
                 # severely underfilled on the current GPU.  This predicate is
