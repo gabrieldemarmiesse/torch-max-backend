@@ -1,6 +1,7 @@
 # Multi-GPU training on the mojo device (eager mode): design and plan
 
-Status: proposal (researched 2026-07, not yet implemented).
+Status: M0–M2 implemented (2026-07); M3 (overlap) not started. See
+"Implementation status" at the end of this document.
 
 Goal: data-parallel training across multiple GPUs on the `mojo` device in eager
 mode, with performance comparable to CUDA (`torchrun` + DDP + NCCL), while
@@ -219,6 +220,76 @@ Missing (the work):
 4. **8-GPU ceiling and P2P requirement** — fine for single-node
    DGX/MI300X-class boxes; document it. Non-P2P topologies fall back to the
    slow staged path.
+
+## Implementation status (2026-07)
+
+### M0 — done
+
+- Peer access: `get_ordered_accelerators()` enables all-pairs P2P (guarded by
+  `Device.can_access`, warns and falls back on failure);
+  `peer_access_enabled()` reports it.
+- Direct D2D: `tensor_holder.copy_d2d_peer` (cross-context
+  `enqueue_copy`, AsyncRT inserts the cross-stream ordering events);
+  `_copy_from` and `_to_copy` use it for GPU→GPU, host bounce remains for
+  CPU-involved pairs and non-P2P topologies.
+- `current_device` is thread-local; wrapper TensorImpls carry their real
+  device index (`mojo:i`), which is what makes DDP's C++ Reducer allocate
+  gradient buckets on each rank's own GPU. Because PyTorch's Python
+  PrivateUse1 guard advertises `deviceCount() == 1`, registration disables
+  autograd-engine multithreading when more than one device exists —
+  backward runs on the calling thread (thread-local; `spawn` applies it per
+  rank thread). `aten::as_strided` was added (Reducer bucket views).
+- Dispatch-budget microbench: `demo_scripts/multi_gpu_dispatch_bench.py`.
+  Measured on 8×H100 (fp32 transformer-ish mix, batch 4096, dim 1024):
+  scaling efficiency ~0.6 at 2 GPUs and ~0.5 at 8 GPUs for both a single
+  round-robin dispatcher and thread-per-rank issue — host dispatch is the
+  binding constraint once >2 queues must be fed, confirming risk #1. The
+  planned levers (GIL release inside extension enqueues, per-op overhead
+  reduction) are M3-adjacent work.
+
+### M1 — done
+
+- `eager_kernels/comm_ops.mojo`: allreduce over `comm.allreduce`, launched
+  per device via `comm.device_collective._launch_device_collective` (worker
+  affinity per device, GIL released during the launch), ngpus 2–8,
+  float32/bfloat16/float16, with a fused ÷world epilogue for mean.
+- `torch_mojo_backend/distributed.py`: `all_reduce(tensors, op)` /
+  `all_reduce_out`, with cached zeroed per-device Signal buffers
+  (`signal_header_bytes() + world * payload`, grow-on-demand, synchronized
+  once at allocation; barrier counters are monotonic so buffers are reused
+  across collectives with no reinit). The kernel is run out-of-place (the
+  1-stage path writes outputs while peers still read inputs) with an
+  on-device copy back for the in-place API.
+
+### M2 — done (spawn-based UX)
+
+- `MojoProcessGroup(torch.distributed.ProcessGroup)`: thread-per-rank ranks
+  rendezvous per collective (per-rank monotonic op ids match concurrent
+  collectives); the last-arriving rank executes the single multi-device
+  operation. `allreduce`(SUM/AVG on the comm kernels; other dtypes via a
+  host-staged fallback), `allreduce_coalesced`, `broadcast`/`allgather`/
+  `_allgather_base` (direct D2D copies), `barrier`. Work objects come from
+  `_create_work_from_future` (synchronous PG — correct with DDP out of the
+  box).
+- `torch_mojo_backend.distributed.spawn(fn, world_size)`: one thread per
+  rank, pinned to `mojo:rank`, calling-thread autograd, exceptions
+  propagated. Standard usage is `DDP(model, process_group=pg,
+  device_ids=None)`; see `demo_scripts/multi_gpu_ddp.py` and
+  `tests/test_multi_gpu_ddp.py` (DDP over 2 shards matches full-batch
+  single-GPU training; 8-GPU smoke).
+- Not yet done from the M2 list: `init_process_group("mojo")` UX (needs a
+  thread-local `_world` clone, as in PyTorch's `multi_threaded_pg`),
+  `reduce_scatter`, and comparing against the nccl-tests methodology.
+  `find_unused_parameters=True` / `static_graph=True` are unsupported (they
+  need a pinned-memory allocator registered for the backend).
+
+### M3 — not started
+
+Next steps, in order: benchmark allreduce bandwidth vs message size
+(bench_allreduce methodology) and end-to-end DDP scaling vs `torchrun` +
+NCCL on the same box; then the priority comm stream + events + async
+`Work.get_future()` machinery inside `comm_ops.mojo`; then bucket-size
+tuning against the allreduce dispatch table.
 
 ## Why this can plausibly reach CUDA parity
 
