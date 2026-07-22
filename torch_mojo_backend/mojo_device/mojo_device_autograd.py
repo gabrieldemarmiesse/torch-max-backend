@@ -1,11 +1,10 @@
 """AutogradPrivateUse1 plumbing for eager Mojo operations.
 
-PyTorch's saved-variable plumbing returns a base ``torch.Tensor`` view of an
-out-of-tree device tensor. That view keeps the version counter and saved-tensor
-hooks working, but loses ``TorchMojoTensor``'s Python payload
-(``_holder``/``_ptr``). These custom Functions save tensors normally, retain
-only their non-Tensor payload metadata, and reattach that payload when backward
-unpacks the saved variables.
+``TorchMojoTensor`` is a true wrapper subclass, so PyTorch's saved-variable
+plumbing now preserves its Python allocation payload. These custom Functions
+still provide backward formulas that are not registered as native Mojo ATen
+operators. Their sidecar metadata also validates saved-tensor hook results and
+restores values that hooks deliberately unpack onto the host.
 """
 
 import math
@@ -43,13 +42,12 @@ def _contiguous_view(tensor: TorchMojoTensor, shape) -> TorchMojoTensor:
 
 
 class _SavedMojoPayload:
-    """Non-Tensor state needed to use a PyTorch-unpacked saved variable.
+    """Metadata used to validate or restore a PyTorch-unpacked saved variable.
 
-    ``SavedVariable::unpack`` deliberately returns a fresh base Tensor Python
-    object for this out-of-tree backend. Its TensorImpl still carries the
-    correct dispatch keys and shared version counter; restoring the subclass
-    and Python-side allocation/layout fields makes that same object usable by
-    eager Mojo kernels without retaining a Tensor directly on ``ctx``.
+    The ordinary wrapper-subclass path returns a fresh, complete
+    ``TorchMojoTensor`` with the shared version counter and allocation payload.
+    The recorded fields validate that object without retaining a Tensor
+    directly on ``ctx``.
 
     Ordinarily the payload must retain the Mojo holder because TensorImpl does
     not own that out-of-tree allocation. With active saved-tensor hooks, the
@@ -111,20 +109,20 @@ class _SavedMojoPayload:
                 "return a complete TorchMojoTensor or a host tensor"
             )
 
-        tensor.__class__ = TorchMojoTensor
-        tensor._holder = self.holder
-        tensor._ptr = self.ptr
-        tensor._shape = self.shape
-        tensor._strides = self.strides
-        tensor._offset = self.offset
-        tensor._dtype = self.dtype
-        tensor._itemsize = self.itemsize
-        tensor._numel = self.numel
-        tensor._device = self.device
-        tensor._torch_device = self.torch_device
-        tensor._is_contiguous = self.is_contiguous
-        tensor.__dict__.pop("_spec", None)
-        return tensor
+        # Compatibility path for a PyTorch version that unpacks a plain
+        # PrivateUse1 tensor despite the wrapper subclass. SavedVariable has
+        # already checked the original shared version counter at this point;
+        # construct a valid wrapper instead of attempting an invalid class swap.
+        return TorchMojoTensor._make(
+            self.holder,
+            self.ptr,
+            self.shape,
+            self.strides,
+            self.offset,
+            self.dtype,
+            self.device,
+            contiguous=self.is_contiguous,
+        )
 
     @no_type_check
     def _validate_hook_result(self, tensor: torch.Tensor) -> TorchMojoTensor:

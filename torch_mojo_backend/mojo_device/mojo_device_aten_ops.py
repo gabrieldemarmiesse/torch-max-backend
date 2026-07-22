@@ -851,9 +851,14 @@ def mojo_device__foreach_mul__tensor(self, other):
     aten_fast = _fast()
     result = aten_fast.fast_aten__foreach_mul__tensor(self, other)
     if result is aten_fast.NOT_HANDLED:
-        return torch.ops.aten._foreach_mul_.Tensor.redispatch(
+        result = torch.ops.aten._foreach_mul_.Tensor.redispatch(
             _COMPOSITE_EXPLICIT_AUTOGRAD, self, other
         )
+        # This explicit redispatch runs below ADInplaceOrView. A true wrapper
+        # subclass therefore needs the same manual TensorList version update
+        # as the direct Mojo kernel path.
+        torch.autograd.graph.increment_version(self)
+        return result
 
     # Mutable TensorList schemas returning () do not receive an automatic
     # version bump. Match CUDA, including empty and duplicate list entries.

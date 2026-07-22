@@ -311,6 +311,43 @@ def mojo_h100(mojo_gpu):
     return mojo_gpu
 
 
+def test_wrapper_subclass_preserves_native_saved_output(mojo_device):
+    """Native autograd saves a complete wrapper, not a holderless TensorImpl."""
+    generator = torch.Generator().manual_seed(20260722)
+    host_input = torch.randn(7, 11, generator=generator)
+    host_gradient = torch.randn(7, 11, generator=generator)
+
+    reference = host_input.clone().requires_grad_()
+    torch.exp(reference).backward(host_gradient)
+
+    actual = host_input.to(mojo_device).requires_grad_()
+    output = torch.exp(actual)
+    assert type(output.grad_fn).__name__ == "ExpBackward0"
+
+    saved = output.grad_fn._saved_result
+    assert isinstance(saved, type(output))
+    assert saved is not output
+    assert saved._holder is output._holder
+    assert saved._ptr == output._ptr
+    assert saved._shape == output._shape
+    assert saved._strides == output._strides
+    assert saved._device == output._device
+
+    output.backward(host_gradient.to(mojo_device))
+    assert actual.grad is not None
+    torch.testing.assert_close(actual.grad.cpu(), reference.grad)
+
+
+def test_wrapper_subclass_native_saved_output_tracks_mutation(mojo_device):
+    output = torch.exp(torch.randn(7, 11).to(mojo_device).requires_grad_())
+
+    with torch.no_grad():
+        output.add_(torch.ones_like(output))
+
+    with pytest.raises(RuntimeError, match="modified by an inplace operation"):
+        output.backward(torch.ones_like(output))
+
+
 def test_fast_view_family(mojo_device):
     x = torch.randn(2, 6, 768)
     xd = x.to(mojo_device)

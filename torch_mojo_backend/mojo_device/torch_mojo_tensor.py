@@ -49,6 +49,12 @@ _PENDING_D2H_LOCK = threading.Lock()
 _FAILED_TRANSFER_OWNERS: dict[max.driver.Device, list[tuple[object, object]]] = {}
 _FAILED_TRANSFER_OWNERS_LOCK = threading.Lock()
 
+# PyTorch's Python PrivateUse1 guard currently advertises one C++ autograd
+# device queue, at index zero. Keep the storage-less wrapper TensorImpl on that
+# bookkeeping device, as ``_acc.create_empty_tensor`` did. ``_torch_device`` and
+# the public ``device`` property continue to carry the real Mojo device.
+_WRAPPER_TENSORIMPL_DEVICE = torch.device("privateuseone:0")
+
 
 def _data_movement_mod():
     global _data_movement
@@ -251,8 +257,7 @@ def _pad8(values, fill: int) -> tuple[int, ...]:
 class TorchMojoTensor(torch.Tensor):
     """Eager mojo tensor.
 
-    A meta-backed `PrivateUse1` wrapper (`torch._C._acc.create_empty_tensor`
-    + `__class__` swap) whose payload is:
+    A storage-less ``PrivateUse1`` wrapper subclass whose payload is:
 
     - `_holder`: a Mojo `TensorHolder` owning the device allocation. Views
       share the *same* holder object; CPython's refcount on it is the
@@ -263,10 +268,26 @@ class TorchMojoTensor(torch.Tensor):
       start, `_dtype` as a max DType, `_numel`, `_itemsize`, `_device`,
       `_is_contiguous`).
 
-    PyTorch's own TensorImpl always reports contiguous strides; that is fine
-    because the backend registers a kernel for every op that consumes a
-    mojo tensor, so the real strides here are the only ones ever used.
+    The wrapper's Python dispatch key only redispatches to the numerical
+    ``PrivateUse1`` kernels. Autograd, autocast, and ADInplaceOrView remain
+    PyTorch-owned layers above it. In particular, PyTorch can reconstruct a
+    detached wrapper through ``__torch_dispatch__`` when it saves an operator
+    output for backward, preserving the Python-side allocation payload.
     """
+
+    @classmethod
+    @no_type_check
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        """Redispatch wrapper operations to the existing Mojo backend kernels."""
+        # Give higher-priority wrappers such as FakeTensor and
+        # FunctionalTensor their opportunity to handle mixed-subclass calls.
+        if not all(issubclass(cls, tensor_type) for tensor_type in types):
+            return NotImplemented
+
+        # Continue through the ordinary PrivateUse1 numerical path while
+        # preserving the exact overload selected by PyTorch.
+        with torch._C._DisableTorchDispatch():
+            return func(*args, **(kwargs or {}))
 
     @classmethod
     @no_type_check
@@ -275,8 +296,16 @@ class TorchMojoTensor(torch.Tensor):
     ) -> "TorchMojoTensor":
         shape = tuple(shape)
         strides = tuple(strides)
-        res = torch._C._acc.create_empty_tensor(shape, _torch_dtype_of(dtype))
-        res.__class__ = TorchMojoTensor
+        res = torch.Tensor._make_wrapper_subclass(
+            cls,
+            shape,
+            strides=strides,
+            storage_offset=offset,
+            dtype=_torch_dtype_of(dtype),
+            layout=torch.strided,
+            device=_WRAPPER_TENSORIMPL_DEVICE,
+            requires_grad=False,
+        )
         res._holder = holder
         res._ptr = ptr
         res._shape = shape

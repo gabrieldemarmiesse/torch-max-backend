@@ -56,10 +56,9 @@ def _install_torch_accelerator_synchronize(torch_mojo_device_module):
 def _declare_mojo_tensor_as_plain_tensor():
     """Add TorchMojoTensor to torch's HANDLED_TYPES allowlists.
 
-    torch.compile treats TorchMojoTensor as a plain tensor everywhere
-    (it has no __torch_dispatch__/__torch_function__ behavior; all backend
-    logic lives behind the PrivateUse1 dispatch key), but a couple of
-    exact-type allowlists don't know that:
+    TorchMojoTensor's wrapper dispatch is transparent to numerical operations;
+    all backend logic still lives behind the PrivateUse1 dispatch key. A couple
+    of tracing exact-type allowlists nevertheless need to know about it:
 
     - aot_autograd's first-invocation `_AnalyzeCustomOpInputOutputMode`
       returns NotImplemented for unknown tensor types, which makes every
@@ -68,10 +67,10 @@ def _declare_mojo_tensor_as_plain_tensor():
       value, so patch both bindings.
     - FakeTensorMode returns NotImplemented for ops whose args include an
       unrecognized tensor subclass, to give that subclass's
-      __torch_dispatch__ a chance to run. TorchMojoTensor has none, so
-      nothing handles the op and tracing fails with "Multiple dispatch
-      failed" — hit when dynamo lifts a mojo tensor constant created
-      mid-trace (e.g. `torch.tensor([], device="mojo")` in HF generate).
+      __torch_dispatch__ a chance to run. The Mojo wrapper must instead be
+      fakeified rather than executing a real PrivateUse1 kernel — hit when
+      dynamo lifts a mojo tensor constant created mid-trace (e.g.
+      `torch.tensor([], device="mojo")` in HF generate).
     """
     import torch._functorch._aot_autograd.runtime_wrappers as runtime_wrappers
     import torch._subclasses.fake_tensor as fake_tensor_module
@@ -163,7 +162,7 @@ def register_mojo_devices():
     _install_torch_accelerator_synchronize(torch_mojo_device_module)
 
     # PyTorch deliberately uses exact-type checks before selecting foreach
-    # optimizers. TorchMojoTensor is a plain PrivateUse1 tensor subclass, so
+    # optimizers. TorchMojoTensor is a transparent PrivateUse1 wrapper, so
     # opt it into the same lists as DTensor and other supported tensor types.
     import torch.optim.optimizer as optimizer_module
     import torch.utils._foreach_utils as foreach_utils
