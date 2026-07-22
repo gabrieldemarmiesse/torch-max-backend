@@ -13,13 +13,8 @@ import torch
 from mojo.paths import _build_mojo_source_package
 
 from torch_mojo_backend import get_accelerators, register_mojo_devices
-from torch_mojo_backend.profiler import profile
 from torch_mojo_backend.testing import CallChecker, Conf
 from torch_mojo_backend.torch_compile_backend import compiler
-
-# from torch_mojo_backend.mojo_device.log_aten_calls import log_aten_calls
-
-# log_aten_calls()
 
 os.environ["TORCH_MOJO_BACKEND_VERBOSE"] = "1"
 
@@ -28,14 +23,6 @@ os.environ["TORCH_MOJO_BACKEND_VERBOSE"] = "1"
 compiler.paths_to_mojo_kernels[0] = _build_mojo_source_package(
     compiler.paths_to_mojo_kernels[0]
 )
-
-
-# Unused at the moment, but let's keep it here just in case
-@pytest.fixture()
-def disable_interpreter():
-    os.environ["MAX_USE_EAGER_INTERPRETER"] = "0"
-    yield
-    os.environ["MAX_USE_EAGER_INTERPRETER"] = "1"
 
 
 @pytest.fixture(params=["cpu", "cuda"])
@@ -82,11 +69,6 @@ def conf(request, mojo_gpu_available: bool, cuda_available: bool):
 
 
 @pytest.fixture
-def gpu_available() -> bool:
-    return len(list(get_accelerators())) > 1
-
-
-@pytest.fixture
 def cuda_available() -> bool:
     return torch.cuda.is_available()
 
@@ -107,13 +89,6 @@ def reset_compiler():
     yield
 
 
-@pytest.fixture
-def cuda_device(cuda_available: bool):
-    if not cuda_available:
-        pytest.skip("CUDA not available")
-    return "cuda"
-
-
 @pytest.fixture(params=["cpu", "gpu"])
 def mojo_device(request, mojo_gpu_available: bool):
     if request.param == "cpu":
@@ -124,11 +99,7 @@ def mojo_device(request, mojo_gpu_available: bool):
         yield ("mojo:0")
 
 
-def pytest_sessionfinish(session, exitstatus):
-    profile.print_stats()
-
-
-def pytest_make_parametrize_id(config, val, argname):
+def pytest_make_parametrize_id(val):
     """Custom ID generation for parametrized tests"""
 
     if isinstance(val, torch.dtype):

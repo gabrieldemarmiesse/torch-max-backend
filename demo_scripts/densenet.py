@@ -28,7 +28,6 @@ preprocess = transforms.Compose(
 
 image_url = "https://raw.githubusercontent.com/jigsawpieces/dog-api-images/refs/heads/main/boxer/n02108089_10229.jpg"
 
-response = requests.get(image_url)
 image = Image.open(requests.get(image_url, stream=True).raw)
 input_tensor = preprocess(image)
 input_batch = input_tensor.unsqueeze(0).to(device)

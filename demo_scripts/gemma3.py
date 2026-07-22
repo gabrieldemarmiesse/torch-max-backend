@@ -642,12 +642,10 @@ if not os.path.exists(tokenizer_file_path):
 tokenizer = GemmaTokenizer(tokenizer_file_path=tokenizer_file_path)
 
 
-prompt = "Give me a short introduction to large language models."
 prompt = apply_chat_template("Give me a short introduction to large language models.")
 
 
 input_token_ids = tokenizer.encode(prompt)
-text = tokenizer.decode(input_token_ids)
 
 
 model = torch.compile(model, backend=mojo_backend)

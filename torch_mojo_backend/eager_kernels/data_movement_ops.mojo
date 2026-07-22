@@ -7,7 +7,7 @@
 # Python-visible function takes raw element-aligned data addresses (ints,
 # storage offset already applied) plus the device's DeviceContext pointer —
 # there is no `max.driver.Buffer` on this side any more. Pure-copy kernels
-# (PermuteCopy/NarrowCopy/NarrowCopyDst) are handed an explicit `itemsize`
+# (PermuteCopy/NarrowCopyDst) are handed an explicit `itemsize`
 # int (1/2/4/8) computed on the Python side instead of reading a dtype off a
 # buffer; Cast/WhereSelect take the operand dtype(s) as plain ints
 # (`max.dtype.DType.value`) and rebuild the Mojo `DType` via
@@ -30,7 +30,6 @@ from std.python._cpython import PyObjectPtr, Py_ssize_t
 from op_utils import (
     GS_THREADS,
     MAX_RANK,
-    TensorSpec,
     _enqueue_cached,
     _gs_blocks,
     _make_ptr,
@@ -206,13 +205,6 @@ def _permute_copy_go(
 
 
 # ---------------------------------------------------------------------------
-# Narrow copy: out is `outer` blocks of `copy_len` contiguous elements taken
-# from the source at `outer_index * src_stride + src_offset`. This covers
-# split / narrow / step-1 slicing along one dim of a contiguous tensor.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Fused two-input concatenation: out rows are `len1 + len2` contiguous
 # elements, filled from in1's and in2's contiguous rows in one launch (the
 # common cat([a, b], dim) case after outer/inner flattening). One grid row
@@ -378,215 +370,8 @@ def _cat2_dispatcher(
         return _spec_unsupported(e)
 
 
-def _narrow_copy_kernel4[
-    dtype: DType
-](
-    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
-    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
-    src_stride: Int,
-    copy_len: Int,
-    src_offset: Int,
-    total: Int,
-    nchunks: Int,
-):
-    var c = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
-    var gstride = Int(grid_dim.x) * Int(block_dim.x)
-    while c < nchunks:
-        var i = c * 4
-        var o = i // copy_len
-        var j = i % copy_len
-        if j + 4 <= copy_len and i + 4 <= total:
-            out_ptr.store(
-                i, in_ptr.load[width=4](o * src_stride + src_offset + j)
-            )
-        else:
-            for u in range(4):
-                var iu = i + u
-                if iu < total:
-                    var ou = iu // copy_len
-                    var ju = iu % copy_len
-                    out_ptr[iu] = in_ptr[ou * src_stride + src_offset + ju]
-        c += gstride
-
-
-def _narrow_copy_kernel1[
-    dtype: DType
-](
-    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
-    in_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
-    src_stride: Int,
-    copy_len: Int,
-    src_offset: Int,
-    total: Int,
-):
-    var i = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
-    var gstride = Int(grid_dim.x) * Int(block_dim.x)
-    while i < total:
-        var o = i // copy_len
-        var j = i % copy_len
-        out_ptr[i] = in_ptr[o * src_stride + src_offset + j]
-        i += gstride
-
-
-@always_inline
-def _narrow_copy[
-    dtype: DType
-](
-    out_addr: Int,
-    in_addr: Int,
-    outer: Int,
-    src_stride: Int,
-    copy_len: Int,
-    src_offset: Int,
-    ctx: DeviceContext,
-) raises:
-    var out_ptr = _make_ptr[dtype](out_addr)
-    var in_ptr = _make_ptr[dtype](in_addr)
-    var total = outer * copy_len
-
-    if ctx.api() != "cpu":
-        comptime if has_accelerator():
-            # Chunk-of-4: one div/mod chain and one (unaligned) vector
-            # transfer per 4 output elements; chunks that cross a block
-            # boundary fall back to per-element math. Big row slices
-            # (e.g. last-token logits) are otherwise
-            # division-throughput-bound.
-            if copy_len >= 4:
-                var nchunks = (total + 3) // 4
-                _enqueue_cached[_narrow_copy_kernel4[dtype]](
-                    ctx,
-                    String(t"dm_narrow4_{dtype}"),
-                    _gs_blocks(nchunks),
-                    1,
-                    1,
-                    GS_THREADS,
-                    out_ptr.as_unsafe_any_origin(),
-                    in_ptr.as_unsafe_any_origin().as_immutable(),
-                    src_stride,
-                    copy_len,
-                    src_offset,
-                    total,
-                    nchunks,
-                )
-            else:
-                _enqueue_cached[_narrow_copy_kernel1[dtype]](
-                    ctx,
-                    String(t"dm_narrow1_{dtype}"),
-                    _gs_blocks(total),
-                    1,
-                    1,
-                    GS_THREADS,
-                    out_ptr.as_unsafe_any_origin(),
-                    in_ptr.as_unsafe_any_origin().as_immutable(),
-                    src_stride,
-                    copy_len,
-                    src_offset,
-                    total,
-                )
-            return
-        else:
-            raise Error("no GPU accelerator available at compile time")
-
-    @always_inline
-    @parameter
-    @__copy_capture(out_ptr, in_ptr, total)
-    def func4[width: Int, alignment: Int = 1](idx: Coord):
-        var i = Int(idx[0].value()) * 4
-        var o = i // copy_len
-        var j = i % copy_len
-        if j + 4 <= copy_len and i + 4 <= total:
-            out_ptr.store(
-                i, in_ptr.load[width=4](o * src_stride + src_offset + j)
-            )
-        else:
-            for u in range(4):
-                var iu = i + u
-                if iu >= total:
-                    return
-                var ou = iu // copy_len
-                var ju = iu % copy_len
-                out_ptr[iu] = in_ptr[ou * src_stride + src_offset + ju]
-
-    @always_inline
-    @parameter
-    @__copy_capture(out_ptr, in_ptr)
-    def func[width: Int, alignment: Int = 1](idx: Coord):
-        var i = Int(idx[0].value())
-        var o = i // copy_len
-        var j = i % copy_len
-        out_ptr[i] = in_ptr[o * src_stride + src_offset + j]
-
-    if copy_len >= 4:
-        elementwise[func4, simd_width=1](Coord((total + 3) // 4), ctx)
-    else:
-        elementwise[func, simd_width=1](Coord(total), ctx)
-
-
-def _narrow_copy_go(
-    out_ptr: PyObjectPtr,
-    in_ptr: PyObjectPtr,
-    outer: PyObjectPtr,
-    src_stride: PyObjectPtr,
-    copy_len: PyObjectPtr,
-    src_offset: PyObjectPtr,
-    itemsize_o: PyObjectPtr,
-    ctx_ptr: PyObjectPtr,
-) raises:
-    var out_addr = _raw_int(out_ptr)
-    var in_addr = _raw_int(in_ptr)
-    var outer_val = _raw_int(outer)
-    var src_stride_val = _raw_int(src_stride)
-    var copy_len_val = _raw_int(copy_len)
-    var src_offset_val = _raw_int(src_offset)
-    var itemsize = _raw_int(itemsize_o)
-    var ctx = _raw_ctx(ctx_ptr)
-
-    if itemsize == 4:
-        _narrow_copy[DType.uint32](
-            out_addr,
-            in_addr,
-            outer_val,
-            src_stride_val,
-            copy_len_val,
-            src_offset_val,
-            ctx,
-        )
-    elif itemsize == 2:
-        _narrow_copy[DType.uint16](
-            out_addr,
-            in_addr,
-            outer_val,
-            src_stride_val,
-            copy_len_val,
-            src_offset_val,
-            ctx,
-        )
-    elif itemsize == 8:
-        _narrow_copy[DType.uint64](
-            out_addr,
-            in_addr,
-            outer_val,
-            src_stride_val,
-            copy_len_val,
-            src_offset_val,
-            ctx,
-        )
-    elif itemsize == 1:
-        _narrow_copy[DType.uint8](
-            out_addr,
-            in_addr,
-            outer_val,
-            src_stride_val,
-            copy_len_val,
-            src_offset_val,
-            ctx,
-        )
-    else:
-        raise Error("unsupported element size for fast narrow copy")
-
-
 # ---------------------------------------------------------------------------
-# Narrow copy, destination-strided: the mirror image of _narrow_copy. The
+# Narrow copy, destination-strided: the
 # *source* is fully contiguous (`outer` blocks of `copy_len` elements) and
 # lands in the destination at `outer_index * dst_stride + dst_offset`.
 # Looping this over the inputs implements concatenation along any dim.
@@ -1628,27 +1413,6 @@ def _permute_copy_dispatcher(
     return _raw_ret_none()
 
 
-def _narrow_copy_dispatcher(
-    py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
-    nargs: Py_ssize_t,
-) abi("C") -> PyObjectPtr:
-    try:
-        _narrow_copy_go(
-            args[0],
-            args[1],
-            args[2],
-            args[3],
-            args[4],
-            args[5],
-            args[6],
-            args[7],
-        )
-    except:
-        pass
-    return _raw_ret_none()
-
-
 def _narrow_copy_dst_dispatcher(
     py_self: PyObjectPtr,
     args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
@@ -1844,14 +1608,6 @@ def PyInit_data_movement_ops() abi("C") -> PythonObject:
             "PermuteCopy",
             docstring=(
                 "materialize a permutation of a contiguous tensor (rank <= 4)"
-            ),
-        )
-        b.def_py_c_function(
-            _narrow_copy_dispatcher,
-            "NarrowCopy",
-            docstring=(
-                "copy `outer` blocks of `copy_len` elements with a source"
-                " stride/offset"
             ),
         )
         b.def_py_c_function(

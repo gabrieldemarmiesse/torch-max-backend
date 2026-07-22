@@ -14,7 +14,6 @@ dependencies = [
     "tabulate",
     "torch>=2.10",
     "beartype>=0.17.0",
-    "pytest-retry>=1.7.0",
 ]
 
 [project.urls]
@@ -100,13 +99,10 @@ dev = [
     "ruff>=0.12.7",
     "tiktoken>=0.11.0",
     "transformers>=4.54.1",
-    "line-profiler>=5.0.0",
     "coverage>=7.10.6",
     "pytest-cov>=7.0.0",
     "rich>=14.1.0",
     "matplotlib>=3.10.6",
     "pytest-random-order>=1.2.0",
     "setuptools>=80.9.0",
-    "pytest-mock>=3.14.0",
 ]
-

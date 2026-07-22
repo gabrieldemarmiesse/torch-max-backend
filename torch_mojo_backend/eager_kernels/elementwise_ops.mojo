@@ -40,7 +40,6 @@ from std.math import (
     sqrt,
     tanh,
 )
-from std.memory import OpaquePointer
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
@@ -61,8 +60,6 @@ from op_utils import (
     FLOAT_DTYPES,
     GS_THREADS,
     MAX_RANK,
-    TensorHolder,
-    TensorSpec,
     _enqueue_cached,
     _gs_blocks,
     _make_ptr,

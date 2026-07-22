@@ -24,7 +24,7 @@
 from std.os import abort
 from std.gpu import block_dim, block_idx, grid_dim, thread_idx
 from std.gpu.host import DeviceContext
-from std.math import pow
+from std.math import ceildiv, pow
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
@@ -38,13 +38,10 @@ from std.utils import IndexList
 from op_utils import (
     GS_THREADS,
     MAX_RANK,
-    TensorHolder,
-    TensorSpec,
     _enqueue_cached,
     _gs_blocks,
     _make_ptr,
     _parallel_for,
-    _parallel_for_dt,
     _raw_ctx,
     _raw_dtype_int,
     _raw_f64,
@@ -76,6 +73,71 @@ comptime BOP_XOR = 8
 comptime BOP_REMAINDER = 9
 comptime BOP_FLOORDIV = 10
 comptime BOP_POW = 11
+
+comptime _ADD_F32_BF16_BLOCK = 256
+comptime _ADD_F32_BF16_VEC = 4
+
+
+@__name("torch_mojo_add_f32_bf16_vec4")
+def _add_f32_bf16_contig_kernel(
+    output_f32: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    input_f32: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    input_bf16: UnsafePointer[Scalar[DType.bfloat16], ImmutAnyOrigin],
+    elements: Int,
+    vec_count: Int,
+):
+    """One-launch contiguous mixed add with in-register BF16 widening."""
+    var gid = Int(block_idx.x) * _ADD_F32_BF16_BLOCK + Int(thread_idx.x)
+    if gid < vec_count:
+        var base = gid * _ADD_F32_BF16_VEC
+        var lhs = input_f32.load[width=_ADD_F32_BF16_VEC, alignment=16](base)
+        var rhs = input_bf16.load[width=_ADD_F32_BF16_VEC, alignment=8](
+            base
+        ).cast[DType.float32]()
+        output_f32.store[width=_ADD_F32_BF16_VEC, alignment=16](base, lhs + rhs)
+
+    # The vector body leaves at most three elements.  With an unaligned base,
+    # vec_count is zero and this same launch covers the full input scalarly.
+    var index = vec_count * _ADD_F32_BF16_VEC + gid
+    var stride = Int(grid_dim.x) * _ADD_F32_BF16_BLOCK
+    while index < elements:
+        output_f32[index] = (
+            input_f32[index] + input_bf16[index].cast[DType.float32]()
+        )
+        index += stride
+
+
+@always_inline
+def _add_f32_bf16_contig(
+    output_f32: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
+    input_f32: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin],
+    input_bf16: UnsafePointer[Scalar[DType.bfloat16], ImmutAnyOrigin],
+    elements: Int,
+    ctx: DeviceContext,
+) raises:
+    if elements <= 0:
+        return
+
+    var aligned = (Int(output_f32) | Int(input_f32) | Int(input_bf16)) % 16 == 0
+    var vec_count = elements // _ADD_F32_BF16_VEC if aligned else 0
+    var work_items = vec_count if vec_count > 0 else elements
+    var grid = ceildiv(work_items, _ADD_F32_BF16_BLOCK)
+    comptime if has_accelerator():
+        _enqueue_cached[_add_f32_bf16_contig_kernel](
+            ctx,
+            "add_f32_bf16_vec4",
+            grid,
+            1,
+            1,
+            _ADD_F32_BF16_BLOCK,
+            output_f32,
+            input_f32,
+            input_bf16,
+            elements,
+            vec_count,
+        )
+    else:
+        raise Error("mixed FP32/BF16 add requires an accelerator build")
 
 
 @always_inline
@@ -930,6 +992,74 @@ comptime SPEC_BCAST_DTYPES = [
 ]
 
 
+def _add_f32_bf16_spec_go(
+    a_o: PyObjectPtr, b_o: PyObjectPtr
+) raises -> PyObjectPtr:
+    """Contiguous FP32 + BF16 -> FP32 without a promoted temporary."""
+    ref a = _spec_ptr(a_o)[]
+    ref b = _spec_ptr(b_o)[]
+
+    if a.ctx_ptr != b.ctx_ptr:
+        raise Error("mojo spec add f32 bf16: operands on different devices")
+    if not (
+        (a.dtype == DType.float32 and b.dtype == DType.bfloat16)
+        or (a.dtype == DType.bfloat16 and b.dtype == DType.float32)
+    ):
+        raise Error("mojo spec add f32 bf16: expected one FP32 and one BF16")
+    if not (a.contig and b.contig):
+        raise Error("mojo spec add f32 bf16: operands must be contiguous")
+    if a.rank != b.rank or a.numel != b.numel:
+        raise Error("mojo spec add f32 bf16: operand shapes differ")
+    for i in range(MAX_RANK):
+        if a.shape[i] != b.shape[i]:
+            raise Error("mojo spec add f32 bf16: operand shapes differ")
+
+    var ctx = a.ctx()
+    if ctx.api() == "cpu":
+        raise Error("mojo spec add f32 bf16: accelerator context required")
+
+    var fp32_addr = a.ptr if a.dtype == DType.float32 else b.ptr
+    var bf16_addr = a.ptr if a.dtype == DType.bfloat16 else b.ptr
+    var nbytes = a.numel * 4
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(nbytes, 1))
+    var addr = Int(buf.unsafe_ptr())
+    if a.numel > 0:
+        _add_f32_bf16_contig(
+            _make_ptr[DType.float32](addr).as_unsafe_any_origin(),
+            _make_ptr[DType.float32](fp32_addr)
+            .as_unsafe_any_origin()
+            .as_immutable(),
+            _make_ptr[DType.bfloat16](bf16_addr)
+            .as_unsafe_any_origin()
+            .as_immutable(),
+            a.numel,
+            ctx,
+        )
+
+    return _spec_result(
+        buf^,
+        addr,
+        nbytes,
+        a.rank,
+        a.shape,
+        DType.float32,
+        4,
+        a.numel,
+        a.ctx_ptr,
+    )
+
+
+def _add_f32_bf16_spec_dispatcher(
+    py_self: PyObjectPtr,
+    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    nargs: Py_ssize_t,
+) abi("C") -> PyObjectPtr:
+    try:
+        return _add_f32_bf16_spec_go(args[0], args[1])
+    except e:
+        return _spec_unsupported(e)
+
+
 def _binary_spec_go[
     op_code: Int, is_cmp: Bool
 ](a_o: PyObjectPtr, b_o: PyObjectPtr) raises -> PyObjectPtr:
@@ -1106,6 +1236,14 @@ def _binary_spec_dispatcher[
 def PyInit_logic_ops() abi("C") -> PythonObject:
     try:
         var b = PythonModuleBuilder("logic_ops")
+        b.def_py_c_function(
+            _add_f32_bf16_spec_dispatcher,
+            "AddF32Bf16Spec",
+            docstring=(
+                "(a_spec, b_spec) -> (holder, spec, shape, ptr); "
+                "contiguous FP32 + BF16 -> FP32"
+            ),
+        )
         b.def_py_c_function(
             _binary_spec_dispatcher[BOP_ADD, False],
             "AddSpec",

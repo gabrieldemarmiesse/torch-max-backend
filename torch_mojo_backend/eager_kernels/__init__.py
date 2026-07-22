@@ -36,13 +36,24 @@ _CACHE_DIR = _PACKAGE_DIR / "__mojocache__"
 
 _MOJO_MODULES = (
     "tensor_holder",
+    "activation_backward_ops",
+    "activation_forward_ops",
+    "dropout_ops",
+    "embedding_backward_ops",
     "elementwise_ops",
     "nn_ops",
     "data_movement_ops",
     "logic_ops",
     "matmul_ops",
+    "bf16_matmul_ops",
+    "tf32_matmul_ops",
     "conv_ops",
     "reduction_ops",
+    "loss_ops",
+    "normalization_forward_ops",
+    "normalization_backward_ops",
+    "optimizer_ops",
+    "sdpa_backward_ops",
 )
 
 

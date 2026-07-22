@@ -33,6 +33,12 @@ _aten_ops_registry: list[tuple[str, Callable]] = []
 # torch_mojo_backend/testing.py). Keyed by the aten op name.
 EAGER_CALL_COUNTERS: dict[str, Callable] = {}
 
+# Unsupported foreach regimes must reach ATen's exact sequential semantics
+# without redispatching to this PrivateUse1 registration again.
+_COMPOSITE_EXPLICIT_AUTOGRAD = torch._C.DispatchKeySet(
+    torch._C.DispatchKey.CompositeExplicitAutograd
+)
+
 
 def register_aten_op(op_name: str):
     """Decorator to mark a function for aten op registration.
@@ -157,6 +163,10 @@ def _out_variant(op_name: str, fast_name: str, *, dtype_policy: str = "safe_cast
         if not isinstance(out, TorchMojoTensor):
             raise RuntimeError(f"{op_name}: expected out to be a mojo tensor")
 
+        # Reject a cross-device destination before launching the functional
+        # composition.  Fast implementations already require all tensor
+        # operands to share a device, so the first mojo operand identifies
+        # the only valid output context.
         input_device = next(
             (arg._device for arg in args if isinstance(arg, TorchMojoTensor)), None
         )
@@ -651,6 +661,38 @@ def mojo_device_arange_start_out(start, end, step=1, *, out) -> TorchMojoTensor:
     return out
 
 
+@register_aten_op("aten::embedding")
+@no_type_check
+def mojo_device_embedding(
+    weight, indices, padding_idx=-1, scale_grad_by_freq=False, sparse=False
+):
+    """Native-autograd embedding with a forward-time autograd-mode preflight.
+
+    An exception raised while the autograd engine runs a backward node aborts
+    the process on this backend: the engine's stream guard restores streams
+    through PyTorch's noexcept Python device guard, which std::terminates
+    when the Python round-trip fails during unwind. Unsupported autograd
+    modes must therefore be rejected before EmbeddingBackward0 is recorded,
+    not when the engine reaches the sparse or dense backward.
+    """
+    aten_fast = _fast()
+    if torch.is_grad_enabled() and weight.requires_grad:
+        if sparse or scale_grad_by_freq:
+            mode = "sparse=True" if sparse else "scale_grad_by_freq=True"
+            raise NotImplementedError(
+                f"Mojo eager embedding autograd does not yet support {mode}"
+            )
+        # The recorded backward's atomic accumulation is nondeterministic;
+        # alerting there is too late for the same unwind-abort reason.
+        aten_fast._alert_not_deterministic("embedding_dense_backward on Mojo")
+    result = aten_fast.fast_aten_embedding(
+        weight, indices, padding_idx, scale_grad_by_freq, sparse
+    )
+    if result is aten_fast.NOT_HANDLED:
+        raise _unsupported("aten::embedding", (weight, indices))
+    return result
+
+
 @register_aten_op("aten::normal_")
 @no_type_check
 def mojo_device_normal_(
@@ -703,6 +745,15 @@ def mojo_device_masked_fill_(
     return result
 
 
+@register_aten_op("aten::mul_.Tensor")
+@no_type_check
+def mojo_device_mul_(self: TorchMojoTensor, other) -> TorchMojoTensor:
+    result = _fast().fast_aten_mul_(self, other)
+    if result is None:
+        raise _unsupported("aten::mul_.Tensor", (self, other))
+    return result
+
+
 @register_aten_op("aten::relu_")
 @no_type_check
 def mojo_device_relu_(self: TorchMojoTensor) -> TorchMojoTensor:
@@ -731,6 +782,16 @@ register_aten_op("aten::addcmul.out")(
     _out_variant("aten::addcmul.out", "fast_aten_addcmul")
 )
 register_aten_op("aten::div.out")(_out_variant("aten::div.out", "fast_aten_div"))
+register_aten_op("aten::lerp.Scalar_out")(
+    _out_variant("aten::lerp.Scalar_out", "fast_aten_lerp")
+)
+register_aten_op("aten::linalg_vector_norm.out")(
+    _out_variant(
+        "aten::linalg_vector_norm.out",
+        "fast_aten_linalg_vector_norm",
+        dtype_policy="exact",
+    )
+)
 register_aten_op("aten::mul.out")(_out_variant("aten::mul.out", "fast_aten_mul"))
 register_aten_op("aten::mean.out")(_out_variant("aten::mean.out", "fast_aten_mean"))
 register_aten_op("aten::sub.out")(_out_variant("aten::sub.out", "fast_aten_sub"))
@@ -795,8 +856,50 @@ def mojo_device_min_dim_min(
 # ----------------------------------------------------------------------------------
 
 _register_fast("aten::_adaptive_avg_pool2d", "fast_aten__adaptive_avg_pool2d")
+
+
+@register_aten_op("aten::_foreach_mul_.Tensor")
+@no_type_check
+def mojo_device__foreach_mul__tensor(self, other):
+    aten_fast = _fast()
+    result = aten_fast.fast_aten__foreach_mul__tensor(self, other)
+    if result is aten_fast.NOT_HANDLED:
+        result = torch.ops.aten._foreach_mul_.Tensor.redispatch(
+            _COMPOSITE_EXPLICIT_AUTOGRAD, self, other
+        )
+        # This explicit redispatch runs below ADInplaceOrView. A true wrapper
+        # subclass therefore needs the same manual TensorList version update
+        # as the direct Mojo kernel path.
+        torch.autograd.graph.increment_version(self)
+        return result
+
+    # Mutable TensorList schemas returning () do not receive an automatic
+    # version bump. Match CUDA, including empty and duplicate list entries.
+    torch.autograd.graph.increment_version(self)
+    return None
+
+
+@register_aten_op("aten::_foreach_norm.Scalar")
+@no_type_check
+def mojo_device__foreach_norm_scalar(self, ord=2, dtype=None):
+    aten_fast = _fast()
+    result = aten_fast.fast_aten__foreach_norm(self, ord, dtype=dtype)
+    if result is aten_fast.NOT_HANDLED:
+        result = aten_fast.foreach_norm_sequential_fallback(self, ord, dtype=dtype)
+        if result is aten_fast.NOT_HANDLED:
+            return torch.ops.aten._foreach_norm.Scalar.redispatch(
+                _COMPOSITE_EXPLICIT_AUTOGRAD, self, ord, dtype=dtype
+            )
+    return result
+
+
+_register_fast("aten::_fused_adamw_", "fast_aten__fused_adamw")
+_register_fast("aten::_fused_adamw_.tensor_lr", "fast_aten__fused_adamw")
 _register_fast("aten::_local_scalar_dense", "fast_aten__local_scalar_dense")
 _register_fast("aten::_log_softmax", "fast_aten__log_softmax")
+_register_fast(
+    "aten::_log_softmax_backward_data", "fast_aten__log_softmax_backward_data"
+)
 _register_fast(
     "aten::_native_batch_norm_legit_no_training",
     "fast_aten__native_batch_norm_legit_no_training",
@@ -812,6 +915,10 @@ _register_fast(
 _register_fast(
     "aten::_scaled_dot_product_flash_attention",
     "fast_aten__scaled_dot_product_flash_attention",
+)
+_register_fast(
+    "aten::_scaled_dot_product_flash_attention_backward",
+    "fast_aten__scaled_dot_product_flash_attention_backward",
 )
 _register_fast("aten::_softmax", "fast_aten__softmax")
 _register_fast("aten::_unsafe_view", "fast_aten__unsafe_view")
@@ -853,7 +960,7 @@ _register_fast("aten::cosh", "fast_aten_cosh")
 _register_fast("aten::cumsum", "fast_aten_cumsum")
 _register_fast("aten::detach", "fast_aten_detach")
 _register_fast("aten::div.Tensor", "fast_aten_div")
-_register_fast("aten::embedding", "fast_aten_embedding")
+_register_fast("aten::embedding_dense_backward", "fast_aten_embedding_dense_backward")
 _register_fast("aten::eq", "fast_aten_eq")
 _register_fast("aten::eq.Scalar", "fast_aten_eq")
 _register_fast("aten::eq.Tensor", "fast_aten_eq")
@@ -869,6 +976,7 @@ _register_fast("aten::ge", "fast_aten_ge")
 _register_fast("aten::ge.Scalar", "fast_aten_ge")
 _register_fast("aten::ge.Tensor", "fast_aten_ge")
 _register_fast("aten::gelu", "fast_aten_gelu")
+_register_fast("aten::gelu_backward", "fast_aten_gelu_backward")
 _register_fast("aten::gt", "fast_aten_gt")
 _register_fast("aten::gt.Scalar", "fast_aten_gt")
 _register_fast("aten::gt.Tensor", "fast_aten_gt")
@@ -878,7 +986,9 @@ _register_fast("aten::isnan", "fast_aten_isnan")
 _register_fast("aten::le", "fast_aten_le")
 _register_fast("aten::le.Scalar", "fast_aten_le")
 _register_fast("aten::le.Tensor", "fast_aten_le")
+_register_fast("aten::lerp.Scalar", "fast_aten_lerp")
 _register_fast("aten::linear", "fast_aten_linear")
+_register_fast("aten::linear_backward", "fast_aten_linear_backward")
 _register_fast("aten::log", "fast_aten_log")
 _register_fast("aten::log1p", "fast_aten_log1p")
 _register_fast("aten::logical_and", "fast_aten_logical_and")
@@ -901,12 +1011,21 @@ _register_fast("aten::minimum", "fast_aten_minimum")
 _register_fast("aten::mm", "fast_aten_mm")
 _register_fast("aten::mul.Tensor", "fast_aten_mul")
 _register_fast("aten::native_batch_norm", "fast_aten_native_batch_norm")
+_register_fast("aten::native_dropout", "fast_aten_native_dropout")
+_register_fast("aten::native_dropout_backward", "fast_aten_native_dropout_backward")
 _register_fast("aten::native_group_norm", "fast_aten_native_group_norm")
 _register_fast("aten::native_layer_norm", "fast_aten_native_layer_norm")
+_register_fast(
+    "aten::native_layer_norm_backward", "fast_aten_native_layer_norm_backward"
+)
 _register_fast("aten::ne", "fast_aten_ne")
 _register_fast("aten::ne.Scalar", "fast_aten_ne")
 _register_fast("aten::ne.Tensor", "fast_aten_ne")
 _register_fast("aten::neg", "fast_aten_neg")
+_register_fast(
+    "aten::nll_loss_backward.grad_input", "fast_aten_nll_loss_backward_grad_input"
+)
+_register_fast("aten::nll_loss_forward.output", "fast_aten_nll_loss_forward_output")
 _register_fast("aten::nonzero", "fast_aten_nonzero")
 _register_fast("aten::permute", "fast_aten_permute")
 _register_fast("aten::pow.Tensor_Scalar", "fast_aten_pow")
@@ -960,4 +1079,3 @@ _register_fast("aten::where.self", "fast_aten_where")
 # ----------------------------------------------------------------------------------
 
 _register_missing("aten::_adaptive_avg_pool2d_backward")
-_register_missing("aten::gelu_backward")

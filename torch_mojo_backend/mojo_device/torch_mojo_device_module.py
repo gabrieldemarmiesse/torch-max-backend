@@ -144,8 +144,3 @@ def synchronize(device=None):
 
 def get_amp_supported_dtype():
     return [torch.float16, torch.bfloat16]  # TODO change
-
-
-# TODO: necessary?
-def mojo_gpu(self):
-    print("hello")

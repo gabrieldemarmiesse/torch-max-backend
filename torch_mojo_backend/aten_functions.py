@@ -20,10 +20,10 @@ import torch
 from max.dtype import DType
 from max.experimental import functional as F
 from max.experimental.random import gaussian as max_gaussian
-from max.experimental.tensor import Tensor as MaxEagerTensor
 from max.experimental.torch.torch import max_device_ref, torch_dtype_to_max
 from max.graph import Dim, StaticDim
 from max.graph.type import DeviceRef
+from max.nn.attention import MHAMaskVariant
 from max.nn.kernels import flash_attention_gpu
 from torch._decomp import core_aten_decompositions
 from torch._ops import OpOverload, OpOverloadPacket
@@ -182,8 +182,6 @@ def map_to(func):
             # We assume we cover all overloads in the packet
             for overload_name in func:
                 popped = DECOMPOSITION_TABLE.pop(getattr(func, overload_name), None)
-                if popped is not None:
-                    pass
                 if verbose_enabled() and popped is not None:
                     global number_of_decompositions_removed
                     number_of_decompositions_removed += 1
@@ -282,8 +280,6 @@ def aten_all(
     if dim is None:
         # Return True if any element is True (reduce all dimensions)
         dim = tuple(range(len(input.shape)))
-    elif isinstance(dim, int):
-        dim = (dim,)
 
     # Handle negative dimensions
     dim = [x if x >= 0 else len(input.shape) + x for x in dim]
@@ -681,63 +677,6 @@ def aten__scaled_dot_product_flash_attention(
     )
 
 
-# TODO: remove all of those when https://github.com/modular/modular/issues/5198
-# is fixed
-from dataclasses import dataclass
-from enum import Enum
-
-
-class MHAMaskVariant(str, Enum):
-    CAUSAL_MASK = 0
-    CAUSAL_ALIBI_MASK = 1
-    NULL_MASK = 2
-    CHUNKED_CAUSAL_MASK = 3
-    SLIDING_WINDOW_CAUSAL_MASK = 4
-
-
-class AttentionMaskVariant(str, Enum):
-    NULL_MASK = "null"
-    CAUSAL_MASK = "causal"
-    TENSOR_MASK = "tensor_mask"
-    CHUNKED_CAUSAL_MASK = "chunked_causal"
-    SLIDING_WINDOW_CAUSAL_MASK = "sliding_window_causal"
-
-
-class PositionalEncodingVariant(str, Enum):
-    NO_POS = "no_pos"
-    ALIBI_POS = "alibi_pos"
-
-
-@dataclass
-class MHAMaskConfig:
-    attention_mask_variant: AttentionMaskVariant
-    positional_encoding_variant: PositionalEncodingVariant
-
-
-_MHA_MASK_CONFIG_DICT = {
-    MHAMaskVariant.CAUSAL_MASK: MHAMaskConfig(
-        attention_mask_variant=AttentionMaskVariant.CAUSAL_MASK,
-        positional_encoding_variant=PositionalEncodingVariant.NO_POS,
-    ),
-    MHAMaskVariant.CAUSAL_ALIBI_MASK: MHAMaskConfig(
-        attention_mask_variant=AttentionMaskVariant.CAUSAL_MASK,
-        positional_encoding_variant=PositionalEncodingVariant.ALIBI_POS,
-    ),
-    MHAMaskVariant.NULL_MASK: MHAMaskConfig(
-        attention_mask_variant=AttentionMaskVariant.NULL_MASK,
-        positional_encoding_variant=PositionalEncodingVariant.NO_POS,
-    ),
-    MHAMaskVariant.CHUNKED_CAUSAL_MASK: MHAMaskConfig(
-        attention_mask_variant=AttentionMaskVariant.CHUNKED_CAUSAL_MASK,
-        positional_encoding_variant=PositionalEncodingVariant.NO_POS,
-    ),
-    MHAMaskVariant.SLIDING_WINDOW_CAUSAL_MASK: MHAMaskConfig(
-        attention_mask_variant=AttentionMaskVariant.SLIDING_WINDOW_CAUSAL_MASK,
-        positional_encoding_variant=PositionalEncodingVariant.NO_POS,
-    ),
-}
-
-
 # _softmax(Tensor self, int dim, bool half_to_float) -> Tensor
 @map_to(aten._softmax)
 def aten__softmax(self: MaxTensor, dim: int, half_to_float: bool):
@@ -843,6 +782,54 @@ def aten__log_softmax(input: MaxTensor, dim: int, half_to_float: bool) -> MaxTen
     if not half_to_float and original_dtype == DType.float16:
         result = F.cast(result, dtype=original_dtype)
 
+    return result
+
+
+# aten::_log_softmax_backward_data(Tensor grad_output, Tensor output, int dim, ScalarType input_dtype) -> Tensor
+@map_to(aten._log_softmax_backward_data.default)
+def aten__log_softmax_backward_data(
+    grad_output: MaxTensor, output: MaxTensor, dim: int, input_dtype: torch.dtype
+) -> MaxTensor:
+    """Differentiate log-softmax using its saved output.
+
+    PyTorch's generated ``LogSoftmaxBackward0`` node calls this ATen op.  Keep
+    the implementation as ordinary MAX operations so it works for symbolic
+    graph values and eager tensors alike.
+    """
+    if grad_output.dtype != output.dtype:
+        raise ValueError(
+            "grad_output and output must have the same dtype for "
+            "_log_softmax_backward_data"
+        )
+    if tuple(grad_output.shape) != tuple(output.shape):
+        raise ValueError(
+            "grad_output and output must have the same shape for "
+            "_log_softmax_backward_data"
+        )
+
+    target_dtype = torch_dtype_to_max(input_dtype)
+    if grad_output.dtype != target_dtype and not (
+        grad_output.dtype == DType.float32 and target_dtype == DType.float16
+    ):
+        raise ValueError(
+            "input and grad dtypes must match, or input must be float16 and "
+            "grad must be float32"
+        )
+
+    rank = len(grad_output.shape)
+    if rank == 0:
+        if dim not in (-1, 0):
+            raise ValueError("dim must be -1 or 0 for a scalar input")
+        summed = grad_output
+    else:
+        if not -rank <= dim < rank:
+            raise ValueError("dim must refer to an input dimension")
+        dim %= rank
+        summed = aten_sum(grad_output, dim=[dim], keepdim=True)
+    result = grad_output - F.exp(output) * summed
+
+    if result.dtype != target_dtype:
+        result = F.cast(result, dtype=target_dtype)
     return result
 
 
@@ -2333,6 +2320,61 @@ def aten_linear(
     return result
 
 
+# linear_backward(Tensor self, Tensor grad_output, Tensor weight, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
+@map_to(aten.linear_backward.default)
+def aten_linear_backward(
+    self: MaxTensor, grad_output: MaxTensor, weight: MaxTensor, output_mask: list[bool]
+) -> tuple[MaxTensor | None, MaxTensor | None, MaxTensor | None]:
+    """Compute the requested dense linear gradients with dynamic shapes."""
+    mask = tuple(output_mask)
+    if len(mask) != 3 or any(not isinstance(requested, bool) for requested in mask):
+        raise ValueError("linear_backward output_mask must contain three booleans")
+    if len(self.shape) < 1 or len(weight.shape) != 2:
+        raise ValueError("linear_backward expects rank >= 1 input and rank 2 weight")
+
+    input_features = weight.shape[1]
+    output_features = weight.shape[0]
+    rows = math.prod(self.shape[:-1])
+    input_matrix = F.reshape(self, [rows, input_features])
+    grad_matrix = F.reshape(grad_output, [rows, output_features])
+
+    def zeros(shape: list[Dim] | tuple[Dim, ...]) -> MaxTensor:
+        zero = F.constant(0, dtype=grad_output.dtype, device=grad_output.device)
+        return F.broadcast_to(zero, shape)
+
+    grad_input = None
+    if mask[0]:
+        # MAX's matmul leaves C uninitialized when K is statically zero.
+        grad_input = (
+            zeros(self.shape)
+            if output_features == 0
+            else F.reshape(operator.matmul(grad_matrix, weight), self.shape)
+        )
+
+    grad_weight = None
+    # Match PyTorch's registered Meta/MPS structure: the two parameter
+    # outputs are both defined whenever either one is requested.
+    need_parameter_grads = mask[1] or mask[2]
+    if need_parameter_grads:
+        grad_weight = (
+            zeros(weight.shape)
+            if rows == 0
+            else operator.matmul(F.transpose(grad_matrix, 0, 1), input_matrix)
+        )
+
+    grad_bias = None
+    if need_parameter_grads:
+        if mask[2]:
+            grad_bias = (
+                zeros([output_features])
+                if rows == 0
+                else aten_sum(grad_matrix, dim=[0])
+            )
+        else:
+            grad_bias = zeros([output_features])
+    return grad_input, grad_weight, grad_bias
+
+
 # lift_fresh_copy(Tensor self) -> Tensor
 @map_to(aten.lift_fresh_copy)
 def aten_lift_fresh_copy(input: MaxTensor) -> MaxTensor:
@@ -2578,28 +2620,6 @@ def aten_min(
         values = aten_amin(input, dim=[dim], keepdim=keepdim)
         indices = aten_argmin(input, dim=dim, keepdim=keepdim)
         return (values, indices)
-
-
-# min.dim_min(Tensor self, int dim, bool keepdim=False, *, Tensor(a!) min, Tensor(b!) min_indices) -> (Tensor(a!) values, Tensor(b!) indices)
-def aten_min_dim_min(
-    input: MaxTensor,
-    dim: int,
-    keepdim: bool = False,
-    min: MaxTensor | None = None,
-    min_indices: MaxTensor | None = None,
-) -> tuple[MaxTensor, MaxTensor]:
-    """
-    Out-variant of torch.min along a dimension.
-    Computes minimum values and indices, writing results to pre-allocated tensors.
-
-    This is used by PyTorch's dispatcher in eager mode when calling torch.min(x, dim=dim).
-    """
-    # Compute the results using the regular min implementation
-    values, indices = aten_min(input, dim=dim, keepdim=keepdim)
-
-    # For graph mode, just return the computed values (output tensors are not used)
-    # For eager mode, the registration wrapper will handle copying to output tensors
-    return (values, indices)
 
 
 # minimum(Tensor self, Tensor other) -> Tensor
@@ -2886,26 +2906,6 @@ def aten_nonzero(input: MaxTensor) -> MaxTensor:
     Returns a 2D tensor where each row is the indices of a non-zero element.
     """
     return F.nonzero(input)
-
-
-# ones(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
-def aten_ones(
-    size: list[SymIntType],
-    *,
-    dtype: torch.dtype | None = None,
-    layout: torch.layout | None = None,
-    device: torch.device | None = None,
-    pin_memory: bool | None = None,
-) -> MaxEagerTensor:
-    if dtype is None:
-        dtype = torch.float32
-    dtype = torch_dtype_to_max(dtype)
-
-    if device is None:
-        device = torch.get_default_device()
-    device = torch_device_to_max_device(device)
-
-    return MaxEagerTensor.ones(size, dtype=dtype, device=device)
 
 
 # ones_like(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor
@@ -3974,21 +3974,6 @@ def aten_masked_fill(
 @map_to(aten.transpose)
 def aten_transpose(input: MaxTensor, dim0: int | Dim, dim1: int | Dim) -> MaxTensor:
     return F.transpose(input, dim0, dim1)
-
-
-# zeros(SymInt[] size, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor
-def aten_zeros(
-    size: list[SymIntType],
-    *,
-    dtype: torch.dtype | None = None,
-    layout=None,
-    device: torch.device | None = None,
-    pin_memory: bool | None = None,
-) -> MaxTensor:
-    dtype = torch.float32 if dtype is None else dtype
-    dtype = torch_dtype_to_max(dtype)
-    device = torch_device_to_max_device(device)
-    return MaxEagerTensor.zeros(size, dtype=dtype, device=device)
 
 
 if verbose_enabled():

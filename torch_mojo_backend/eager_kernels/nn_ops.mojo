@@ -64,7 +64,6 @@ from op_utils import (
     _raw_ret_none,
     _raw_tuple_f64,
     _raw_tuple_int,
-    _raw_tuple_len,
     _reduce_spec_geom,
     _scratch_contig,
     _scratch_copy,
