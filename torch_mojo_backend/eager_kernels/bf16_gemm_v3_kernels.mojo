@@ -45,6 +45,7 @@ from bf16_gemm_kernels import (
     enqueue_bf16_bmm as _enqueue_accepted_bf16_bmm,
     enqueue_bf16_gemm as _enqueue_accepted_bf16_gemm,
 )
+from bf16_gemm_nt_v4_kernels import maybe_enqueue_bf16_gemm_nt_v4
 
 
 comptime _V3_BF16 = DType.bfloat16
@@ -1622,6 +1623,14 @@ def enqueue_bf16_gemm(
     has_bias: Bool,
     ctx: DeviceContext,
 ) raises:
+    # NT (forward linear) route: persistent clustered v4 kernel with TMA
+    # multicast and TMA-store epilogue (bf16_gemm_nt_v4_kernels.mojo).  The
+    # helper enqueues only for regimes it fully supports (SM90, aligned
+    # n/k, TMA-compatible sizes) and returns False otherwise, in which case
+    # the pre-existing NT path below remains the fallback.
+    if not transpose_a and transpose_b and not has_bias:
+        if maybe_enqueue_bf16_gemm_nt_v4(output, a, b, m, n, k, ctx):
+            return
     comptime if _has_sm_9x():
         if ctx.api() == "cuda":
             var cc_major = ctx.get_attribute(
