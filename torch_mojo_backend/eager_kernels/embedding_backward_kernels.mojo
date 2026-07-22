@@ -80,8 +80,8 @@ def _device_scope() -> StaticString:
 def _atomic_add_f32(
     ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin], value: Float32
 ):
-    _ = Atomic[DType.float32, scope = _device_scope()].fetch_add[
-        ordering = Ordering.RELAXED
+    _ = Atomic[DType.float32, scope=_device_scope()].fetch_add[
+        ordering=Ordering.RELAXED
     ](ptr, value)
 
 
@@ -209,8 +209,8 @@ def _count(
     while index < num_indices:
         var target = Int(indices[index])
         if target != padding_idx:
-            _ = Atomic[DType.int32, scope = _device_scope()].fetch_add[
-                ordering = Ordering.RELAXED
+            _ = Atomic[DType.int32, scope=_device_scope()].fetch_add[
+                ordering=Ordering.RELAXED
             ](counts + target, 1)
         index += stride
 
@@ -287,7 +287,7 @@ def _table_accum(
         _TABLE_MAX_ROWS * _TABLE_COLS,
         DType.float32,
         alignment=16,
-        address_space = AddressSpace.SHARED,
+        address_space=AddressSpace.SHARED,
     ]()
     var tx = Int(thread_idx.x)
     var ty = Int(thread_idx.y)
@@ -323,15 +323,13 @@ def _table_accum(
             comptime for u in range(_TABLE_UNROLL):
                 if t[u] != padding_idx:
                     _ = Atomic[DType.float32].fetch_add[
-                        ordering = Ordering.RELAXED
+                        ordering=Ordering.RELAXED
                     ](table + t[u] * _TABLE_COLS + tx, v[u])
             row += _TABLE_UNROLL * _TABLE_ROWG
         while row < row_end:
             var t = Int(indices[row])
             if t != padding_idx:
-                _ = Atomic[DType.float32].fetch_add[
-                    ordering = Ordering.RELAXED
-                ](
+                _ = Atomic[DType.float32].fetch_add[ordering=Ordering.RELAXED](
                     table + t * _TABLE_COLS + tx,
                     grad_output[row * embedding_dim + col],
                 )
@@ -367,7 +365,7 @@ def _table_reduce(
         _RED_TX * _RED_TY * _VEC,
         DType.float32,
         alignment=16,
-        address_space = AddressSpace.SHARED,
+        address_space=AddressSpace.SHARED,
     ]()
     var tx = Int(thread_idx.x)
     var ty = Int(thread_idx.y)
@@ -457,8 +455,7 @@ def enqueue_embedding_dense_backward_f32_i64(
     var max_grid = max(1, sm_count) * 16
     var out_addr = Int(grad_weight)
     var vec_ok = (
-        embedding_dim % _VEC == 0
-        and (Int(grad_output) | out_addr) % 16 == 0
+        embedding_dim % _VEC == 0 and (Int(grad_output) | out_addr) % 16 == 0
     )
 
     # Table regime: the whole weight table fits a 48 KiB shared block and
@@ -499,9 +496,9 @@ def enqueue_embedding_dense_backward_f32_i64(
             grid_dim=(col_chunks, blocks_y),
             block_dim=(_TABLE_COLS, _TABLE_ROWG),
         )
-        var out_vec_ok = (
-            1 if (embedding_dim % _VEC == 0 and out_addr % 16 == 0) else 0
-        )
+        var out_vec_ok = 1 if (
+            embedding_dim % _VEC == 0 and out_addr % 16 == 0
+        ) else 0
         var total_vec = num_weights * (dim_pad // _VEC)
         ctx.enqueue_function[_table_reduce](
             grad_weight,

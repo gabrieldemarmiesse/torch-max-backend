@@ -1898,16 +1898,27 @@ def test_fast_embedding_backward_rejects_unsupported_modes(mojo_gpu):
         torch.use_deterministic_algorithms(was_deterministic, warn_only=was_warn_only)
 
 
-def test_fast_embedding_autograd_reports_nondeterminism_at_backward(mojo_gpu):
+def test_fast_embedding_autograd_reports_nondeterminism_at_forward(mojo_gpu):
+    """The alert must fire while recording: a backward-time raise aborts.
+
+    Exceptions thrown from a node the autograd engine runs on this backend
+    escalate to std::terminate (the engine's stream guard restores streams
+    through PyTorch's noexcept Python device guard during unwind).
+    """
     indices = torch.tensor([0, 1, 1], dtype=torch.int64).to(mojo_gpu)
     weight = torch.randn(3, 4).to(mojo_gpu).requires_grad_()
     was_deterministic = torch.are_deterministic_algorithms_enabled()
     was_warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
     try:
         torch.use_deterministic_algorithms(True)
-        output = torch.nn.functional.embedding(indices, weight)
         with pytest.raises(RuntimeError, match="does not have a deterministic"):
-            output.sum().backward()
+            torch.nn.functional.embedding(indices, weight)
+
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        with pytest.warns(UserWarning, match="does not have a deterministic"):
+            output = torch.nn.functional.embedding(indices, weight)
+        output.sum().backward()
+        assert weight.grad is not None
     finally:
         torch.use_deterministic_algorithms(was_deterministic, warn_only=was_warn_only)
 

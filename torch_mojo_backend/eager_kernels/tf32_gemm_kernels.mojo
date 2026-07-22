@@ -149,7 +149,7 @@ def _tile_body[
     comptime if is_nvidia_gpu():
         var smem = external_memory[
             Scalar[DType.float32],
-            address_space = AddressSpace.SHARED,
+            address_space=AddressSpace.SHARED,
             alignment=16,
         ]()
         # NVIDIA MMA fragment ownership is defined in 32-lane warps.
@@ -173,9 +173,7 @@ def _tile_body[
             def copy_a(ktile: Int, stage: Int):
                 var sa_ptr = smem + stage * STAGE_WORDS
                 var k0 = ktile * _BK
-                var tile = a_base + (
-                    k0 * lda + m0 if TA else m0 * lda + k0
-                )
+                var tile = a_base + (k0 * lda + m0 if TA else m0 * lda + k0)
                 var rows_avail = (k - k0) if TA else (m - m0)
                 var cols_avail = (m - m0) if TA else (k - k0)
                 if a_vec != 0:
@@ -188,8 +186,7 @@ def _tile_body[
                             var dst = sa_ptr + r * (AC + APAD) + col
                             if r < rows_avail and col + 3 < cols_avail:
                                 async_copy[16](
-                                    (tile + r * lda + col)
-                                    .address_space_cast[
+                                    (tile + r * lda + col).address_space_cast[
                                         AddressSpace.GLOBAL
                                     ](),
                                     dst,
@@ -198,13 +195,11 @@ def _tile_body[
                                 # The pinned async_copy has no zero-fill;
                                 # guard tails with plain element copies.
                                 comptime for j in range(4):
-                                    if (
-                                        r < rows_avail
-                                        and col + j < cols_avail
-                                    ):
+                                    if r < rows_avail and col + j < cols_avail:
                                         async_copy[4](
-                                            (tile + r * lda + col + j)
-                                            .address_space_cast[
+                                            (
+                                                tile + r * lda + col + j
+                                            ).address_space_cast[
                                                 AddressSpace.GLOBAL
                                             ](),
                                             dst + j,
@@ -220,8 +215,7 @@ def _tile_body[
                             var dst = sa_ptr + r * (AC + APAD) + col
                             if r < rows_avail and col < cols_avail:
                                 async_copy[4](
-                                    (tile + r * lda + col)
-                                    .address_space_cast[
+                                    (tile + r * lda + col).address_space_cast[
                                         AddressSpace.GLOBAL
                                     ](),
                                     dst,
@@ -234,9 +228,7 @@ def _tile_body[
             def copy_b(ktile: Int, stage: Int):
                 var sb_ptr = smem + stage * STAGE_WORDS + SA
                 var k0 = ktile * _BK
-                var tile = b_base + (
-                    n0 * ldb + k0 if TB else k0 * ldb + n0
-                )
+                var tile = b_base + (n0 * ldb + k0 if TB else k0 * ldb + n0)
                 var rows_avail = (n - n0) if TB else (k - k0)
                 var cols_avail = (k - k0) if TB else (n - n0)
                 if b_vec != 0:
@@ -249,21 +241,18 @@ def _tile_body[
                             var dst = sb_ptr + r * (BC + BPAD) + col
                             if r < rows_avail and col + 3 < cols_avail:
                                 async_copy[16](
-                                    (tile + r * ldb + col)
-                                    .address_space_cast[
+                                    (tile + r * ldb + col).address_space_cast[
                                         AddressSpace.GLOBAL
                                     ](),
                                     dst,
                                 )
                             else:
                                 comptime for j in range(4):
-                                    if (
-                                        r < rows_avail
-                                        and col + j < cols_avail
-                                    ):
+                                    if r < rows_avail and col + j < cols_avail:
                                         async_copy[4](
-                                            (tile + r * ldb + col + j)
-                                            .address_space_cast[
+                                            (
+                                                tile + r * ldb + col + j
+                                            ).address_space_cast[
                                                 AddressSpace.GLOBAL
                                             ](),
                                             dst + j,
@@ -279,8 +268,7 @@ def _tile_body[
                             var dst = sb_ptr + r * (BC + BPAD) + col
                             if r < rows_avail and col < cols_avail:
                                 async_copy[4](
-                                    (tile + r * ldb + col)
-                                    .address_space_cast[
+                                    (tile + r * ldb + col).address_space_cast[
                                         AddressSpace.GLOBAL
                                     ](),
                                     dst,
@@ -426,12 +414,8 @@ def _tile_body[
                 if row < m and col < n:
                     var total = Float32(0.0)
                     for r in range(k):
-                        var av = a_base[
-                            r * lda + row if TA else row * lda + r
-                        ]
-                        var bv = b_base[
-                            col * ldb + r if TB else r * ldb + col
-                        ]
+                        var av = a_base[r * lda + row if TA else row * lda + r]
+                        var bv = b_base[col * ldb + r if TB else r * ldb + col]
                         total += _tf32(av) * _tf32(bv)
                     if has_bias != 0:
                         total += bias[col]
@@ -544,15 +528,13 @@ def _launch_tile[
     # Vector copies only after a runtime proof: 16-byte base alignment plus
     # leading-dimension and batch-stride divisibility keep every 16-byte
     # cp.async source aligned for every tile of every batch.
-    var a_vec = (
-        1 if (Int(a) % 16 == 0 and lda % 4 == 0 and a_bs % 4 == 0) else 0
-    )
-    var b_vec = (
-        1 if (Int(b) % 16 == 0 and ldb % 4 == 0 and b_bs % 4 == 0) else 0
-    )
-    var c_vec = (
-        1 if (Int(c) % 8 == 0 and n % 2 == 0 and c_bs % 2 == 0) else 0
-    )
+    var a_vec = 1 if (
+        Int(a) % 16 == 0 and lda % 4 == 0 and a_bs % 4 == 0
+    ) else 0
+    var b_vec = 1 if (
+        Int(b) % 16 == 0 and ldb % 4 == 0 and b_bs % 4 == 0
+    ) else 0
+    var c_vec = 1 if (Int(c) % 8 == 0 and n % 2 == 0 and c_bs % 2 == 0) else 0
     var tiles = ceildiv(m, BM) * ceildiv(n, BN)
     var gz = min(batch_count, _MAX_GRID_Z)
     comptime if BATCHED:
@@ -604,7 +586,9 @@ def _launch_tile[
 
 
 @always_inline
-def _dispatch[BATCHED: Bool, TA: Bool, TB: Bool](
+def _dispatch[
+    BATCHED: Bool, TA: Bool, TB: Bool
+](
     c: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
     a: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
     b: UnsafePointer[Scalar[DType.float32], MutAnyOrigin],
@@ -633,34 +617,72 @@ def _dispatch[BATCHED: Bool, TA: Bool, TB: Bool](
     # square 64 tiles than with a 128-tall tile.
     if n <= 64:
         bm = 64
-    if (
-        bm == 128
-        and ceildiv(m, bm) * ceildiv(n, bn) * batch_count < target
-    ):
+    if bm == 128 and ceildiv(m, bm) * ceildiv(n, bn) * batch_count < target:
         bm = 64
-    if (
-        bn == 128
-        and ceildiv(m, bm) * ceildiv(n, bn) * batch_count < target
-    ):
+    if bn == 128 and ceildiv(m, bm) * ceildiv(n, bn) * batch_count < target:
         bn = 64
     if bm == 128 and bn == 128:
         _launch_tile[BATCHED, TA, TB, 128, 128, 64, 32, 256, 4](
-            c, a, b, bias, m, n, k, batch_count, c_bs, a_bs, b_bs, has_bias,
+            c,
+            a,
+            b,
+            bias,
+            m,
+            n,
+            k,
+            batch_count,
+            c_bs,
+            a_bs,
+            b_bs,
+            has_bias,
             ctx,
         )
     elif bm == 128:
         _launch_tile[BATCHED, TA, TB, 128, 64, 64, 32, 128, 5](
-            c, a, b, bias, m, n, k, batch_count, c_bs, a_bs, b_bs, has_bias,
+            c,
+            a,
+            b,
+            bias,
+            m,
+            n,
+            k,
+            batch_count,
+            c_bs,
+            a_bs,
+            b_bs,
+            has_bias,
             ctx,
         )
     elif bn == 128:
         _launch_tile[BATCHED, TA, TB, 64, 128, 32, 64, 128, 5](
-            c, a, b, bias, m, n, k, batch_count, c_bs, a_bs, b_bs, has_bias,
+            c,
+            a,
+            b,
+            bias,
+            m,
+            n,
+            k,
+            batch_count,
+            c_bs,
+            a_bs,
+            b_bs,
+            has_bias,
             ctx,
         )
     else:
         _launch_tile[BATCHED, TA, TB, 64, 64, 32, 32, 128, 5](
-            c, a, b, bias, m, n, k, batch_count, c_bs, a_bs, b_bs, has_bias,
+            c,
+            a,
+            b,
+            bias,
+            m,
+            n,
+            k,
+            batch_count,
+            c_bs,
+            a_bs,
+            b_bs,
+            has_bias,
             ctx,
         )
 

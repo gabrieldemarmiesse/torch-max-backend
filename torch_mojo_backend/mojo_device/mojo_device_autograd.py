@@ -11,9 +11,7 @@ import math
 from typing import no_type_check
 
 import torch
-from torch.autograd.function import once_differentiable
 
-from .cross_entropy import decompose_cross_entropy_loss
 from .torch_mojo_tensor import TorchMojoTensor
 
 _registered = False
@@ -193,162 +191,6 @@ def _restore_saved_mojo_tensors(ctx):
         payload.restore(tensor)
         for tensor, payload in zip(saved_tensors, payloads, strict=True)
     )
-
-
-# Native EmbeddingBackward0 already reaches our dense backward kernel for the
-# supported first-order case, but it can enter unsupported sparse/frequency
-# paths without a safe backend error, and its double backward needs index_select.
-# Keep this preflight boundary until all three native routes are safe.
-class _EmbeddingAutograd(torch.autograd.Function):
-    @staticmethod
-    @no_type_check
-    def forward(ctx, weight, indices, padding_idx, scale_grad_by_freq, sparse):
-        if sparse:
-            raise NotImplementedError(
-                "Mojo eager embedding autograd does not yet support sparse=True"
-            )
-        if scale_grad_by_freq:
-            raise NotImplementedError(
-                "Mojo eager embedding autograd does not yet support "
-                "scale_grad_by_freq=True"
-            )
-        output = _require_handled(
-            _fast().fast_aten_embedding(
-                weight, indices, padding_idx, scale_grad_by_freq, sparse
-            ),
-            "aten::embedding",
-        )
-        # Weight values are irrelevant to its gradient. Saving only indices
-        # preserves their version check and avoids retaining the table twice.
-        ctx.save_for_backward(indices)
-        ctx.saved_payloads = (_SavedMojoPayload(indices),)
-        ctx.num_weights = weight._shape[0]
-        ctx.padding_idx = padding_idx
-        ctx.set_materialize_grads(False)
-        return output
-
-    @staticmethod
-    @no_type_check
-    def backward(ctx, grad_output):
-        if grad_output is None:
-            return None, None, None, None, None
-        (indices,) = _restore_saved_mojo_tensors(ctx)
-        grad_weight = _require_handled(
-            _fast().fast_aten_embedding_dense_backward(
-                grad_output, indices, ctx.num_weights, ctx.padding_idx, False
-            ),
-            "aten::embedding_dense_backward",
-        )
-        return grad_weight, None, None, None, None
-
-
-@no_type_check
-def _embedding_autograd(
-    weight, indices, padding_idx=-1, scale_grad_by_freq=False, sparse=False
-):
-    if not weight.requires_grad:
-        return _require_handled(
-            _fast().fast_aten_embedding(
-                weight, indices, padding_idx, scale_grad_by_freq, sparse
-            ),
-            "aten::embedding",
-        )
-    return _EmbeddingAutograd.apply(
-        weight, indices, padding_idx, scale_grad_by_freq, sparse
-    )
-
-
-# cross_entropy_loss has no native backward ATen op through which PyTorch could
-# pass the fused forward's private row statistics, so this custom node is the
-# actual fused-operation boundary rather than redundant dispatcher plumbing.
-class _Bf16CrossEntropyAutograd(torch.autograd.Function):
-    @staticmethod
-    @no_type_check
-    def forward(ctx, input, target, weight, reduction, ignore_index, label_smoothing):
-        aten_fast = _fast()
-        result = aten_fast.fast_bf16_cross_entropy_forward(
-            input,
-            target,
-            weight,
-            reduction,
-            ignore_index,
-            label_smoothing,
-            require_backward=True,
-        )
-        if result is None or result is aten_fast.NOT_HANDLED:
-            raise RuntimeError(
-                "fused BF16 cross entropy became unavailable after host preflight"
-            )
-        loss, row_max, row_logsum, total_weight = result
-        ctx.save_for_backward(input, target, row_max, row_logsum, total_weight)
-        ctx.saved_payloads = tuple(
-            _SavedMojoPayload(tensor)
-            for tensor in (input, target, row_max, row_logsum, total_weight)
-        )
-        ctx.ignore_index = ignore_index
-        ctx.set_materialize_grads(False)
-        return loss
-
-    @staticmethod
-    @once_differentiable
-    @no_type_check
-    def backward(ctx, grad_output):
-        if grad_output is None:
-            return None, None, None, None, None, None
-        input, target, row_max, row_logsum, total_weight = _restore_saved_mojo_tensors(
-            ctx
-        )
-        grad_input = _require_handled(
-            _fast().fast_bf16_cross_entropy_backward(
-                grad_output,
-                input,
-                target,
-                row_max,
-                row_logsum,
-                total_weight,
-                ctx.ignore_index,
-            ),
-            "aten::cross_entropy_loss backward",
-        )
-        return grad_input, None, None, None, None, None
-
-
-@no_type_check
-def _cross_entropy_loss_autograd(
-    input, target, weight=None, reduction=1, ignore_index=-100, label_smoothing=0.0
-):
-    """Route the narrow fused path or invoke PyTorch's composite directly."""
-    aten_fast = _fast()
-    needs_backward = torch.is_grad_enabled() and bool(input.requires_grad)
-    if not aten_fast.bf16_cross_entropy_supported(
-        input,
-        target,
-        weight,
-        reduction,
-        ignore_index,
-        label_smoothing,
-        require_backward=needs_backward,
-    ):
-        # This intentionally preserves PyTorch's exact composite dispatch and
-        # dtype semantics.  The backend's pre-existing BF16 NLL coverage
-        # outside autocast is a separate limitation; do not silently replace
-        # that path with this fused bridge's FP32-loss contract.
-        return decompose_cross_entropy_loss(
-            input, target, weight, reduction, ignore_index, label_smoothing
-        )
-    if needs_backward:
-        return _Bf16CrossEntropyAutograd.apply(
-            input, target, weight, reduction, ignore_index, label_smoothing
-        )
-    result = aten_fast.fast_bf16_cross_entropy_forward(
-        input, target, weight, reduction, ignore_index, label_smoothing
-    )
-    if result is None or result is aten_fast.NOT_HANDLED:
-        raise RuntimeError(
-            "fused BF16 cross entropy became unavailable after host preflight"
-        )
-    loss, _row_max, _row_logsum, _total_weight = result
-    return loss
 
 
 # Eligible FA4 calls are routed through PyTorch's native lower flash pair below.
@@ -631,10 +473,6 @@ def register_autograd_ops() -> None:
     if _registered:
         return
 
-    torch.library.impl("aten::cross_entropy_loss", "AutogradPrivateUse1")(
-        _cross_entropy_loss_autograd
-    )
-    torch.library.impl("aten::embedding", "AutogradPrivateUse1")(_embedding_autograd)
     torch.library.impl("aten::scaled_dot_product_attention", "AutogradPrivateUse1")(
         _scaled_dot_product_attention_autograd
     )

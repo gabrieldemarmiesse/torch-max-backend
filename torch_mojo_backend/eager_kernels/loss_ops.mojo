@@ -200,7 +200,7 @@ def _nll_forward_sum(
     ignore_index: Int,
 ):
     var losses = stack_allocation[
-        _SUM_BLOCK, DType.float32, address_space = AddressSpace.SHARED
+        _SUM_BLOCK, DType.float32, address_space=AddressSpace.SHARED
     ]()
     var tid = Int(thread_idx.x)
     var acc = Float32(0.0)
@@ -360,9 +360,7 @@ def enqueue_nll_forward_f32(
                 )
             else:
                 var grid = min(ceildiv(rows, _PARTIAL_BLOCK), 1024)
-                var scratch = ctx.enqueue_create_buffer[DType.float32](
-                    2 * grid
-                )
+                var scratch = ctx.enqueue_create_buffer[DType.float32](2 * grid)
                 var scratch_ptr = scratch.unsafe_ptr().as_unsafe_any_origin()
                 _enqueue_cached[_nll_forward_mean_partial](
                     ctx,

@@ -16,7 +16,6 @@ import torch
 from max.experimental.torch.torch import torch_dtype_to_max
 
 import torch_mojo_backend.is_running_tests
-from torch_mojo_backend.mojo_device.cross_entropy import decompose_cross_entropy_loss
 from torch_mojo_backend.mojo_device.torch_mojo_tensor import (
     TorchMojoTensor,
     _copy_strided_into,
@@ -662,22 +661,36 @@ def mojo_device_arange_start_out(start, end, step=1, *, out) -> TorchMojoTensor:
     return out
 
 
-@register_aten_op("aten::cross_entropy_loss")
+@register_aten_op("aten::embedding")
 @no_type_check
-def mojo_device_cross_entropy_loss(
-    input, target, weight=None, reduction=1, ignore_index=-100, label_smoothing=0.0
+def mojo_device_embedding(
+    weight, indices, padding_idx=-1, scale_grad_by_freq=False, sparse=False
 ):
-    """Use fused H100 BF16 forward or the exact PyTorch composite body."""
+    """Native-autograd embedding with a forward-time autograd-mode preflight.
+
+    An exception raised while the autograd engine runs a backward node aborts
+    the process on this backend: the engine's stream guard restores streams
+    through PyTorch's noexcept Python device guard, which std::terminates
+    when the Python round-trip fails during unwind. Unsupported autograd
+    modes must therefore be rejected before EmbeddingBackward0 is recorded,
+    not when the engine reaches the sparse or dense backward.
+    """
     aten_fast = _fast()
-    result = aten_fast.fast_bf16_cross_entropy_forward(
-        input, target, weight, reduction, ignore_index, label_smoothing
+    if torch.is_grad_enabled() and weight.requires_grad:
+        if sparse or scale_grad_by_freq:
+            mode = "sparse=True" if sparse else "scale_grad_by_freq=True"
+            raise NotImplementedError(
+                f"Mojo eager embedding autograd does not yet support {mode}"
+            )
+        # The recorded backward's atomic accumulation is nondeterministic;
+        # alerting there is too late for the same unwind-abort reason.
+        aten_fast._alert_not_deterministic("embedding_dense_backward on Mojo")
+    result = aten_fast.fast_aten_embedding(
+        weight, indices, padding_idx, scale_grad_by_freq, sparse
     )
     if result is aten_fast.NOT_HANDLED:
-        return decompose_cross_entropy_loss(
-            input, target, weight, reduction, ignore_index, label_smoothing
-        )
-    loss, _row_max, _row_logsum, _total_weight = result
-    return loss
+        raise _unsupported("aten::embedding", (weight, indices))
+    return result
 
 
 @register_aten_op("aten::normal_")
@@ -947,7 +960,6 @@ _register_fast("aten::cosh", "fast_aten_cosh")
 _register_fast("aten::cumsum", "fast_aten_cumsum")
 _register_fast("aten::detach", "fast_aten_detach")
 _register_fast("aten::div.Tensor", "fast_aten_div")
-_register_fast("aten::embedding", "fast_aten_embedding")
 _register_fast("aten::embedding_dense_backward", "fast_aten_embedding_dense_backward")
 _register_fast("aten::eq", "fast_aten_eq")
 _register_fast("aten::eq.Scalar", "fast_aten_eq")

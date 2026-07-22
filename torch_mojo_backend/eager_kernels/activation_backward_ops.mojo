@@ -86,9 +86,7 @@ def _gelu_backward_exact(
         var base = gid * _VEC
         var x = input.load[width=_VEC, alignment=16](base)
         var g = grad_output.load[width=_VEC, alignment=16](base)
-        output.store[width=_VEC, alignment=16](
-            base, _exact_grad[_VEC](x, g)
-        )
+        output.store[width=_VEC, alignment=16](base, _exact_grad[_VEC](x, g))
     var i = vec_count * _VEC + gid
     var stride = Int(grid_dim.x) * _BLOCK
     while i < elements:
@@ -109,9 +107,7 @@ def _gelu_backward_tanh(
         var base = gid * _VEC
         var x = input.load[width=_VEC, alignment=16](base)
         var g = grad_output.load[width=_VEC, alignment=16](base)
-        output.store[width=_VEC, alignment=16](
-            base, _tanh_grad[_VEC](x, g)
-        )
+        output.store[width=_VEC, alignment=16](base, _tanh_grad[_VEC](x, g))
     var i = vec_count * _VEC + gid
     var stride = Int(grid_dim.x) * _BLOCK
     while i < elements:

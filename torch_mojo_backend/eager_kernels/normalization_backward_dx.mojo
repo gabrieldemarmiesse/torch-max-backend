@@ -127,12 +127,12 @@ def _dx_warp_rows[
                 comptime if stream_loads:
                     q = global_load[
                         width=_VEC,
-                        cache_policy = CacheOperation.STREAMING,
+                        cache_policy=CacheOperation.STREAMING,
                         alignment=16,
                     ](grad_output, offset)
                     x = global_load[
                         width=_VEC,
-                        cache_policy = CacheOperation.STREAMING,
+                        cache_policy=CacheOperation.STREAMING,
                         alignment=16,
                     ](input, offset)
                 else:
@@ -168,9 +168,7 @@ def _dx_warp_rows[
                         warp_slot + u * WARP_SIZE * _VEC
                     )
                 else:
-                    xh = (
-                        input.load[width=_VEC, alignment=16](offset) - m
-                    ) * r
+                    xh = (input.load[width=_VEC, alignment=16](offset) - m) * r
                 var out = q.fma(r, xh.fma(-kc, -kb))
                 dx.store[width=_VEC, alignment=16](offset, out)
         row += row_stride
@@ -190,7 +188,15 @@ def _dx_c1(
     has_weight: Int,
 ):
     _dx_warp_rows[1](
-        dx, grad_output, input, mean, rstd, weight, rows, cols, vec_cols,
+        dx,
+        grad_output,
+        input,
+        mean,
+        rstd,
+        weight,
+        rows,
+        cols,
+        vec_cols,
         has_weight,
     )
 
@@ -209,7 +215,15 @@ def _dx_c2(
     has_weight: Int,
 ):
     _dx_warp_rows[2](
-        dx, grad_output, input, mean, rstd, weight, rows, cols, vec_cols,
+        dx,
+        grad_output,
+        input,
+        mean,
+        rstd,
+        weight,
+        rows,
+        cols,
+        vec_cols,
         has_weight,
     )
 
@@ -228,7 +242,15 @@ def _dx_c3(
     has_weight: Int,
 ):
     _dx_warp_rows[3](
-        dx, grad_output, input, mean, rstd, weight, rows, cols, vec_cols,
+        dx,
+        grad_output,
+        input,
+        mean,
+        rstd,
+        weight,
+        rows,
+        cols,
+        vec_cols,
         has_weight,
     )
 
@@ -247,7 +269,15 @@ def _dx_c4(
     has_weight: Int,
 ):
     _dx_warp_rows[4](
-        dx, grad_output, input, mean, rstd, weight, rows, cols, vec_cols,
+        dx,
+        grad_output,
+        input,
+        mean,
+        rstd,
+        weight,
+        rows,
+        cols,
+        vec_cols,
         has_weight,
     )
 
@@ -266,7 +296,15 @@ def _dx_c6(
     has_weight: Int,
 ):
     _dx_warp_rows[6](
-        dx, grad_output, input, mean, rstd, weight, rows, cols, vec_cols,
+        dx,
+        grad_output,
+        input,
+        mean,
+        rstd,
+        weight,
+        rows,
+        cols,
+        vec_cols,
         has_weight,
     )
 
@@ -285,7 +323,15 @@ def _dx_c8(
     has_weight: Int,
 ):
     _dx_warp_rows[8](
-        dx, grad_output, input, mean, rstd, weight, rows, cols, vec_cols,
+        dx,
+        grad_output,
+        input,
+        mean,
+        rstd,
+        weight,
+        rows,
+        cols,
+        vec_cols,
         has_weight,
     )
 
@@ -379,8 +425,16 @@ def enqueue_layer_norm_backward_dx_f32(
                         1,
                         1,
                         block_dim,
-                        dx, grad_output, input, mean, rstd, weight, rows,
-                        cols, vec_cols, hw,
+                        dx,
+                        grad_output,
+                        input,
+                        mean,
+                        rstd,
+                        weight,
+                        rows,
+                        cols,
+                        vec_cols,
+                        hw,
                     )
                 elif needed <= 2:
                     _enqueue_cached[_dx_c2](
@@ -390,8 +444,16 @@ def enqueue_layer_norm_backward_dx_f32(
                         1,
                         1,
                         block_dim,
-                        dx, grad_output, input, mean, rstd, weight, rows,
-                        cols, vec_cols, hw,
+                        dx,
+                        grad_output,
+                        input,
+                        mean,
+                        rstd,
+                        weight,
+                        rows,
+                        cols,
+                        vec_cols,
+                        hw,
                     )
                 elif needed <= 3:
                     _enqueue_cached[_dx_c3](
@@ -401,8 +463,16 @@ def enqueue_layer_norm_backward_dx_f32(
                         1,
                         1,
                         block_dim,
-                        dx, grad_output, input, mean, rstd, weight, rows,
-                        cols, vec_cols, hw,
+                        dx,
+                        grad_output,
+                        input,
+                        mean,
+                        rstd,
+                        weight,
+                        rows,
+                        cols,
+                        vec_cols,
+                        hw,
                     )
                 elif needed <= 4:
                     _enqueue_cached[_dx_c4](
@@ -412,8 +482,16 @@ def enqueue_layer_norm_backward_dx_f32(
                         1,
                         1,
                         block_dim,
-                        dx, grad_output, input, mean, rstd, weight, rows,
-                        cols, vec_cols, hw,
+                        dx,
+                        grad_output,
+                        input,
+                        mean,
+                        rstd,
+                        weight,
+                        rows,
+                        cols,
+                        vec_cols,
+                        hw,
                     )
                 elif needed <= 6:
                     _enqueue_cached[_dx_c6](
@@ -423,8 +501,16 @@ def enqueue_layer_norm_backward_dx_f32(
                         1,
                         1,
                         block_dim,
-                        dx, grad_output, input, mean, rstd, weight, rows,
-                        cols, vec_cols, hw,
+                        dx,
+                        grad_output,
+                        input,
+                        mean,
+                        rstd,
+                        weight,
+                        rows,
+                        cols,
+                        vec_cols,
+                        hw,
                     )
                 else:
                     _enqueue_cached[_dx_c8](
@@ -434,8 +520,16 @@ def enqueue_layer_norm_backward_dx_f32(
                         1,
                         1,
                         block_dim,
-                        dx, grad_output, input, mean, rstd, weight, rows,
-                        cols, vec_cols, hw,
+                        dx,
+                        grad_output,
+                        input,
+                        mean,
+                        rstd,
+                        weight,
+                        rows,
+                        cols,
+                        vec_cols,
+                        hw,
                     )
                 return
         var grid = min(rows, _MAX_GRID)
@@ -446,7 +540,15 @@ def enqueue_layer_norm_backward_dx_f32(
             1,
             1,
             _GEN_BLOCK,
-            dx, grad_output, input, mean, rstd, weight, rows, cols, hw,
+            dx,
+            grad_output,
+            input,
+            mean,
+            rstd,
+            weight,
+            rows,
+            cols,
+            hw,
         )
     else:
         raise Error("no GPU accelerator available at compile time")

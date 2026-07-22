@@ -143,12 +143,12 @@ def _final_kernel(
     var shared_weight = stack_allocation[
         _FINAL_TX * _FINAL_TY,
         Scalar[DType.float32],
-        address_space = AddressSpace.SHARED,
+        address_space=AddressSpace.SHARED,
     ]()
     var shared_bias = stack_allocation[
         _FINAL_TX * _FINAL_TY,
         Scalar[DType.float32],
-        address_space = AddressSpace.SHARED,
+        address_space=AddressSpace.SHARED,
     ]()
     var weight_acc = Float32(0.0)
     var bias_acc = Float32(0.0)
