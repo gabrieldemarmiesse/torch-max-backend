@@ -12,6 +12,7 @@ import math
 from collections.abc import Callable
 
 import torch
+from max.driver import Device as MaxDevice
 from max.experimental.torch.torch import torch_dtype_to_max
 
 import torch_mojo_backend.is_running_tests
@@ -21,6 +22,7 @@ from torch_mojo_backend.mojo_device.torch_mojo_tensor import (
     _record_h2d_source,
     _resize_payload,
     find_equivalent_max_device,
+    peer_access_enabled,
 )
 
 # Global registry for functions to register
@@ -212,6 +214,66 @@ def _out_variant(op_name: str, fast_name: str, *, dtype_policy: str = "safe_cast
 # ----------------------------------------------------------------------------------
 
 
+def _is_peer_gpu_pair(a: MaxDevice, b: MaxDevice) -> bool:
+    """Whether a direct device-to-device copy between ``a`` and ``b`` works."""
+    return a.label == "gpu" and b.label == "gpu" and peer_access_enabled()
+
+
+def _peer_replica(src: TorchMojoTensor, target: MaxDevice) -> TorchMojoTensor:
+    """A contiguous replica of ``src`` on ``target`` via direct peer copy.
+
+    The caller must have verified ``_is_peer_gpu_pair(src._device, target)``.
+    The copy is stream-ordered on both devices' default streams, so it needs
+    no host synchronization and no transfer-owner tracking.
+    """
+    from torch_mojo_backend import eager_kernels
+
+    src = src._contig()
+    out = TorchMojoTensor._alloc(src._shape, src._dtype, target)
+    if src._numel > 0:
+        eager_kernels.tensor_holder.copy_d2d_peer(
+            eager_kernels._ctx_ptr(target),
+            out._ptr,
+            eager_kernels._ctx_ptr(src._device),
+            src._ptr,
+            src._numel * src._itemsize,
+        )
+    return out
+
+
+def _try_peer_copy_into(dest: TorchMojoTensor, src: TorchMojoTensor) -> bool:
+    """Copy ``src`` into ``dest`` across two GPUs via direct peer access.
+
+    Returns False when the devices are not a peer-enabled GPU pair, leaving
+    the caller to bounce through the host. Dtype casts and broadcasts run on
+    the destination device after a compact raw transfer.
+    """
+    if not _is_peer_gpu_pair(src._device, dest._device):
+        return False
+
+    if (
+        src._is_contiguous
+        and dest._is_contiguous
+        and src._dtype == dest._dtype
+        and tuple(src._shape) == tuple(dest._shape)
+    ):
+        if src._numel > 0:
+            from torch_mojo_backend import eager_kernels
+
+            eager_kernels.tensor_holder.copy_d2d_peer(
+                eager_kernels._ctx_ptr(dest._device),
+                dest._ptr,
+                eager_kernels._ctx_ptr(src._device),
+                src._ptr,
+                src._numel * src._itemsize,
+            )
+        return True
+
+    staged = _peer_replica(src, dest._device)
+    _copy_into_tensor(dest, staged)
+    return True
+
+
 @register_aten_op("aten::_copy_from")
 def mojo_device__copy_from(self, dest, non_blocking: bool = False):
     src_is_mojo = isinstance(self, TorchMojoTensor)
@@ -219,7 +281,9 @@ def mojo_device__copy_from(self, dest, non_blocking: bool = False):
 
     if src_is_mojo and dest_is_mojo:
         if self._device != dest._device:
-            # Cross mojo-device: bounce through the host.
+            if _try_peer_copy_into(dest, self):
+                return dest
+            # No peer access between the devices: bounce through the host.
             bounced = TorchMojoTensor._from_cpu(
                 self._to_cpu_tensor(), dest._device, non_blocking=non_blocking
             )
@@ -317,6 +381,8 @@ def mojo_device__to_copy(
     if device is not None:
         target = find_equivalent_max_device(device)
         if target != result._device:
+            if _is_peer_gpu_pair(result._device, target):
+                return _peer_replica(result, target)
             return TorchMojoTensor._from_cpu(
                 result._to_cpu_tensor(), target, non_blocking=non_blocking
             )
@@ -900,6 +966,7 @@ _register_fast("aten::any.dim", "fast_aten_any")
 _register_fast("aten::any.dims", "fast_aten_any")
 _register_fast("aten::argmax", "fast_aten_argmax")
 _register_fast("aten::argmin", "fast_aten_argmin")
+_register_fast("aten::as_strided", "fast_aten_as_strided")
 _register_fast("aten::asinh", "fast_aten_asinh")
 _register_fast("aten::atanh", "fast_aten_atanh")
 _register_fast("aten::avg_pool2d", "fast_aten_avg_pool2d")

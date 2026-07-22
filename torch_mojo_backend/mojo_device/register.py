@@ -161,6 +161,17 @@ def register_mojo_devices():
     )
     _install_torch_accelerator_synchronize(torch_mojo_device_module)
 
+    # Mojo wrapper TensorImpls carry their real device index (mojo:i), but
+    # PyTorch's Python PrivateUse1 device guard advertises deviceCount() == 1,
+    # and the autograd engine's per-device ready queues assert
+    # index < deviceCount. Backward on any mojo:i with i >= 1 must therefore
+    # run on the calling thread, which the engine only does when
+    # multithreading is disabled. The setting is thread-local: threads the
+    # user spawns to run backward on a non-zero mojo device need the same
+    # call (torch.autograd.set_multithreading_enabled(False)).
+    if torch_mojo_device_module.device_count() > 1:
+        torch.autograd.set_multithreading_enabled(False)
+
     # PyTorch deliberately uses exact-type checks before selecting foreach
     # optimizers. TorchMojoTensor is a transparent PrivateUse1 wrapper, so
     # opt it into the same lists as DTensor and other supported tensor types.

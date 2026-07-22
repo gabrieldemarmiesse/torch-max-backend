@@ -4,7 +4,19 @@ import torch
 
 from ..torch_compile_backend.utils import get_accelerators
 
-_current_device = 0
+
+class _CurrentDevice(threading.local):
+    """Per-thread current mojo device index.
+
+    Thread-local (like torch.cuda's TLS current device) so that each rank
+    thread of single-process data parallelism can pin itself to its own
+    device without racing the other ranks' dispatch.
+    """
+
+    index: int = 0
+
+
+_current_device = _CurrentDevice()
 _UINT64_MASK = (1 << 64) - 1
 _DEFAULT_RNG_SEED = 67_280_421_310_721
 _rng_default_seed = _DEFAULT_RNG_SEED
@@ -29,14 +41,16 @@ def _normalize_rng_seed(seed) -> int:
 
 def _rng_device_index(device=None) -> int:
     if device is None:
-        index = _current_device
+        index = _current_device.index
     elif isinstance(device, int):
         index = device
     else:
         torch_device = torch.device(device)
         if torch_device.type != "mojo":
             raise ValueError(f"expected a mojo RNG device, got {torch_device}")
-        index = _current_device if torch_device.index is None else torch_device.index
+        index = (
+            _current_device.index if torch_device.index is None else torch_device.index
+        )
     if index < 0 or index >= device_count():
         raise ValueError(f"Invalid device index {index}")
     return index
@@ -109,14 +123,13 @@ def is_initialized():
 
 
 def current_device():
-    return _current_device
+    return _current_device.index
 
 
 def set_device(device_idx: int):
-    global _current_device
     if device_idx < 0 or device_idx >= device_count():
         raise ValueError(f"Invalid device index {device_idx}")
-    _current_device = device_idx
+    _current_device.index = device_idx
 
 
 def synchronize(device=None):
@@ -128,13 +141,13 @@ def synchronize(device=None):
     )
 
     if device is None:
-        torch_device = torch.device(f"mojo:{_current_device}")
+        torch_device = torch.device(f"mojo:{_current_device.index}")
     elif isinstance(device, int):
         torch_device = torch.device(f"mojo:{device}")
     else:
         torch_device = torch.device(device)
         if torch_device.type == "mojo" and torch_device.index is None:
-            torch_device = torch.device(f"mojo:{_current_device}")
+            torch_device = torch.device(f"mojo:{_current_device.index}")
 
     max_device = find_equivalent_max_device(torch_device)
     max_device.default_stream.synchronize()
