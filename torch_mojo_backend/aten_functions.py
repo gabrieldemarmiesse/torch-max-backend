@@ -785,6 +785,54 @@ def aten__log_softmax(input: MaxTensor, dim: int, half_to_float: bool) -> MaxTen
     return result
 
 
+# aten::_log_softmax_backward_data(Tensor grad_output, Tensor output, int dim, ScalarType input_dtype) -> Tensor
+@map_to(aten._log_softmax_backward_data.default)
+def aten__log_softmax_backward_data(
+    grad_output: MaxTensor, output: MaxTensor, dim: int, input_dtype: torch.dtype
+) -> MaxTensor:
+    """Differentiate log-softmax using its saved output.
+
+    PyTorch's generated ``LogSoftmaxBackward0`` node calls this ATen op.  Keep
+    the implementation as ordinary MAX operations so it works for symbolic
+    graph values and eager tensors alike.
+    """
+    if grad_output.dtype != output.dtype:
+        raise ValueError(
+            "grad_output and output must have the same dtype for "
+            "_log_softmax_backward_data"
+        )
+    if tuple(grad_output.shape) != tuple(output.shape):
+        raise ValueError(
+            "grad_output and output must have the same shape for "
+            "_log_softmax_backward_data"
+        )
+
+    target_dtype = torch_dtype_to_max(input_dtype)
+    if grad_output.dtype != target_dtype and not (
+        grad_output.dtype == DType.float32 and target_dtype == DType.float16
+    ):
+        raise ValueError(
+            "input and grad dtypes must match, or input must be float16 and "
+            "grad must be float32"
+        )
+
+    rank = len(grad_output.shape)
+    if rank == 0:
+        if dim not in (-1, 0):
+            raise ValueError("dim must be -1 or 0 for a scalar input")
+        summed = grad_output
+    else:
+        if not -rank <= dim < rank:
+            raise ValueError("dim must refer to an input dimension")
+        dim %= rank
+        summed = aten_sum(grad_output, dim=[dim], keepdim=True)
+    result = grad_output - F.exp(output) * summed
+
+    if result.dtype != target_dtype:
+        result = F.cast(result, dtype=target_dtype)
+    return result
+
+
 # _to_copy(Tensor self, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None, bool non_blocking=False, MemoryFormat? memory_format=None) -> Tensor
 @map_to(aten._to_copy)
 def aten__to_copy(
@@ -2270,6 +2318,61 @@ def aten_linear(
     if bias is not None:
         result = result + bias
     return result
+
+
+# linear_backward(Tensor self, Tensor grad_output, Tensor weight, bool[3] output_mask) -> (Tensor, Tensor, Tensor)
+@map_to(aten.linear_backward.default)
+def aten_linear_backward(
+    self: MaxTensor, grad_output: MaxTensor, weight: MaxTensor, output_mask: list[bool]
+) -> tuple[MaxTensor | None, MaxTensor | None, MaxTensor | None]:
+    """Compute the requested dense linear gradients with dynamic shapes."""
+    mask = tuple(output_mask)
+    if len(mask) != 3 or any(not isinstance(requested, bool) for requested in mask):
+        raise ValueError("linear_backward output_mask must contain three booleans")
+    if len(self.shape) < 1 or len(weight.shape) != 2:
+        raise ValueError("linear_backward expects rank >= 1 input and rank 2 weight")
+
+    input_features = weight.shape[1]
+    output_features = weight.shape[0]
+    rows = math.prod(self.shape[:-1])
+    input_matrix = F.reshape(self, [rows, input_features])
+    grad_matrix = F.reshape(grad_output, [rows, output_features])
+
+    def zeros(shape: list[Dim] | tuple[Dim, ...]) -> MaxTensor:
+        zero = F.constant(0, dtype=grad_output.dtype, device=grad_output.device)
+        return F.broadcast_to(zero, shape)
+
+    grad_input = None
+    if mask[0]:
+        # MAX's matmul leaves C uninitialized when K is statically zero.
+        grad_input = (
+            zeros(self.shape)
+            if output_features == 0
+            else F.reshape(operator.matmul(grad_matrix, weight), self.shape)
+        )
+
+    grad_weight = None
+    # Match PyTorch's registered Meta/MPS structure: the two parameter
+    # outputs are both defined whenever either one is requested.
+    need_parameter_grads = mask[1] or mask[2]
+    if need_parameter_grads:
+        grad_weight = (
+            zeros(weight.shape)
+            if rows == 0
+            else operator.matmul(F.transpose(grad_matrix, 0, 1), input_matrix)
+        )
+
+    grad_bias = None
+    if need_parameter_grads:
+        if mask[2]:
+            grad_bias = (
+                zeros([output_features])
+                if rows == 0
+                else aten_sum(grad_matrix, dim=[0])
+            )
+        else:
+            grad_bias = zeros([output_features])
+    return grad_input, grad_weight, grad_bias
 
 
 # lift_fresh_copy(Tensor self) -> Tensor

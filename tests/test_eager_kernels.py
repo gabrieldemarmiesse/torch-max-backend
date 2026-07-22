@@ -2961,6 +2961,8 @@ def test_fast_linear_single_token(mojo_device, dtype):
 
 @pytest.mark.parametrize("with_bias", [False, True])
 def test_fast_linear_training_backward(mojo_gpu, with_bias):
+    from torch_mojo_backend.mojo_device.mojo_device_aten_ops import EAGER_CALL_COUNTERS
+
     generator = torch.Generator().manual_seed(20260718)
     x = torch.randn(2, 16, 32, generator=generator)
     weight = torch.randn(64, 32, generator=generator)
@@ -2973,9 +2975,14 @@ def test_fast_linear_training_backward(mojo_gpu, with_bias):
 
     mojo_inputs = [tensor.to(mojo_gpu).requires_grad_() for tensor in (x, weight)]
     mojo_bias = bias.to(mojo_gpu).requires_grad_() if bias is not None else None
-    torch.nn.functional.linear(*mojo_inputs, mojo_bias).backward(
-        grad_output.to(mojo_gpu)
-    )
+    backward_counter = EAGER_CALL_COUNTERS["aten::linear_backward"]
+    calls_before = backward_counter.call_count
+    mojo_output = torch.nn.functional.linear(*mojo_inputs, mojo_bias)
+    assert type(mojo_output.grad_fn).__name__ == "LinearBackward0"
+    assert backward_counter.call_count == calls_before
+
+    mojo_output.backward(grad_output.to(mojo_gpu))
+    assert backward_counter.call_count == calls_before + 1
 
     for actual, expected in zip(mojo_inputs, reference_inputs, strict=True):
         assert actual.grad is not None
@@ -2987,6 +2994,177 @@ def test_fast_linear_training_backward(mojo_gpu, with_bias):
         torch.testing.assert_close(
             mojo_bias.grad.cpu(), reference_bias.grad, atol=2e-4, rtol=2e-4
         )
+
+
+@pytest.mark.parametrize(
+    ("requires_grad", "expected_mm_calls", "expected_sum_calls"),
+    [
+        ((True, False, False), 1, 0),
+        ((False, True, False), 1, 0),
+        # PyTorch's linear_backward Meta/MPS contract couples the two
+        # parameter outputs: requesting bias also computes grad_weight.
+        ((False, False, True), 1, 1),
+        ((True, True, True), 2, 1),
+    ],
+)
+def test_fast_linear_native_backward_honors_output_mask_helper_calls(
+    mojo_h100, monkeypatch, requires_grad, expected_mm_calls, expected_sum_calls
+):
+    from torch_mojo_backend.eager_kernels import aten_fast
+
+    mm_calls = 0
+    sum_calls = 0
+    original_mm = aten_fast.fast_aten_mm
+    original_sum = aten_fast.fast_aten_sum
+
+    def counted_mm(*args, **kwargs):
+        nonlocal mm_calls
+        mm_calls += 1
+        return original_mm(*args, **kwargs)
+
+    def counted_sum(*args, **kwargs):
+        nonlocal sum_calls
+        sum_calls += 1
+        return original_sum(*args, **kwargs)
+
+    monkeypatch.setattr(aten_fast, "fast_aten_mm", counted_mm)
+    monkeypatch.setattr(aten_fast, "fast_aten_sum", counted_sum)
+
+    host_input = torch.randn(4, 7, dtype=torch.bfloat16)
+    host_weight = torch.randn(11, 7, dtype=torch.bfloat16)
+    host_bias = torch.randn(11, dtype=torch.bfloat16)
+    host_grad_output = torch.randn(4, 11, dtype=torch.bfloat16)
+
+    reference = [host_input.clone(), host_weight.clone(), host_bias.clone()]
+    for tensor, requested in zip(reference, requires_grad, strict=True):
+        tensor.requires_grad_(requested)
+    torch.nn.functional.linear(*reference).backward(host_grad_output)
+
+    input = host_input.to(mojo_h100)
+    weight = host_weight.to(mojo_h100)
+    bias = host_bias.to(mojo_h100)
+    input.requires_grad_(requires_grad[0])
+    weight.requires_grad_(requires_grad[1])
+    bias.requires_grad_(requires_grad[2])
+    grad_output = host_grad_output.to(mojo_h100)
+
+    output = torch.nn.functional.linear(input, weight, bias)
+    assert type(output.grad_fn).__name__ == "LinearBackward0"
+    output.backward(grad_output)
+
+    assert mm_calls == expected_mm_calls
+    assert sum_calls == expected_sum_calls
+    for actual, expected, requested in zip(
+        (input, weight, bias), reference, requires_grad, strict=True
+    ):
+        if requested:
+            assert actual.grad is not None
+            torch.testing.assert_close(actual.grad.cpu(), expected.grad)
+        else:
+            assert actual.grad is None
+
+
+def test_fast_linear_native_double_backward(mojo_gpu):
+    generator = torch.Generator().manual_seed(20260722)
+    host_input = torch.randn(2, 5, 7, generator=generator)
+    host_weight = torch.randn(11, 7, generator=generator)
+    first_seed = torch.randn(2, 5, 11, generator=generator)
+    second_seed = torch.randn(2, 5, 7, generator=generator)
+
+    def derivatives(input, weight, output_seed, input_grad_seed):
+        output = torch.nn.functional.linear(input, weight)
+        (input_grad,) = torch.autograd.grad(
+            output, input, grad_outputs=output_seed, create_graph=True
+        )
+        (weight_second_grad,) = torch.autograd.grad(
+            input_grad, weight, grad_outputs=input_grad_seed
+        )
+        return input_grad, weight_second_grad
+
+    reference_input = host_input.clone().requires_grad_()
+    reference_weight = host_weight.clone().requires_grad_()
+    expected_first, expected_second = derivatives(
+        reference_input, reference_weight, first_seed, second_seed
+    )
+
+    actual_input = host_input.to(mojo_gpu).requires_grad_()
+    actual_weight = host_weight.to(mojo_gpu).requires_grad_()
+    actual_first, actual_second = derivatives(
+        actual_input, actual_weight, first_seed.to(mojo_gpu), second_seed.to(mojo_gpu)
+    )
+
+    torch.testing.assert_close(actual_first.cpu(), expected_first)
+    torch.testing.assert_close(actual_second.cpu(), expected_second)
+
+
+@pytest.mark.parametrize("mutated", ["input", "weight"])
+def test_fast_linear_native_backward_rejects_mutated_saved_tensor(mojo_gpu, mutated):
+    input = torch.randn(3, 7).to(mojo_gpu).requires_grad_()
+    weight = torch.randn(11, 7).to(mojo_gpu).requires_grad_()
+    output = torch.nn.functional.linear(input, weight)
+
+    with torch.no_grad():
+        (input if mutated == "input" else weight).add_(1.0)
+
+    with pytest.raises(RuntimeError, match="modified by an inplace operation"):
+        output.sum().backward()
+
+
+def test_fast_linear_native_backward_does_not_save_bias(mojo_gpu):
+    input = torch.randn(3, 7).to(mojo_gpu).requires_grad_()
+    weight = torch.randn(11, 7).to(mojo_gpu).requires_grad_()
+    bias = torch.randn(11).to(mojo_gpu).requires_grad_()
+    grad_output = torch.randn(3, 11)
+    output = torch.nn.functional.linear(input, weight, bias)
+
+    with torch.no_grad():
+        bias.add_(1.0)
+
+    output.backward(grad_output.to(mojo_gpu))
+    assert bias.grad is not None
+    torch.testing.assert_close(bias.grad.cpu(), grad_output.sum(dim=0))
+
+
+def test_fast_linear_native_saved_tensor_hooks(mojo_gpu):
+    generator = torch.Generator().manual_seed(20260722)
+    input = torch.randn(3, 7, generator=generator)
+    weight = torch.randn(11, 7, generator=generator)
+    bias = torch.randn(11, generator=generator)
+    grad_output = torch.randn(3, 11, generator=generator)
+
+    reference = [
+        input.clone().requires_grad_(),
+        weight.clone().requires_grad_(),
+        bias.clone().requires_grad_(),
+    ]
+    torch.nn.functional.linear(reference[0], reference[1], reference[2]).backward(
+        grad_output
+    )
+
+    actual = [
+        input.to(mojo_gpu).requires_grad_(),
+        weight.to(mojo_gpu).requires_grad_(),
+        bias.to(mojo_gpu).requires_grad_(),
+    ]
+    hook_calls = []
+
+    def pack(tensor):
+        hook_calls.append(("pack", tensor.device.type))
+        return tensor.cpu()
+
+    def unpack(tensor):
+        hook_calls.append(("unpack", tensor.device.type))
+        return tensor.to(mojo_gpu)
+
+    with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
+        output = torch.nn.functional.linear(actual[0], actual[1], actual[2])
+        output.backward(grad_output.to(mojo_gpu))
+
+    assert hook_calls.count(("pack", "mojo")) == 2
+    assert hook_calls.count(("unpack", "cpu")) == 2
+    for got, want in zip(actual, reference, strict=True):
+        assert got.grad is not None
+        torch.testing.assert_close(got.grad.cpu(), want.grad)
 
 
 def test_fast_linear_skinny_m_large_output(mojo_gpu):
@@ -5853,7 +6031,9 @@ def test_fast_log_softmax_training_backward(mojo_gpu):
     torch.nn.functional.log_softmax(reference, dim=-1).backward(grad_output)
 
     actual = x.to(mojo_gpu).requires_grad_()
-    torch.nn.functional.log_softmax(actual, dim=-1).backward(grad_output.to(mojo_gpu))
+    output = torch.nn.functional.log_softmax(actual, dim=-1)
+    assert type(output.grad_fn).__name__ == "LogSoftmaxBackward0"
+    output.backward(grad_output.to(mojo_gpu))
 
     assert actual.grad is not None
     torch.testing.assert_close(actual.grad.cpu(), reference.grad, atol=2e-5, rtol=2e-5)
@@ -5873,7 +6053,7 @@ def test_fast_log_softmax_uses_saved_tensor_hooks(mojo_gpu):
 
     def unpack(tensor):
         hook_calls.append(("unpack", tensor.device.type))
-        return tensor
+        return tensor.to(mojo_gpu)
 
     actual = x.to(mojo_gpu).requires_grad_()
     with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
@@ -5883,6 +6063,33 @@ def test_fast_log_softmax_uses_saved_tensor_hooks(mojo_gpu):
 
     assert hook_calls == [("pack", "mojo"), ("unpack", "cpu")]
     torch.testing.assert_close(actual.grad.cpu(), reference.grad, atol=2e-5, rtol=2e-5)
+
+
+def test_fast_log_softmax_native_double_backward(mojo_gpu):
+    generator = torch.Generator().manual_seed(20260722)
+    host_input = torch.randn(4, 7, generator=generator)
+    first_seed = torch.randn(4, 7, generator=generator)
+    second_seed = torch.randn(4, 7, generator=generator)
+
+    def derivatives(input, seed1, seed2):
+        output = torch.nn.functional.log_softmax(input, dim=-1)
+        (first,) = torch.autograd.grad(
+            output, input, grad_outputs=seed1, create_graph=True
+        )
+        (second,) = torch.autograd.grad(first, input, grad_outputs=seed2)
+        return first, second
+
+    reference = host_input.clone().requires_grad_()
+    expected_first, expected_second = derivatives(reference, first_seed, second_seed)
+
+    actual = host_input.to(mojo_gpu).requires_grad_()
+    actual_first, actual_second = derivatives(
+        actual, first_seed.to(mojo_gpu), second_seed.to(mojo_gpu)
+    )
+    torch.testing.assert_close(actual_first.cpu(), expected_first, atol=2e-5, rtol=2e-5)
+    torch.testing.assert_close(
+        actual_second.cpu(), expected_second, atol=2e-5, rtol=2e-5
+    )
 
 
 def test_fast_log_softmax_backward_rejects_mutated_saved_output(mojo_gpu):

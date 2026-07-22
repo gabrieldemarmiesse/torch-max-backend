@@ -254,121 +254,6 @@ def _embedding_autograd(
     )
 
 
-class _LogSoftmaxAutograd(torch.autograd.Function):
-    @staticmethod
-    @no_type_check
-    def forward(ctx, input, dim, half_to_float):
-        output = _require_handled(
-            _fast().fast_aten__log_softmax(input, dim, half_to_float),
-            "aten::_log_softmax",
-        )
-        ctx.save_for_backward(output)
-        ctx.saved_payloads = (_SavedMojoPayload(output),)
-        ctx.dim = dim % len(input._shape) if input._shape else 0
-        ctx.input_dtype = input._dtype
-        return output
-
-    @staticmethod
-    @no_type_check
-    def backward(ctx, grad_output):
-        aten_fast = _fast()
-        (output,) = _restore_saved_mojo_tensors(ctx)
-        if not output._shape:
-            return (
-                aten_fast.fast_filled((), 0.0, ctx.input_dtype, output._device),
-                None,
-                None,
-            )
-
-        summed = _require_handled(
-            aten_fast.fast_aten_sum(grad_output, dim=[ctx.dim], keepdim=True),
-            "log_softmax backward reduction",
-        )
-        probabilities = _require_handled(
-            aten_fast.fast_aten_exp(output), "log_softmax backward exp"
-        )
-        grad_input = _require_handled(
-            aten_fast.fast_aten_addcmul(grad_output, probabilities, summed, value=-1.0),
-            "log_softmax backward fused multiply-subtract",
-        )
-        # addcmul has been enqueued on this device context. Drop its input
-        # holders immediately so MAX's stream-ordered allocator can recycle
-        # the vocabulary-sized probability temporary without a CPU/GPU sync.
-        del probabilities, summed
-        if grad_input._dtype != ctx.input_dtype:
-            grad_input = aten_fast._cast_tensor(grad_input, ctx.input_dtype)
-        return grad_input, None, None
-
-
-@no_type_check
-def _log_softmax_autograd(input, dim, half_to_float):
-    if not input.requires_grad:
-        return _require_handled(
-            _fast().fast_aten__log_softmax(input, dim, half_to_float),
-            "aten::_log_softmax",
-        )
-    return _LogSoftmaxAutograd.apply(input, dim, half_to_float)
-
-
-class _LinearAutograd(torch.autograd.Function):
-    @staticmethod
-    @no_type_check
-    def forward(ctx, input, weight, bias):
-        output = _require_handled(
-            _fast().fast_aten_linear(input, weight, bias), "aten::linear"
-        )
-        ctx.save_for_backward(input, weight)
-        ctx.saved_payloads = (_SavedMojoPayload(input), _SavedMojoPayload(weight))
-        ctx.has_bias = bias is not None
-        return output
-
-    @staticmethod
-    @no_type_check
-    def backward(ctx, grad_output):
-        aten_fast = _fast()
-        input, weight = _restore_saved_mojo_tensors(ctx)
-        input = input._contig()
-        weight = weight._contig()
-        input_features = input._shape[-1]
-        output_features = weight._shape[0]
-        rows = math.prod(input._shape[:-1]) if len(input._shape) > 1 else 1
-
-        input2 = _contiguous_view(input, (rows, input_features))
-        grad2 = _contiguous_view(grad_output, (rows, output_features))
-        grad_input2 = _require_handled(
-            aten_fast.fast_aten_mm(grad2, weight), "linear input gradient"
-        )
-        grad_input = _contiguous_view(grad_input2, input._shape)
-
-        grad_t = _require_handled(
-            aten_fast.fast_aten_transpose(grad2, 0, 1),
-            "linear transpose output gradient",
-        )
-        grad_weight = _require_handled(
-            aten_fast.fast_aten_mm(grad_t, input2), "linear weight gradient"
-        )
-        grad_bias = None
-        if ctx.has_bias:
-            grad_bias = _require_handled(
-                aten_fast.fast_aten_sum(grad2, dim=[0], keepdim=False),
-                "linear bias gradient",
-            )
-        return grad_input, grad_weight, grad_bias
-
-
-@no_type_check
-def _linear_autograd(input, weight, bias=None):
-    if not (
-        input.requires_grad
-        or weight.requires_grad
-        or (bias is not None and bias.requires_grad)
-    ):
-        return _require_handled(
-            _fast().fast_aten_linear(input, weight, bias), "aten::linear"
-        )
-    return _LinearAutograd.apply(input, weight, bias)
-
-
 class _NativeDropoutAutograd(torch.autograd.Function):
     @staticmethod
     @no_type_check
@@ -981,14 +866,10 @@ def register_autograd_ops() -> None:
     if _registered:
         return
 
-    torch.library.impl("aten::_log_softmax", "AutogradPrivateUse1")(
-        _log_softmax_autograd
-    )
     torch.library.impl("aten::cross_entropy_loss", "AutogradPrivateUse1")(
         _cross_entropy_loss_autograd
     )
     torch.library.impl("aten::embedding", "AutogradPrivateUse1")(_embedding_autograd)
-    torch.library.impl("aten::linear", "AutogradPrivateUse1")(_linear_autograd)
     torch.library.impl("aten::native_dropout", "AutogradPrivateUse1")(
         _native_dropout_autograd
     )

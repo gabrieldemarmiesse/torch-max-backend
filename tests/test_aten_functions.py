@@ -1,3 +1,4 @@
+import math
 from collections.abc import Callable
 
 import pytest
@@ -3095,9 +3096,7 @@ def test_aten_sum_integral_dtypes(
 @pytest.mark.parametrize("with_bias", [True, False])
 def test_aten_linear(conf: Conf, with_bias: bool, call_checker: CallChecker):
     """Test aten.linear (input @ weight^T + bias) with 2D input"""
-    from torch_mojo_backend.eager_kernels import aten_fast
-
-    call_checker.register(aten_functions.aten_linear, aten_fast.fast_aten_linear)
+    call_checker.register(aten_functions.aten_linear)
 
     if with_bias:
 
@@ -3114,17 +3113,211 @@ def test_aten_linear(conf: Conf, with_bias: bool, call_checker: CallChecker):
     check_outputs(fn, conf, inputs)
 
 
+@pytest.mark.parametrize("with_bias", [False, True])
+def test_aten_linear_1d(conf: Conf, with_bias: bool, call_checker: CallChecker):
+    call_checker.register(aten_functions.aten_linear)
+
+    if with_bias:
+
+        def fn(x, w, b):
+            return aten.linear(x, w, b)
+
+        inputs = [torch.randn(16), torch.randn(9, 16), torch.randn(9)]
+    else:
+
+        def fn(x, w):
+            return aten.linear(x, w)
+
+        inputs = [torch.randn(16), torch.randn(9, 16)]
+
+    check_outputs(fn, conf, inputs)
+
+
+@pytest.mark.parametrize(
+    ("in_features", "out_features", "with_bias"),
+    [(0, 5, False), (0, 5, True), (7, 0, False), (7, 0, True)],
+)
+def test_aten_linear_1d_degenerate(
+    conf: Conf,
+    call_checker: CallChecker,
+    in_features: int,
+    out_features: int,
+    with_bias: bool,
+):
+    call_checker.register(aten_functions.aten_linear)
+
+    if with_bias:
+
+        def fn(x, w, b):
+            return aten.linear(x, w, b)
+
+        inputs = [
+            torch.randn(in_features),
+            torch.randn(out_features, in_features),
+            torch.randn(out_features),
+        ]
+    else:
+
+        def fn(x, w):
+            return aten.linear(x, w)
+
+        inputs = [torch.randn(in_features), torch.randn(out_features, in_features)]
+
+    check_outputs(fn, conf, inputs)
+
+
 def test_aten_linear_3d_input(conf: Conf, call_checker: CallChecker):
     """Test aten.linear with batched (3D) input, as transformers call it"""
-    from torch_mojo_backend.eager_kernels import aten_fast
-
-    call_checker.register(aten_functions.aten_linear, aten_fast.fast_aten_linear)
+    call_checker.register(aten_functions.aten_linear)
 
     def fn(x, w, b):
         return aten.linear(x, w, b)
 
     inputs = [torch.randn(3, 7, 16), torch.randn(11, 16), torch.randn(11)]
     check_outputs(fn, conf, inputs)
+
+
+@pytest.mark.parametrize("input_shape", [(16,), (5, 16), (3, 7, 16)])
+def test_aten_linear_backward(
+    conf: Conf, call_checker: CallChecker, input_shape: tuple[int, ...]
+):
+    call_checker.register(aten_functions.aten_linear_backward)
+    out_features = 11
+    input = torch.randn(input_shape)
+    weight = torch.randn(out_features, input_shape[-1])
+    grad_output = torch.randn((*input_shape[:-1], out_features))
+    rows = input.numel() // input_shape[-1]
+    input_matrix = input.reshape(rows, input_shape[-1])
+    grad_matrix = grad_output.reshape(rows, out_features)
+    expected = (
+        (grad_matrix @ weight).reshape_as(input),
+        grad_matrix.t() @ input_matrix,
+        grad_matrix.sum(dim=0),
+    )
+
+    actual = aten.linear_backward(
+        input.to(conf.device),
+        grad_output.to(conf.device),
+        weight.to(conf.device),
+        [True, True, True],
+    )
+
+    for got, want in zip(actual, expected, strict=True):
+        torch.testing.assert_close(got.cpu(), want)
+
+
+@pytest.mark.parametrize(
+    "output_mask",
+    [
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (True, True, True),
+        (False, False, False),
+    ],
+)
+def test_aten_linear_backward_output_mask(
+    conf: Conf, call_checker: CallChecker, output_mask: tuple[bool, bool, bool]
+):
+    call_checker.register(aten_functions.aten_linear_backward)
+    input = torch.randn(5, 7)
+    weight = torch.randn(11, 7)
+    grad_output = torch.randn(5, 11)
+    all_expected = (
+        grad_output @ weight,
+        grad_output.t() @ input,
+        grad_output.sum(dim=0),
+    )
+
+    actual = aten.linear_backward(
+        input.to(conf.device),
+        grad_output.to(conf.device),
+        weight.to(conf.device),
+        output_mask,
+    )
+
+    need_parameter_grads = output_mask[1] or output_mask[2]
+    defined_mask = (output_mask[0], need_parameter_grads, need_parameter_grads)
+    for index, (got, want, defined) in enumerate(
+        zip(actual, all_expected, defined_mask, strict=True)
+    ):
+        assert (got is not None) == defined
+        if defined and (index != 2 or output_mask[2]):
+            torch.testing.assert_close(got.cpu(), want)
+        elif defined:
+            assert got.shape == want.shape
+
+
+def test_aten_linear_backward_empty_batch(conf: Conf, call_checker: CallChecker):
+    call_checker.register(aten_functions.aten_linear_backward)
+    input = torch.empty(0, 7)
+    weight = torch.randn(11, 7)
+    grad_output = torch.empty(0, 11)
+
+    actual = aten.linear_backward(
+        input.to(conf.device),
+        grad_output.to(conf.device),
+        weight.to(conf.device),
+        [True, True, True],
+    )
+
+    expected = (torch.empty_like(input), torch.zeros_like(weight), torch.zeros(11))
+    for got, want in zip(actual, expected, strict=True):
+        torch.testing.assert_close(got.cpu(), want)
+
+
+def test_aten_linear_backward_noncontiguous(conf: Conf, call_checker: CallChecker):
+    call_checker.register(aten_functions.aten_linear_backward)
+    input = torch.randn(7, 5).t()
+    weight = torch.randn(7, 11).t()
+    grad_output = torch.randn(11, 5).t()
+    assert not input.is_contiguous()
+    assert not weight.is_contiguous()
+    assert not grad_output.is_contiguous()
+    expected = (grad_output @ weight, grad_output.t() @ input, grad_output.sum(dim=0))
+
+    actual = aten.linear_backward(
+        input.to(conf.device),
+        grad_output.to(conf.device),
+        weight.to(conf.device),
+        [True, True, True],
+    )
+
+    for got, want in zip(actual, expected, strict=True):
+        torch.testing.assert_close(got.cpu(), want)
+
+
+@pytest.mark.parametrize(
+    ("input_shape", "out_features"), [((0,), 5), ((3, 0), 5), ((3, 7), 0)]
+)
+def test_aten_linear_backward_degenerate_features(
+    conf: Conf,
+    call_checker: CallChecker,
+    input_shape: tuple[int, ...],
+    out_features: int,
+):
+    call_checker.register(aten_functions.aten_linear_backward)
+    input = torch.randn(input_shape)
+    weight = torch.randn(out_features, input_shape[-1])
+    grad_output = torch.randn((*input_shape[:-1], out_features))
+    rows = 1 if len(input_shape) == 1 else math.prod(input_shape[:-1])
+    input_matrix = input.reshape(rows, input_shape[-1])
+    grad_matrix = grad_output.reshape(rows, out_features)
+    expected = (
+        (grad_matrix @ weight).reshape_as(input),
+        grad_matrix.t() @ input_matrix,
+        grad_matrix.sum(dim=0),
+    )
+
+    actual = aten.linear_backward(
+        input.to(conf.device),
+        grad_output.to(conf.device),
+        weight.to(conf.device),
+        [True, True, True],
+    )
+
+    for got, want in zip(actual, expected, strict=True):
+        torch.testing.assert_close(got.cpu(), want)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -3357,6 +3550,87 @@ def test_log_softmax_basic(conf: Conf):
 
     x = torch.randn(3, 4, 5)
     check_outputs(fn, conf, [x])
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize(
+    ("shape", "dim"),
+    [
+        ((3, 4, 5), -1),
+        ((3, 4, 5), 1),
+        ((), -1),
+        ((2, 0, 5), 1),
+        ((2, 2, 1, 2, 1), 1),
+        ((2, 1, 2, 1, 2, 1, 2, 1), 6),
+    ],
+)
+def test_aten__log_softmax_backward_data(
+    conf: Conf,
+    call_checker: CallChecker,
+    dtype: torch.dtype,
+    shape: tuple[int, ...],
+    dim: int,
+):
+    call_checker.register(aten_functions.aten__log_softmax_backward_data)
+
+    def fn(grad_output, output):
+        return aten._log_softmax_backward_data(grad_output, output, dim, dtype)
+
+    source = torch.randn(shape, dtype=dtype)
+    output = torch.log_softmax(source, dim=dim)
+    grad_output = torch.randn_like(output)
+    tolerance = 2e-2 if dtype == torch.bfloat16 else 2e-3
+    check_outputs(fn, conf, [grad_output, output], atol=tolerance, rtol=tolerance)
+
+
+def test_aten__log_softmax_backward_data_noncontiguous(
+    conf: Conf, call_checker: CallChecker
+):
+    call_checker.register(aten_functions.aten__log_softmax_backward_data)
+
+    def fn(grad_output, output):
+        return aten._log_softmax_backward_data(grad_output, output, 1, torch.float32)
+
+    source = torch.randn(2, 3, 2, 4, 5)
+    output = torch.log_softmax(source, dim=1).transpose(0, 4)
+    grad_output = torch.randn_like(source).transpose(0, 4)
+    assert not output.is_contiguous()
+    assert not grad_output.is_contiguous()
+    check_outputs(fn, conf, [grad_output, output])
+
+
+@pytest.mark.parametrize("grad_value", [float("inf"), -float("inf"), float("nan")])
+def test_aten__log_softmax_backward_data_scalar_nonfinite(
+    conf: Conf, call_checker: CallChecker, grad_value: float
+):
+    call_checker.register(aten_functions.aten__log_softmax_backward_data)
+    grad_output = torch.tensor(grad_value, device=conf.device)
+    output = torch.tensor(0.0, device=conf.device)
+
+    actual = aten._log_softmax_backward_data(grad_output, output, -1, torch.float32)
+
+    assert torch.isnan(actual.cpu())
+
+
+def test_aten__log_softmax_backward_data_half_to_float(
+    conf: Conf, call_checker: CallChecker
+):
+    call_checker.register(aten_functions.aten__log_softmax_backward_data)
+    source = torch.randn(3, 7)
+    output = torch.log_softmax(source, dim=-1)
+    grad_output = torch.randn_like(output)
+    expected = (grad_output - output.exp() * grad_output.sum(dim=-1, keepdim=True)).to(
+        torch.float16
+    )
+
+    actual = aten._log_softmax_backward_data(
+        grad_output.to(conf.device), output.to(conf.device), -1, torch.float16
+    )
+
+    assert actual.dtype == torch.float16
+    torch.testing.assert_close(
+        actual.cpu().float(), expected.float(), atol=2e-3, rtol=2e-3
+    )
 
 
 def test_log_softmax_numerical_stability(conf: Conf):

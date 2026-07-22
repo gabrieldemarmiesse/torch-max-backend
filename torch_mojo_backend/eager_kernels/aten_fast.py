@@ -3375,16 +3375,21 @@ def fast_aten__log_softmax(input, dim, half_to_float=False):
         or t._numel == 0
         or t._dtype not in _FLOAT_DTYPES
         or not isinstance(dim, int)
+        or isinstance(dim, bool)
     ):
         return NOT_HANDLED
     # half_to_float: half input, float32 output (torch computes in fp32).
     if half_to_float:
-        if t._dtype not in (DType.float16, DType.bfloat16):
+        if t._dtype != DType.float16:
             return NOT_HANDLED
         t = _cast_tensor(t, DType.float32)
     rank = len(t._shape)
     if rank == 0:
+        if dim not in (-1, 0):
+            return NOT_HANDLED
         return fast_filled((), 0.0, t._dtype, t._device)
+    if not -rank <= dim < rank:
+        return NOT_HANDLED
     dim %= rank
     if dim != rank - 1:
         # log_softmax(x, d) = log_softmax(x.transpose(d, -1), -1).T; both
@@ -3397,6 +3402,94 @@ def fast_aten__log_softmax(input, dim, half_to_float=False):
         return fast_aten_transpose(result, dim, rank - 1)
     result = _try_spec_unary("LogSoftmaxSpec", t, module_name="reduction_ops")
     return result if result is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten__log_softmax_backward_data(grad_output, output, dim, input_dtype):
+    grad = _t(grad_output)
+    saved_output = _t(output)
+    target_dtype = _torch_dtype_to_max(input_dtype)
+    if (
+        grad is None
+        or saved_output is None
+        or grad._shape != saved_output._shape
+        or grad._dtype != saved_output._dtype
+        or grad._device != saved_output._device
+        or grad._dtype not in _FLOAT_DTYPES
+        or target_dtype not in _FLOAT_DTYPES
+        or not isinstance(dim, int)
+        or isinstance(dim, bool)
+    ):
+        return NOT_HANDLED
+    if grad._dtype != target_dtype and not (
+        grad._dtype == DType.float32 and target_dtype == DType.float16
+    ):
+        return NOT_HANDLED
+
+    rank = len(grad._shape)
+    if rank > _MAX_RANK:
+        return NOT_HANDLED
+    if rank == 0:
+        if dim not in (-1, 0):
+            return NOT_HANDLED
+        summed = grad
+    else:
+        if not -rank <= dim < rank:
+            return NOT_HANDLED
+        dim %= rank
+
+        # ATen promises a fresh contiguous result. No kernel is needed when
+        # there are no elements, and allocating directly also avoids reduction
+        # specs whose empty-axis behavior varies across MAX releases.
+        if grad._numel == 0:
+            return _alloc(grad._shape, target_dtype, grad._device)
+
+        summed = None
+
+    work_grad = grad
+    work_output = saved_output
+    work_dim = dim
+    restore_shape = None
+    if rank > 4:
+        work_grad = _tc(grad)
+        work_output = _tc(saved_output)
+        if work_grad is None or work_output is None:
+            return NOT_HANDLED
+        flat_shape = (
+            math.prod(grad._shape[:dim]),
+            grad._shape[dim],
+            math.prod(grad._shape[dim + 1 :]),
+        )
+        work_grad = fast_aten_view(work_grad, flat_shape)
+        work_output = fast_aten_view(work_output, flat_shape)
+        if work_grad is NOT_HANDLED or work_output is NOT_HANDLED:
+            return NOT_HANDLED
+        work_dim = 1
+        restore_shape = grad._shape
+
+    if summed is None:
+        summed = fast_aten_sum(work_grad, dim=[work_dim], keepdim=True)
+        if summed is NOT_HANDLED:
+            return NOT_HANDLED
+    probabilities = fast_aten_exp(work_output)
+    if probabilities is NOT_HANDLED:
+        return NOT_HANDLED
+
+    grad_input = fast_aten_addcmul(work_grad, probabilities, summed, value=-1.0)
+    if grad_input is NOT_HANDLED:
+        return NOT_HANDLED
+
+    # The launches above have captured their inputs on this device stream.
+    # Release the vocabulary-sized temporaries promptly so the stream-ordered
+    # allocator can recycle them without introducing a host synchronization.
+    del probabilities, summed
+    if restore_shape is not None:
+        grad_input = fast_aten_view(grad_input, restore_shape)
+        if grad_input is NOT_HANDLED:
+            return NOT_HANDLED
+    if grad_input._dtype != target_dtype:
+        grad_input = _cast_tensor(grad_input, target_dtype)
+    return grad_input
 
 
 @no_type_check
@@ -5204,10 +5297,46 @@ def fast_aten_addmm(input, mat1, mat2, *, beta=1.0, alpha=1.0):
 
 @no_type_check
 def fast_aten_linear(input, weight, bias=None):
-    # linear(input, weight, bias) = input @ weight^T + bias. Registering the
-    # composite op (instead of letting torch decompose it into t() + mm)
-    # matters because the GEMM kernel reads B transposed for free, so the
-    # weight is never materialized in transposed layout.
+    # Keep linear as a concrete backend op alongside fast_aten_linear_backward.
+    # The GEMM kernel reads B transposed for free, so the weight is never
+    # materialized in transposed layout.
+    vector = _t(input)
+    if vector is not None and len(vector._shape) == 1:
+        matrix_weight = _t(weight)
+        vector_bias = _t(bias) if bias is not None else None
+        if (
+            matrix_weight is None
+            or len(matrix_weight._shape) != 2
+            or matrix_weight._shape[1] != vector._shape[0]
+            or matrix_weight._dtype != vector._dtype
+            or matrix_weight._device != vector._device
+            or (
+                bias is not None
+                and (
+                    vector_bias is None
+                    or vector_bias._shape != (matrix_weight._shape[0],)
+                    or vector_bias._dtype != vector._dtype
+                    or vector_bias._device != vector._device
+                )
+            )
+        ):
+            return NOT_HANDLED
+        output_features = matrix_weight._shape[0]
+        if output_features == 0:
+            return _alloc((0,), vector._dtype, vector._device)
+        if vector._shape[0] == 0:
+            if vector_bias is not None:
+                return fast_aten_clone(vector_bias)
+            return fast_filled((output_features,), 0.0, vector._dtype, vector._device)
+
+        matrix = fast_aten_view(_tc(vector), (1, vector._shape[0]))
+        if matrix is NOT_HANDLED:
+            return NOT_HANDLED
+        out = fast_aten_linear(matrix, weight, bias)
+        if out is NOT_HANDLED:
+            return NOT_HANDLED
+        return fast_aten_view(out, (out._shape[-1],))
+
     out = _try_bf16_linear(input, weight, bias)
     if out is not None:
         return out
@@ -5219,6 +5348,102 @@ def fast_aten_linear(input, weight, bias=None):
     else:
         out = _try_spec_matmul("MatmulBiasSpec", (input, weight, bias), 1)
     return out if out is not None else NOT_HANDLED
+
+
+@no_type_check
+def fast_aten_linear_backward(self, grad_output, weight, output_mask):
+    input = _t(self)
+    grad = _t(grad_output)
+    matrix_weight = _t(weight)
+    mask = tuple(output_mask)
+    if (
+        len(mask) != 3
+        or any(not isinstance(requested, bool) for requested in mask)
+        or input is None
+        or grad is None
+        or matrix_weight is None
+        or len(input._shape) < 1
+        or len(matrix_weight._shape) != 2
+        or input._dtype not in _FLOAT_DTYPES
+        or grad._dtype != input._dtype
+        or matrix_weight._dtype != input._dtype
+        or grad._device != input._device
+        or matrix_weight._device != input._device
+        or input._shape[-1] != matrix_weight._shape[1]
+        or grad._shape != input._shape[:-1] + (matrix_weight._shape[0],)
+    ):
+        return NOT_HANDLED
+    if not any(mask):
+        return None, None, None
+
+    rows = math.prod(input._shape[:-1]) if len(input._shape) > 1 else 1
+    input_features = input._shape[-1]
+    output_features = matrix_weight._shape[0]
+    # PyTorch's registered Meta/MPS contract defines both parameter outputs
+    # whenever either one is requested. An unrequested bias result is only an
+    # allocation; requesting bias also requires the weight-gradient GEMM.
+    need_parameter_grads = mask[1] or mask[2]
+
+    def zeros(shape):
+        if math.prod(shape) == 0:
+            return _alloc(shape, input._dtype, input._device)
+        return fast_filled(shape, 0.0, input._dtype, input._device)
+
+    if rows == 0 or output_features == 0:
+        return (
+            zeros(input._shape) if mask[0] else None,
+            zeros(matrix_weight._shape) if need_parameter_grads else None,
+            (
+                zeros((output_features,))
+                if mask[2]
+                else _alloc((output_features,), input._dtype, input._device)
+            )
+            if need_parameter_grads
+            else None,
+        )
+
+    grad = _tc(grad)
+    grad_matrix = fast_aten_view(grad, (rows, output_features))
+    if grad_matrix is NOT_HANDLED:
+        return NOT_HANDLED
+
+    grad_input = None
+    if mask[0]:
+        if input_features == 0:
+            grad_input = _alloc(input._shape, input._dtype, input._device)
+        else:
+            grad_input = fast_aten_mm(grad_matrix, matrix_weight)
+            if grad_input is NOT_HANDLED:
+                return NOT_HANDLED
+            grad_input = fast_aten_view(grad_input, input._shape)
+            if grad_input is NOT_HANDLED:
+                return NOT_HANDLED
+
+    grad_weight = None
+    if need_parameter_grads:
+        if input_features == 0:
+            grad_weight = _alloc(matrix_weight._shape, input._dtype, input._device)
+        else:
+            input_matrix = fast_aten_view(_tc(input), (rows, input_features))
+            if input_matrix is NOT_HANDLED:
+                return NOT_HANDLED
+            grad_transposed = fast_aten_transpose(grad_matrix, 0, 1)
+            if grad_transposed is NOT_HANDLED:
+                return NOT_HANDLED
+            grad_weight = fast_aten_mm(grad_transposed, input_matrix)
+            if grad_weight is NOT_HANDLED:
+                return NOT_HANDLED
+
+    grad_bias = None
+    if need_parameter_grads:
+        if mask[2]:
+            grad_bias = fast_aten_sum(grad_matrix, dim=[0], keepdim=False)
+            if grad_bias is NOT_HANDLED:
+                return NOT_HANDLED
+        else:
+            grad_bias = _alloc((output_features,), input._dtype, input._device)
+
+    return grad_input, grad_weight, grad_bias
 
 
 @no_type_check

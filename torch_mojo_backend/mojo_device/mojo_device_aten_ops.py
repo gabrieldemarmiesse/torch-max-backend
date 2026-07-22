@@ -885,6 +885,9 @@ _register_fast("aten::_fused_adamw_.tensor_lr", "fast_aten__fused_adamw")
 _register_fast("aten::_local_scalar_dense", "fast_aten__local_scalar_dense")
 _register_fast("aten::_log_softmax", "fast_aten__log_softmax")
 _register_fast(
+    "aten::_log_softmax_backward_data", "fast_aten__log_softmax_backward_data"
+)
+_register_fast(
     "aten::_native_batch_norm_legit_no_training",
     "fast_aten__native_batch_norm_legit_no_training",
 )
@@ -973,6 +976,7 @@ _register_fast("aten::le.Scalar", "fast_aten_le")
 _register_fast("aten::le.Tensor", "fast_aten_le")
 _register_fast("aten::lerp.Scalar", "fast_aten_lerp")
 _register_fast("aten::linear", "fast_aten_linear")
+_register_fast("aten::linear_backward", "fast_aten_linear_backward")
 _register_fast("aten::log", "fast_aten_log")
 _register_fast("aten::log1p", "fast_aten_log1p")
 _register_fast("aten::logical_and", "fast_aten_logical_and")
