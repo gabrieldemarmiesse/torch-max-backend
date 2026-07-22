@@ -1975,6 +1975,28 @@ def fast_aten_alias(tensor):
 fast_aten_detach = fast_aten_alias
 
 
+def fast_aten_as_strided(tensor, size, stride, storage_offset=None):
+    t = _t(tensor)
+    if t is None or not isinstance(size, list | tuple):
+        return NOT_HANDLED
+    if not isinstance(stride, list | tuple) or len(size) != len(stride):
+        return NOT_HANDLED
+    sizes = tuple(int(s) for s in size)
+    strides = tuple(int(s) for s in stride)
+    if any(s < 0 for s in sizes) or any(s < 0 for s in strides):
+        return NOT_HANDLED
+    offset = t._offset if storage_offset is None else int(storage_offset)
+    if offset < 0:
+        return NOT_HANDLED
+    # The requested window must stay inside the owning allocation.
+    capacity = int(t._holder.get_nbytes()) // t._itemsize
+    if math.prod(sizes) > 0:
+        last = offset + sum((sz - 1) * st for sz, st in zip(sizes, strides))
+        if last + 1 > capacity:
+            return NOT_HANDLED
+    return _view_of(t, sizes, strides, offset)
+
+
 def fast_aten_permute(input, dims):
     t = _t(input)
     if t is None or not isinstance(dims, list | tuple):

@@ -364,6 +364,36 @@ def test_fast_view_aliases_storage(mojo_device):
     torch.testing.assert_close(v.cpu(), torch.ones(16))
 
 
+def test_fast_as_strided_matches_cpu(mojo_device):
+    x = torch.arange(24, dtype=torch.float32)
+    dev = x.to(mojo_device)
+    for size, stride, offset in [
+        ((3, 4), (4, 1), 0),
+        ((2, 3), (1, 2), 5),
+        ((4,), (0,), 7),
+        ((2, 2, 2), (8, 2, 1), 2),
+        ((0, 3), (3, 1), 0),
+    ]:
+        expected = torch.as_strided(x, size, stride, offset)
+        actual = torch.as_strided(dev, size, stride, offset)
+        assert actual.shape == expected.shape
+        torch.testing.assert_close(actual.contiguous().cpu(), expected.contiguous())
+
+
+def test_fast_as_strided_aliases_storage(mojo_device):
+    """as_strided views alias: DDP's Reducer reads gradients through them."""
+    base = torch.zeros(8).to(mojo_device)
+    window = torch.as_strided(base, (2, 2), (2, 1), 1)
+    base.fill_(3.0)
+    torch.testing.assert_close(window.cpu(), torch.full((2, 2), 3.0))
+
+
+def test_fast_as_strided_rejects_out_of_bounds(mojo_device):
+    base = torch.zeros(8).to(mojo_device)
+    with pytest.raises(NotImplementedError):
+        torch.as_strided(base, (3, 3), (3, 1), 2)
+
+
 @pytest.mark.parametrize("dims", [(0, 1), (1, 2), (-1, -2)])
 def test_fast_transpose(mojo_device, dims):
     x = torch.randn(2, 3, 4)
