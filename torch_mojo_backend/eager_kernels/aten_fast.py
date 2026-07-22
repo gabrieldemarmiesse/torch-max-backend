@@ -60,6 +60,7 @@ _SDPA_BACKWARD_SOURCE_PATHS = (
 _BF16_SOURCE_PATHS = (
     eager_kernels._PACKAGE_DIR / "bf16_matmul_ops.mojo",
     eager_kernels._PACKAGE_DIR / "bf16_gemm_v3_kernels.mojo",
+    eager_kernels._PACKAGE_DIR / "bf16_gemm_tn_v4_kernels.mojo",
     eager_kernels._PACKAGE_DIR / "bf16_gemm_kernels.mojo",
 )
 _BF16_IMPORT_FAILED = False
