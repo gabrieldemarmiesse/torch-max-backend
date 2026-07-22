@@ -45,6 +45,9 @@ from bf16_gemm_kernels import (
     enqueue_bf16_bmm as _enqueue_accepted_bf16_bmm,
     enqueue_bf16_gemm as _enqueue_accepted_bf16_gemm,
 )
+from bf16_gemm_nn_v4_kernels import maybe_enqueue_bf16_gemm_nn_v4
+from bf16_gemm_nt_v4_kernels import maybe_enqueue_bf16_gemm_nt_v4
+from bf16_gemm_tn_v4_kernels import try_enqueue_bf16_gemm_tn_v4
 
 
 comptime _V3_BF16 = DType.bfloat16
@@ -1622,6 +1625,14 @@ def enqueue_bf16_gemm(
     has_bias: Bool,
     ctx: DeviceContext,
 ) raises:
+    # NT (forward linear) route: persistent clustered v4 kernel with TMA
+    # multicast and TMA-store epilogue (bf16_gemm_nt_v4_kernels.mojo).  The
+    # helper enqueues only for regimes it fully supports (SM90, aligned
+    # n/k, TMA-compatible sizes) and returns False otherwise, in which case
+    # the pre-existing NT path below remains the fallback.
+    if not transpose_a and transpose_b and not has_bias:
+        if maybe_enqueue_bf16_gemm_nt_v4(output, a, b, m, n, k, ctx):
+            return
     comptime if _has_sm_9x():
         if ctx.api() == "cuda":
             var cc_major = ctx.get_attribute(
@@ -1631,6 +1642,35 @@ def enqueue_bf16_gemm(
                 DeviceAttribute.COMPUTE_CAPABILITY_MINOR
             )
             if cc_major == 9 and cc_minor == 0:
+                # NN dgrad route (v4): persistent warp-specialized kernel
+                # with 2-CTA-cluster B multicast and a TMA-store epilogue
+                # (bf16_gemm_nn_v4_kernels.mojo).  It gates itself on the
+                # same tall-m aligned NN regime (m // n >= 8, n % 256 == 0,
+                # k % 64 == 0; m may be ragged) and returns False for
+                # anything else, in which case the pre-existing NN paths
+                # below remain the fallback.
+                if maybe_enqueue_bf16_gemm_nn_v4(
+                    output,
+                    a,
+                    b,
+                    m,
+                    n,
+                    k,
+                    transpose_a,
+                    transpose_b,
+                    has_bias,
+                    ctx,
+                ):
+                    return
+                # V4 TN (wgrad) route: split-K and narrow-tile kernels for
+                # the deep-K, underfilled-output regime (huge K, small m*n;
+                # see bf16_gemm_tn_v4_kernels.mojo).  The dispatcher checks
+                # its own alignment/regime gates and returns False whenever
+                # it declines, so every existing TN path below remains the
+                # fallback.
+                if transpose_a and not transpose_b and not has_bias:
+                    if try_enqueue_bf16_gemm_tn_v4(output, a, b, m, n, k, ctx):
+                        return
                 # A 64x128 tile preserves the prior aligned-NN coverage and
                 # increases available CTAs when the 128x256 grid would be
                 # severely underfilled on the current GPU.  This predicate is

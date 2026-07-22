@@ -2557,6 +2557,105 @@ def test_fast_bmm(mojo_gpu):
     torch.testing.assert_close(dev, torch.bmm(a, b), atol=1e-2, rtol=1e-2)
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize(
+    ("shape", "dim"),
+    [
+        ((33, 257), -1),  # odd cols: rows off 16B alignment take head/tail
+        ((16, 4096), -1),  # pure 16B-aligned vector body
+        ((2, 3, 129), 2),  # rank-3 trailing dim flattens without a view
+    ],
+)
+def test_fast_log_softmax_backward_fused_matches_reference(mojo_gpu, dtype, shape, dim):
+    """The fused trailing-dim kernel must match fp32-accumulated math."""
+    generator = torch.Generator().manual_seed(20260722)
+    source = torch.randn(shape, generator=generator)
+    output = torch.log_softmax(source, dim=dim).to(dtype)
+    grad_output = torch.randn(shape, generator=generator).to(dtype)
+    expected = (
+        grad_output.float()
+        - output.float().exp() * grad_output.float().sum(dim=dim, keepdim=True)
+    ).to(dtype)
+
+    actual = torch.ops.aten._log_softmax_backward_data(
+        grad_output.to(mojo_gpu), output.to(mojo_gpu), dim, dtype
+    )
+
+    assert actual.dtype == dtype
+    tol = 2e-2 if dtype in (torch.bfloat16, torch.float16) else 2e-5
+    torch.testing.assert_close(actual.cpu(), expected, atol=tol, rtol=tol)
+
+
+def test_fast_log_softmax_backward_uses_fused_kernel(mojo_gpu, monkeypatch):
+    """Contiguous trailing-dim same-dtype autograd must call the bridge once."""
+    from torch_mojo_backend import eager_kernels
+
+    calls = 0
+    original = eager_kernels.softmax_backward_ops.LogSoftmaxBackwardData
+
+    def spy(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    monkeypatch.setattr(
+        eager_kernels.softmax_backward_ops, "LogSoftmaxBackwardData", spy
+    )
+
+    source = torch.randn(8, 640)
+    grad_output = torch.randn(8, 640)
+    reference = source.clone().requires_grad_()
+    reference_output = torch.log_softmax(reference, dim=-1)
+    reference_output.backward(grad_output)
+
+    actual = source.to(mojo_gpu).requires_grad_()
+    actual_output = torch.log_softmax(actual, dim=-1)
+    actual_output.backward(grad_output.to(mojo_gpu))
+
+    assert calls == 1
+    assert actual.grad is not None
+    torch.testing.assert_close(actual.grad.cpu(), reference.grad, atol=2e-5, rtol=2e-5)
+
+
+def test_fast_log_softmax_backward_non_trailing_keeps_composed_path(
+    mojo_gpu, monkeypatch
+):
+    """Non-trailing dims and the f32->f16 promotion stay on the composed path."""
+    from torch_mojo_backend import eager_kernels
+
+    def fail(*_args):
+        raise AssertionError("composed-path case reached the fused kernel")
+
+    monkeypatch.setattr(
+        eager_kernels.softmax_backward_ops, "LogSoftmaxBackwardData", fail
+    )
+
+    source = torch.randn(6, 33, 5)
+    output = torch.log_softmax(source, dim=1)
+    grad_output = torch.randn(6, 33, 5)
+    expected = torch.ops.aten._log_softmax_backward_data(
+        grad_output, output, 1, torch.float32
+    )
+    actual = torch.ops.aten._log_softmax_backward_data(
+        grad_output.to(mojo_gpu), output.to(mojo_gpu), 1, torch.float32
+    )
+    torch.testing.assert_close(actual.cpu(), expected, atol=2e-5, rtol=2e-5)
+
+    # The CPU op rejects the f32-grad -> f16-target promotion, so compute
+    # the reference directly (fp32 math, one final rounding).
+    half_source = torch.randn(6, 40)
+    half_output = torch.log_softmax(half_source, dim=-1)
+    half_grad = torch.randn(6, 40)
+    expected_half = (
+        half_grad - half_output.exp() * half_grad.sum(dim=-1, keepdim=True)
+    ).to(torch.float16)
+    actual_half = torch.ops.aten._log_softmax_backward_data(
+        half_grad.to(mojo_gpu), half_output.to(mojo_gpu), -1, torch.float16
+    )
+    assert actual_half.dtype == torch.float16
+    torch.testing.assert_close(actual_half.cpu(), expected_half, atol=2e-3, rtol=2e-3)
+
+
 @pytest.mark.parametrize("reduction", [0, 1, 2])
 def test_fast_nll_loss_forward_and_backward_out(mojo_gpu, reduction):
     generator = torch.Generator().manual_seed(20260718)

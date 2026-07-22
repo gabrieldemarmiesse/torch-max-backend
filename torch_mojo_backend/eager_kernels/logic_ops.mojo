@@ -28,7 +28,7 @@ from std.math import ceildiv, pow
 from std.python import PythonObject
 from std.python._cpython import PyObjectPtr, Py_ssize_t
 from std.python.bindings import PythonModuleBuilder
-from std.sys.info import has_accelerator, has_apple_gpu_accelerator
+from std.sys.info import has_accelerator, has_apple_gpu_accelerator, size_of
 from std.utils.coord import Coord
 
 from std.algorithm.functional import elementwise
@@ -227,6 +227,126 @@ def _bin_bcast_kernel[
 
 
 @always_inline
+def _bin_vec_op[
+    dtype: DType, op_code: Int, width: Int
+](a: SIMD[dtype, width], b: SIMD[dtype, width]) -> SIMD[dtype, width]:
+    """SIMD counterpart of `_bin_bcast_body` (non-comparison ops only).
+
+    Runtime-unreachable (dtype, op) combos are pre-gated by the launcher;
+    they still instantiate, so every branch must compile — hence the
+    trailing pass-through return."""
+    comptime if op_code == BOP_ADD:
+        return a + b
+    comptime if op_code == BOP_SUB:
+        return a - b
+    comptime if op_code == BOP_MUL:
+        return a * b
+    comptime if op_code == BOP_DIV:
+        comptime if dtype.is_floating_point():
+            return a / b
+    comptime if op_code == BOP_MAX:
+        return max(a, b)
+    comptime if op_code == BOP_MIN:
+        return min(a, b)
+    comptime if op_code == BOP_AND:
+        comptime if not dtype.is_floating_point():
+            return a & b
+    comptime if op_code == BOP_OR:
+        comptime if not dtype.is_floating_point():
+            return a | b
+    comptime if op_code == BOP_XOR:
+        comptime if not dtype.is_floating_point():
+            return a ^ b
+    comptime if op_code == BOP_REMAINDER:
+        return a % b
+    comptime if op_code == BOP_FLOORDIV:
+        return a // b
+    comptime if op_code == BOP_POW:
+        comptime if dtype == DType.float16 or dtype == DType.bfloat16:
+            return pow(
+                a.cast[DType.float32](), b.cast[DType.float32]()
+            ).cast[dtype]()
+        elif dtype.is_floating_point():
+            return pow(a, b)
+    return a
+
+
+def _bin_flat_vec_kernel[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    l_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    r_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    total: Int,
+):
+    """16-byte-vectorized binary op for the no-broadcast, all-contiguous
+    case (both operands and the output flat over the same extent). The
+    launcher guarantees 16B base alignment."""
+    comptime VW = 16 // size_of[dtype]()
+    comptime vec_align = VW * size_of[dtype]()
+    var tid = Int(block_idx.x) * Int(block_dim.x) + Int(thread_idx.x)
+    var gstride = Int(grid_dim.x) * Int(block_dim.x)
+    var nvec = total // VW
+    var c = tid
+    while c < nvec:
+        var i = c * VW
+        var a = l_ptr.load[width=VW, alignment=vec_align](i)
+        var b = r_ptr.load[width=VW, alignment=vec_align](i)
+        out_ptr.store[width=VW, alignment=vec_align](
+            i, _bin_vec_op[dtype, op_code, VW](a, b)
+        )
+        c += gstride
+    var tail = total - nvec * VW
+    if tid < tail:
+        var i = nvec * VW + tid
+        out_ptr[i] = _bin_vec_op[dtype, op_code, 1](l_ptr[i], r_ptr[i])[0]
+
+
+def _bin_rowvec_kernel[
+    dtype: DType, op_code: Int
+](
+    out_ptr: UnsafePointer[Scalar[dtype], MutAnyOrigin],
+    l_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    r_ptr: UnsafePointer[Scalar[dtype], ImmutAnyOrigin],
+    d1: Int,
+    d2: Int,
+    d3: Int,
+    ls0: Int,
+    ls1: Int,
+    ls2: Int,
+    rs0: Int,
+    rs1: Int,
+    rs2: Int,
+    rows: Int,
+):
+    """Vectorized along a stride-1 innermost dim; outer dims may be strided
+    or broadcast (stride 0). One block per row (grid-stride over rows); the
+    per-row index math runs once per row instead of once per element. The
+    launcher guarantees d3 % VW == 0 and 16B alignment of every row base."""
+    comptime VW = 16 // size_of[dtype]()
+    comptime vec_align = VW * size_of[dtype]()
+    var row = Int(block_idx.x)
+    while row < rows:
+        var i2 = row % d2
+        var rest = row // d2
+        var i1 = rest % d1
+        var i0 = rest // d1
+        var lbase = i0 * ls0 + i1 * ls1 + i2 * ls2
+        var rbase = i0 * rs0 + i1 * rs1 + i2 * rs2
+        var obase = row * d3
+        var j = Int(thread_idx.x) * VW
+        var step = Int(block_dim.x) * VW
+        while j < d3:
+            var a = l_ptr.load[width=VW, alignment=vec_align](lbase + j)
+            var b = r_ptr.load[width=VW, alignment=vec_align](rbase + j)
+            out_ptr.store[width=VW, alignment=vec_align](
+                obase + j, _bin_vec_op[dtype, op_code, VW](a, b)
+            )
+            j += step
+        row += Int(grid_dim.x)
+
+
+@always_inline
 def _bin_bcast[
     dtype: DType, op_code: Int
 ](
@@ -288,29 +408,110 @@ def _bin_bcast[
                     raise Error("float64 is not supported on Apple GPU")
                 else:
                     comptime if has_accelerator():
-                        _enqueue_cached[_bin_bcast_kernel[dtype, op_code]](
-                            ctx,
-                            String(t"lg_bcast_{op_code}_{dtype}"),
-                            _gs_blocks(total),
-                            1,
-                            1,
-                            GS_THREADS,
-                            out_ptr.as_unsafe_any_origin(),
-                            l_ptr.as_unsafe_any_origin().as_immutable(),
-                            r_ptr.as_unsafe_any_origin().as_immutable(),
-                            d1,
-                            d2,
-                            d3,
-                            ls0,
-                            ls1,
-                            ls2,
-                            ls3,
-                            rs0,
-                            rs1,
-                            rs2,
-                            rs3,
-                            total,
+                        # Tiered dispatch: the generic scalar kernel pays
+                        # three integer divisions and strided scalar loads
+                        # per element, which is division-bound at large
+                        # sizes. Prefer 16-byte vector kernels whenever the
+                        # layout allows them.
+                        comptime itemsize = size_of[dtype]()
+                        comptime VW = 16 // itemsize
+                        var d0 = total // max(1, d1 * d2 * d3)
+                        var cont3 = d3
+                        var cont2 = d2 * d3
+                        var cont1 = d1 * d2 * d3
+                        var aligned16 = (
+                            out_addr % 16 == 0
+                            and l_addr % 16 == 0
+                            and r_addr % 16 == 0
                         )
+                        var l_flat = (
+                            (ls3 == 1 or d3 == 1)
+                            and (ls2 == cont3 or d2 == 1)
+                            and (ls1 == cont2 or d1 == 1)
+                            and (ls0 == cont1 or d0 == 1)
+                        )
+                        var r_flat = (
+                            (rs3 == 1 or d3 == 1)
+                            and (rs2 == cont3 or d2 == 1)
+                            and (rs1 == cont2 or d1 == 1)
+                            and (rs0 == cont1 or d0 == 1)
+                        )
+                        var rows_aligned = (
+                            ls3 == 1
+                            and rs3 == 1
+                            and d3 % VW == 0
+                            and d3 >= VW
+                            and (ls0 * itemsize) % 16 == 0
+                            and (ls1 * itemsize) % 16 == 0
+                            and (ls2 * itemsize) % 16 == 0
+                            and (rs0 * itemsize) % 16 == 0
+                            and (rs1 * itemsize) % 16 == 0
+                            and (rs2 * itemsize) % 16 == 0
+                        )
+                        if aligned16 and l_flat and r_flat:
+                            _enqueue_cached[
+                                _bin_flat_vec_kernel[dtype, op_code]
+                            ](
+                                ctx,
+                                String(t"lg_bcast_fv_{op_code}_{dtype}"),
+                                _gs_blocks(max(1, total // VW)),
+                                1,
+                                1,
+                                GS_THREADS,
+                                out_ptr.as_unsafe_any_origin(),
+                                l_ptr.as_unsafe_any_origin().as_immutable(),
+                                r_ptr.as_unsafe_any_origin().as_immutable(),
+                                total,
+                            )
+                        elif aligned16 and rows_aligned:
+                            var rows = total // d3
+                            _enqueue_cached[
+                                _bin_rowvec_kernel[dtype, op_code]
+                            ](
+                                ctx,
+                                String(t"lg_bcast_rv_{op_code}_{dtype}"),
+                                max(1, min(rows, 65535)),
+                                1,
+                                1,
+                                GS_THREADS,
+                                out_ptr.as_unsafe_any_origin(),
+                                l_ptr.as_unsafe_any_origin().as_immutable(),
+                                r_ptr.as_unsafe_any_origin().as_immutable(),
+                                d1,
+                                d2,
+                                d3,
+                                ls0,
+                                ls1,
+                                ls2,
+                                rs0,
+                                rs1,
+                                rs2,
+                                rows,
+                            )
+                        else:
+                            _enqueue_cached[_bin_bcast_kernel[dtype, op_code]](
+                                ctx,
+                                String(t"lg_bcast_{op_code}_{dtype}"),
+                                _gs_blocks(total),
+                                1,
+                                1,
+                                GS_THREADS,
+                                out_ptr.as_unsafe_any_origin(),
+                                l_ptr.as_unsafe_any_origin().as_immutable(),
+                                r_ptr.as_unsafe_any_origin().as_immutable(),
+                                d1,
+                                d2,
+                                d3,
+                                ls0,
+                                ls1,
+                                ls2,
+                                ls3,
+                                rs0,
+                                rs1,
+                                rs2,
+                                rs3,
+                                total,
+                            )
                     else:
                         raise Error(
                             "no GPU accelerator available at compile time"

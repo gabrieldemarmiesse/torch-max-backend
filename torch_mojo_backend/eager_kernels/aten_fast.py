@@ -60,6 +60,7 @@ _SDPA_BACKWARD_SOURCE_PATHS = (
 _BF16_SOURCE_PATHS = (
     eager_kernels._PACKAGE_DIR / "bf16_matmul_ops.mojo",
     eager_kernels._PACKAGE_DIR / "bf16_gemm_v3_kernels.mojo",
+    eager_kernels._PACKAGE_DIR / "bf16_gemm_tn_v4_kernels.mojo",
     eager_kernels._PACKAGE_DIR / "bf16_gemm_kernels.mojo",
 )
 _BF16_IMPORT_FAILED = False
@@ -3233,7 +3234,12 @@ def fast_aten__log_softmax(input, dim, half_to_float=False):
     return result if result is not None else NOT_HANDLED
 
 
-def fast_aten__log_softmax_backward_data(grad_output, output, dim, input_dtype):
+def fast_aten__log_softmax_backward_data(
+    grad_output: object, output: object, dim: int, input_dtype: object
+) -> object:
+    # `object` params: besides real (TorchMojoTensor, torch.dtype) calls, the
+    # composed path's lifetime contract is regression-tested with duck-typed
+    # doubles (tests/test_autograd_memory_lifetime.py).
     grad = _t(grad_output)
     saved_output = _t(output)
     target_dtype = _torch_dtype_to_max(input_dtype)
@@ -3271,6 +3277,43 @@ def fast_aten__log_softmax_backward_data(grad_output, output, dim, input_dtype):
         # specs whose empty-axis behavior varies across MAX releases.
         if grad._numel == 0:
             return _alloc(grad._shape, target_dtype, grad._device)
+
+        # Fused single-kernel GPU path (softmax_backward_kernels.mojo): the
+        # reduction dim is trailing, so any rank flattens to [rows, cols]
+        # without a view. Everything else (non-trailing dim, the
+        # f32-grad -> f16-target promotion, strided or unaligned tensors,
+        # CPU device) keeps the composed sum -> exp -> addcmul path below.
+        if (
+            dim == rank - 1
+            and isinstance(grad, TorchMojoTensor)
+            and isinstance(saved_output, TorchMojoTensor)
+            and grad._dtype == target_dtype
+            and grad._dtype in _FLOAT_DTYPES
+            and _on_gpu(grad)
+            and grad._is_contiguous
+            and saved_output._is_contiguous
+            and grad._ptr % 16 == 0
+            and saved_output._ptr % 16 == 0
+        ):
+            cols = grad._shape[dim]
+            rows = grad._numel // cols
+            if rows < 2**31:
+                grad_input = _alloc(grad._shape, target_dtype, grad._device)
+                if grad_input._ptr % 16 == 0:
+                    eager_kernels.softmax_backward_ops.LogSoftmaxBackwardData(
+                        grad_input._ptr,
+                        grad._ptr,
+                        saved_output._ptr,
+                        rows,
+                        cols,
+                        grad._dtype.value,
+                        _ctx_ptr(grad._device),
+                    )
+                    return grad_input
+                # Unaligned fresh allocation (never expected): fall through
+                # to the composed path rather than launching a misaligned
+                # vector kernel.
+                del grad_input
 
         summed = None
 
