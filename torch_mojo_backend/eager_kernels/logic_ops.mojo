@@ -741,9 +741,10 @@ def _bitwise_not_go(
 
 def _bitwise_not_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _bitwise_not_go(args[0], args[1], args[2], args[3], args[4])
     except:
@@ -823,9 +824,10 @@ def _isin_go(
 
 def _isin_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _isin_go(
             args[0],
@@ -933,9 +935,10 @@ def _clamp_scalar_go(
 
 def _clamp_scalar_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _clamp_scalar_go(
             args[0],
@@ -1153,9 +1156,10 @@ def _ternary_bcast_dispatcher[
     op_code: Int
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _ternary_bcast_go[op_code](
             args[0],
@@ -1252,9 +1256,10 @@ def _add_f32_bf16_spec_go(
 
 def _add_f32_bf16_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _add_f32_bf16_spec_go(args[0], args[1])
     except e:
@@ -1419,9 +1424,10 @@ def _binary_spec_dispatcher[
     op_code: Int, is_cmp: Bool
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _binary_spec_go[op_code, is_cmp](args[0], args[1])
     except e:

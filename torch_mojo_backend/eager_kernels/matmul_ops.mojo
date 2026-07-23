@@ -169,7 +169,7 @@ def _ksplit_reduce_kernel(
     MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](
         Int32((BM // TM) * (BN // TN))
     ),
-    `nvvm.minctasm`=SIMDSize(2),
+    `nvvm.minctasm`=SIMDLength(2),
 )
 @__name(t"pure_gemm_tiled_{dtype}_{BM}x{BN}x{BK}_tb{transpose_b}")
 def _gemm_tiled_kernel[
@@ -307,7 +307,7 @@ def _gemm_tiled_kernel[
     MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](
         Int32((BM // TM) * (BN // TN))
     ),
-    `nvvm.minctasm`=SIMDSize(2 if BM >= 128 else 3),
+    `nvvm.minctasm`=SIMDLength(2 if BM >= 128 else 3),
 )
 @__name(t"pure_gemm_pipe_{BM}x{BN}x{BK}_va{VEC_A}_vb{VEC_B}_tb{transpose_b}")
 def _gemm_pipe_kernel[
@@ -567,7 +567,7 @@ def _transpose_small_kernel(
     MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](
         Int32((BM // TM) * (BN // TN))
     ),
-    `nvvm.minctasm`=SIMDSize(MINB if MINB > 0 else (2 if BM >= 128 else 3)),
+    `nvvm.minctasm`=SIMDLength(MINB if MINB > 0 else (2 if BM >= 128 else 3)),
 )
 @__name(
     t"pure_gemm_pipe3_{BM}x{BN}x{BK}_va{VEC_A}_vb{VEC_B}_ct{CT}_s{STAGES}_at{AT}_mb{MINB}_bs{BIAS}"
@@ -815,7 +815,7 @@ comptime SMALLM_MR = 8
 
 @__llvm_metadata(
     MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(SMALLM_THREADS)),
-    `nvvm.minctasm`=SIMDSize(2),
+    `nvvm.minctasm`=SIMDLength(2),
 )
 @__name(t"pure_gemm_smallm_{dtype}_tb{transpose_b}")
 def _gemm_smallm_kernel[
@@ -985,7 +985,7 @@ def _amd_dynamic_mfma_gemm[
     @parameter
     @__copy_capture(c_ptr, n)
     def _edge_store[
-        value_dtype: DType, width: SIMDSize, *, alignment: Int = 1
+        value_dtype: DType, width: SIMDLength, *, alignment: Int = 1
     ](coords: IndexList[2], value: SIMD[value_dtype, width]):
         var row = Int(coords[0])
         var col = Int(coords[1])
@@ -1005,7 +1005,7 @@ def _amd_dynamic_mfma_gemm[
     @parameter
     @__copy_capture(c_ptr, bias_ptr, n)
     def _bias_store[
-        value_dtype: DType, width: SIMDSize, *, alignment: Int = 1
+        value_dtype: DType, width: SIMDLength, *, alignment: Int = 1
     ](coords: IndexList[2], value: SIMD[value_dtype, width]):
         var row = Int(coords[0])
         var col = Int(coords[1])
@@ -3227,9 +3227,10 @@ def _matmul_bias_run(
 
 def _matmul_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _matmul_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
@@ -3239,9 +3240,10 @@ def _matmul_dispatcher(
 
 def _bmm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _bmm_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
@@ -3485,9 +3487,10 @@ def _matmul_spec_go(
 
 def _matmul_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _matmul_spec_go(args[0], args[1], args[2])
     except e:
@@ -3556,9 +3559,10 @@ def _matmul_bias_spec_go(
 
 def _matmul_bias_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _matmul_bias_spec_go(args[0], args[1], args[2], args[3])
     except e:
@@ -3622,9 +3626,10 @@ def _bmm_spec_go(
 
 def _bmm_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _bmm_spec_go(args[0], args[1], args[2])
     except e:

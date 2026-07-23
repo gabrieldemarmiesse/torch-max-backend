@@ -273,15 +273,13 @@ struct TensorHolder(Movable, Writable):
         )
 
     @staticmethod
-    def data_ptr(
-        self_ptr: UnsafePointer[Self, MutAnyOrigin]
-    ) raises -> PythonObject:
+    def data_ptr(py_self: PythonObject) raises -> PythonObject:
+        var self_ptr = py_self.downcast_value_ptr[Self]()
         return PythonObject(Int(self_ptr[].buf.unsafe_ptr()))
 
     @staticmethod
-    def get_nbytes(
-        self_ptr: UnsafePointer[Self, MutAnyOrigin]
-    ) raises -> PythonObject:
+    def get_nbytes(py_self: PythonObject) raises -> PythonObject:
+        var self_ptr = py_self.downcast_value_ptr[Self]()
         return PythonObject(self_ptr[].nbytes)
 
 

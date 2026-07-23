@@ -17,7 +17,6 @@
 # instead delegates its GPU path to modular's nn.softmax grid-stride kernels.
 # ===----------------------------------------------------------------------=== #
 
-from std.builtin.simd_size import SIMDSize
 from std.os import abort
 from std.gpu import (
     MAX_THREADS_PER_BLOCK_METADATA,
@@ -1005,7 +1004,7 @@ def _mean_rows[
     @parameter
     @__copy_capture(out_ptr)
     def output_fn[
-        width: SIMDSize, rank: Int
+        width: SIMDLength, rank: Int
     ](coords: IndexList[rank], val: SIMD[acc_dtype, width]):
         out_ptr[coords[0]] = val[0].cast[dtype]()
 
@@ -1311,7 +1310,7 @@ def _bool_full_reduce[
     @parameter
     @__copy_capture(out_ptr)
     def output_fn[
-        width: SIMDSize, rank: Int
+        width: SIMDLength, rank: Int
     ](coords: IndexList[rank], val: SIMD[DType.bool, width]):
         out_ptr[coords[0]] = val[0]
 
@@ -1594,7 +1593,7 @@ def _max_rows[
     @parameter
     @__copy_capture(out_ptr)
     def output_fn[
-        width: SIMDSize, rank: Int
+        width: SIMDLength, rank: Int
     ](coords: IndexList[rank], val: SIMD[acc_dtype, width]):
         out_ptr[coords[0]] = val[0].cast[dtype]()
 
@@ -2229,9 +2228,10 @@ def _upsample_bilinear2d_go(
 
 def _batch_norm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _batch_norm_go(
             args[0],
@@ -2251,9 +2251,10 @@ def _batch_norm_dispatcher(
 
 def _layer_norm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _layer_norm_go(
             args[0],
@@ -2273,9 +2274,10 @@ def _layer_norm_dispatcher(
 
 def _softmax_rows_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _softmax_rows_go(
             args[0],
@@ -2295,9 +2297,10 @@ def _softmax_rows_dispatcher(
 
 def _attn_decode_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _attn_decode_go(
             args[0], args[1], args[2], args[3], args[4], args[5], args[6]
@@ -2309,9 +2312,10 @@ def _attn_decode_dispatcher(
 
 def _max_pool2d_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _max_pool2d_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
@@ -2321,9 +2325,10 @@ def _max_pool2d_dispatcher(
 
 def _avg_pool2d_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _avg_pool2d_go(args[0], args[1], args[2], args[3], args[4])
     except:
@@ -2333,9 +2338,10 @@ def _avg_pool2d_dispatcher(
 
 def _adaptive_avg_pool2d_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _adaptive_avg_pool2d_go(args[0], args[1], args[2], args[3], args[4])
     except:
@@ -2345,9 +2351,10 @@ def _adaptive_avg_pool2d_dispatcher(
 
 def _group_norm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _group_norm_go(
             args[0],
@@ -2367,9 +2374,10 @@ def _group_norm_dispatcher(
 
 def _upsample_bilinear2d_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _upsample_bilinear2d_go(args[0], args[1], args[2], args[3], args[4])
     except:
@@ -2379,9 +2387,10 @@ def _upsample_bilinear2d_dispatcher(
 
 def _gather0_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _gather0_go(
             args[0],
@@ -2400,9 +2409,10 @@ def _gather0_dispatcher(
 
 def _all_bool_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _all_bool_go(args[0], args[1], args[2], args[3])
     except:
@@ -2412,9 +2422,10 @@ def _all_bool_dispatcher(
 
 def _any_bool_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _any_bool_go(args[0], args[1], args[2], args[3])
     except:
@@ -2498,9 +2509,10 @@ def _mean_spec_go(
 
 def _mean_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _mean_spec_go(args[0], args[1], args[2])
     except e:
@@ -2574,9 +2586,10 @@ def _max_spec_go(
 
 def _max_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _max_spec_go(args[0], args[1], args[2])
     except e:
@@ -2642,9 +2655,10 @@ def _argmax_spec_go(
 
 def _argmax_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _argmax_spec_go(args[0], args[1], args[2])
     except e:
@@ -2696,9 +2710,10 @@ def _cumsum_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
 
 def _cumsum_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _cumsum_spec_go(args[0])
     except e:
@@ -2788,9 +2803,10 @@ def _batch_norm_spec_go(
 
 def _batch_norm_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _batch_norm_spec_go(
             args[0], args[1], args[2], args[3], args[4], args[5]
@@ -2850,9 +2866,10 @@ def _softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
 
 def _softmax_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _softmax_spec_go(args[0])
     except e:
@@ -2956,9 +2973,10 @@ def _attn_decode_spec_go(
 
 def _attn_decode_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _attn_decode_spec_go(args[0], args[1], args[2], args[3])
     except e:
