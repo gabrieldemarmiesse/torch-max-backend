@@ -1,5 +1,6 @@
 import functools
 import math
+import os
 import threading
 from collections import deque
 from typing import Protocol, runtime_checkable
@@ -129,17 +130,31 @@ def _record_h2d_source(device, source: object, non_blocking: bool) -> None:
         # event keeps its exact source alive until DMA completion.
 
 
+_BIG_ALLOC_SYNC_BYTES = int(
+    os.environ.get("TORCH_MOJO_BACKEND_BIG_ALLOC_SYNC_BYTES", str(1 << 30))
+)
+
+
 def _alloc_device_bytes(device: max.driver.Device, nbytes: int) -> tuple[object, int]:
-    """Allocate device memory, draining pending frees once on failure.
+    """Allocate device memory, pacing multi-GB requests against runahead.
 
     Fast kernels let the host enqueue several micro-steps ahead of the GPU;
     every large transient in that window stays live until its stream-ordered
-    free retires, so a multi-GB request can fail on fragmentation (or driver
-    exhaustion) despite ample total free memory. Synchronizing the stream
-    retires the pending frees and lets the allocator coalesce, after which
-    the retry succeeds. Catching here also keeps the failure from unwinding
-    through a native autograd node, which would std::terminate the process.
+    free retires, so a multi-GB request can fail on arena fragmentation (or
+    driver exhaustion) despite tens of GB logically free. Two defenses:
+
+    - Proactive: for requests >= TORCH_MOJO_BACKEND_BIG_ALLOC_SYNC_BYTES
+      (default 1 GiB; 0 disables), synchronize first so every pending free
+      has retired and the allocator can coalesce before placing the block.
+      This keeps the giant-transient region of the arena from shearing into
+      the fragmented layout that a later sync cannot repair.
+    - Reactive backstop: on failure, synchronize and retry once. Catching
+      here also keeps the failure from unwinding through a native autograd
+      node, which would std::terminate the process.
     """
+    if _BIG_ALLOC_SYNC_BYTES > 0 and nbytes >= _BIG_ALLOC_SYNC_BYTES:
+        device.default_stream.synchronize()
+        _release_synchronized_h2d_sources(device)
     try:
         return _holder_mod().alloc(_ctx_ptr(device), nbytes)
     except Exception:
