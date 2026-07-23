@@ -260,6 +260,13 @@ Missing (the work):
   across collectives with no reinit). The kernel is run out-of-place (the
   1-stage path writes outputs while peers still read inputs) with an
   on-device copy back for the in-place API.
+- Restrictions found by review and enforced/handled in code: tensors must
+  be ordered on devices 0..n-1 (the kernels derive each instance's rank
+  from `ctx.id()` and index peer pointers with it — arbitrary device
+  subsets need a kernel-side rank parameter first); launches are
+  serialized under a module lock (concurrent launches could enqueue in
+  opposite per-device stream orders and deadlock the cross-GPU barrier);
+  SIMD-misaligned view offsets are materialized before launch.
 
 ### M2 — done (spawn-based UX)
 
