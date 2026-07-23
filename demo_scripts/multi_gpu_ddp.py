@@ -38,6 +38,12 @@ def main() -> None:
     parser.add_argument("--batch", type=int, default=2048, help="per-rank batch")
     parser.add_argument("--dim", type=int, default=1024)
     parser.add_argument("--hidden", type=int, default=4096)
+    parser.add_argument(
+        "--bucket-cap-mb",
+        type=int,
+        default=25,
+        help="DDP gradient bucket size (smaller = more, earlier overlap)",
+    )
     args = parser.parse_args()
 
     register_mojo_devices()
@@ -47,7 +53,9 @@ def main() -> None:
     def worker(rank: int, world_size: int, pg: mojo_dist.MojoProcessGroup) -> None:
         device = f"mojo:{rank}"
         model = make_model(args.dim, args.hidden).to(device)
-        ddp = DDP(model, process_group=pg, device_ids=None)
+        ddp = DDP(
+            model, process_group=pg, device_ids=None, bucket_cap_mb=args.bucket_cap_mb
+        )
         optimizer = torch.optim.AdamW(ddp.parameters(), lr=1e-3)
 
         torch.manual_seed(1000 + rank)
@@ -80,7 +88,11 @@ def main() -> None:
 
     wall = max(timings.values())
     samples = args.steps * args.batch * world
-    print(f"world_size={world} steps={args.steps} per-rank batch={args.batch}")
+    mode = "comm-stream (async)" if mojo_dist._ASYNC_COMM_ENABLED else "sync"
+    print(
+        f"world_size={world} steps={args.steps} per-rank batch={args.batch} "
+        f"bucket_cap_mb={args.bucket_cap_mb} allreduce={mode}"
+    )
     print(f"wall: {wall:.3f}s   throughput: {samples / wall:,.0f} samples/s")
     for rank in range(world):
         print(f"rank {rank} loss: {losses[rank][0]:.4f} -> {losses[rank][-1]:.4f}")

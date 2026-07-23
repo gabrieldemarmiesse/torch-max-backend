@@ -21,10 +21,13 @@ contain pure-Mojo GPU kernels plus correctness-grade CPU paths for the MAX
 CPU device.
 """
 
+import errno
 import fcntl
 import hashlib
 import importlib
 import sys
+import threading
+import time
 from pathlib import Path
 
 import mojo.importer  # noqa: F401  — installs the .mojo meta-path importer
@@ -71,6 +74,29 @@ def _mojo_sources_hash() -> str:
     return hasher.hexdigest()[:16]
 
 
+# One flock attempt per process: rank threads of single-process data
+# parallelism can hit cold-cache imports concurrently, and stacking flock
+# calls on an NFS home directory exhausts its lock service (ENOLCK).
+_COMPILE_THREAD_LOCK = threading.Lock()
+
+
+def _flock_with_retry(lock_file: object, deadline_seconds: float = 120.0) -> None:
+    """flock that rides out transient NFS 'No locks available' errors."""
+    start = time.monotonic()
+    delay = 0.05
+    while True:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            return
+        except OSError as exc:
+            if exc.errno != errno.ENOLCK:
+                raise
+            if time.monotonic() - start > deadline_seconds:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 2.0)
+
+
 def _import_mojo_module(name: str):
     """Import (compiling on first use) one .mojo extension module.
 
@@ -85,15 +111,16 @@ def _import_mojo_module(name: str):
         return importlib.import_module(f"torch_mojo_backend.eager_kernels.{name}")
 
     _CACHE_DIR.mkdir(exist_ok=True)
-    with open(_CACHE_DIR / ".compile.lock", "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        if not cache_file.is_file():
-            print(
-                f"torch-mojo-backend: compiling eager-mode Mojo kernels ({name}) "
-                "(first use only, takes ~30s, cached afterwards)...",
-                file=sys.stderr,
-            )
-        return importlib.import_module(f"torch_mojo_backend.eager_kernels.{name}")
+    with _COMPILE_THREAD_LOCK:
+        with open(_CACHE_DIR / ".compile.lock", "w") as lock_file:
+            _flock_with_retry(lock_file)
+            if not cache_file.is_file():
+                print(
+                    f"torch-mojo-backend: compiling eager-mode Mojo kernels ({name}) "
+                    "(first use only, takes ~30s, cached afterwards)...",
+                    file=sys.stderr,
+                )
+            return importlib.import_module(f"torch_mojo_backend.eager_kernels.{name}")
 
 
 def __getattr__(name: str):

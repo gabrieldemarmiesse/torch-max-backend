@@ -290,13 +290,72 @@ Missing (the work):
   `find_unused_parameters=True` / `static_graph=True` are unsupported (they
   need a pinned-memory allocator registered for the backend).
 
-### M3 — not started
+### M3 — overlap machinery implemented (opt-in); parity tuning open
 
-Next steps, in order: benchmark allreduce bandwidth vs message size
-(bench_allreduce methodology) and end-to-end DDP scaling vs `torchrun` +
-NCCL on the same box; then the priority comm stream + events + async
-`Work.get_future()` machinery inside `comm_ops.mojo`; then bucket-size
-tuning against the allreduce dispatch table.
+Allreduce bandwidth (demo_scripts/multi_gpu_allreduce_bench.py, bf16,
+256 MiB): busbw ~330 GB/s at 2 GPUs, ~321 GB/s at 8 GPUs — NCCL-class on
+this NVLink fabric. Small messages are bound by the Python launch path.
+(`torchrun`+NCCL cannot run on this box for a direct baseline: torch is a
+cu130 build and the driver is 570.)
+
+The comm/compute overlap machinery is implemented and correct, opt-in via
+`TORCH_MOJO_BACKEND_COMM_STREAM=1`:
+
+- Comm stream: a second owning `DeviceContext(device_id=i)` per GPU. MAX
+  device contexts share the CUDA primary context (verified via
+  `cuPointerGetAttribute`), so buffers, peer access and events interop
+  with the driver's context, `ctx.id()` still reports the device id (the
+  kernels' rank derivation), and the unmodified public `allreduce` lands
+  on the comm context's default stream. Launching the internal comm
+  kernels directly on a `create_stream(priority=...)` stream fails today:
+  `compile_function` + `DeviceStream.enqueue_function` cannot carry the
+  output-lambda closure captures (`pop.compiler.global_load ...
+  _context_var` fails to legalize under --emit shared-lib), and only the
+  fused `ctx.enqueue_function[kernel]` handles captures — so the comm
+  stream has no raised priority yet (upstream ask).
+- Scheduling per collective (comm_ops.mojo `all_reduce_async`): ready
+  event recorded on each device's default stream → comm stream waits it →
+  collective (grid optionally capped via
+  `TORCH_MOJO_BACKEND_COMM_BLOCKS`) → done event. A `CommWork` Python
+  object carries the done events.
+- Completion (distributed.py `_allreduce_async`): each rank defers a
+  GPU-side default-stream wait on its done event, the in-place copy-back,
+  and `future.set_result` to an autograd engine callback
+  (`queue_callback`), which runs after ALL of backward's compute has been
+  enqueued and — because the Reducer only queues `finalize_backward` at
+  the last bucket, and engine callbacks run FIFO — strictly before DDP
+  consumes the future. The host never blocks anywhere. Outside backward
+  the completion runs inline. Failures poison the futures (an exception
+  inside a backward node aborts the process; through the future it
+  surfaces on the rank thread — note `FutureWrappingWork.wait()` never
+  rethrows upstream, only the future's value path does, which is what DDP
+  uses).
+- Lifetime: a watcher thread holds src/out references until the done
+  events complete on every device (P2P peers may still read a source
+  after the local instance finished; frees are stream-ordered on the
+  DEFAULT streams, not the comm streams). Async collectives use their own
+  Signal-buffer channel — sync and async launches interleaving one
+  monotonic counter set would mispair the barrier.
+- Validated: `pg.allreduce` returns in <1 ms with hundreds of ms queued on
+  the default stream; DDP ranks stay synchronized on the async path; a
+  poisoned collective neither hangs nor aborts.
+
+Why opt-in: on the demo MLP the async path currently measures neutral to
+slower end-to-end (up to -30% at large per-rank batch). The collective
+itself is not the problem — the async path's src/out staging lives longer
+(until the watcher sees the done events), raising the memory watermark,
+and the stream-ordered allocator throttles the HOST under churn (the same
+effect initially corrupted the overlap test's matmul-chain calibration).
+Follow-ups, in order: reuse persistent comm staging buffers instead of
+per-bucket allocations; raised-priority comm streams (needs upstream:
+either priority on a context's default stream or capture-carrying stream
+launches); bucket-size tuning against the allreduce dispatch table.
+
+Learned along the way (verified on this box): AsyncRT event create,
+record on a busy stream, cross-context stream-event waits, pending-event
+destruction and kernel launches behind a pending wait are all
+host-nonblocking; first-time kernel compile+module load onto a busy
+device is NOT (it synchronizes with in-flight work).
 
 ## Why this can plausibly reach CUDA parity
 

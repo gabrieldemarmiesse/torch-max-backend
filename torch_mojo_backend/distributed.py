@@ -11,6 +11,8 @@ NCCL, no torch-cuda — works with a CPU-only PyTorch install.
     mojo_dist.all_reduce(grads, op="mean")
 """
 
+import os
+import queue
 import threading
 from collections.abc import Callable
 
@@ -18,15 +20,38 @@ import torch
 from max.driver import Device as MaxDevice
 from max.dtype import DType
 
-from torch_mojo_backend.mojo_device.torch_mojo_tensor import TorchMojoTensor
+from torch_mojo_backend.mojo_device.torch_mojo_tensor import (
+    TorchMojoTensor,
+    peer_access_enabled,
+)
 
 _COMM_TORCH_DTYPES = (torch.float32, torch.bfloat16, torch.float16)
 
 _MIN_PAYLOAD_BYTES = 32 * 1024 * 1024
 
+# Comm/compute overlap (M3): DDP bucket allreduces run on per-device comm
+# streams; each rank completes its c10d future from an autograd engine
+# callback with a GPU-side stream wait, so the host never blocks. Opt in
+# with TORCH_MOJO_BACKEND_COMM_STREAM=1. Off by default for now: the
+# machinery is correct and host-nonblocking, but the longer-lived
+# src/out allocations raise the memory watermark and can throttle the
+# stream-ordered allocator on tight workloads (see the design doc's M3
+# status for the follow-ups: raised-priority comm streams and buffer
+# reuse).
+_ASYNC_COMM_ENABLED = os.environ.get("TORCH_MOJO_BACKEND_COMM_STREAM", "0") == "1"
+
+# Grid cap for comm-stream collectives (0 = the tuning table's full grid).
+_ASYNC_COMM_MAX_BLOCKS = int(os.environ.get("TORCH_MOJO_BACKEND_COMM_BLOCKS", "0"))
+
 
 class _Signals:
-    """Zeroed per-device Signal buffers for one ordered device set."""
+    """Zeroed per-device Signal buffers for one ordered device set.
+
+    Each channel ("sync" = default-stream collectives, "async" = comm-stream
+    collectives) uses its own buffers: the barrier counters are monotonic
+    and pair launches by order, so two channels sharing counters would
+    mispair.
+    """
 
     def __init__(self, devices: tuple[MaxDevice, ...], payload_bytes: int):
         from torch_mojo_backend import eager_kernels
@@ -47,22 +72,32 @@ class _Signals:
             buffer._device.default_stream.synchronize()
 
 
-# Per-device Signal buffers, allocated once per (devices, payload capacity)
-# and reused by every collective: the comm kernels' cross-GPU barrier
-# counters are monotonic, so consecutive collectives need no reinitialization.
-_signal_cache: dict[tuple[MaxDevice, ...], _Signals] = {}
+# Per-device Signal buffers, allocated once per (channel, devices, payload
+# capacity) and reused by every collective: the comm kernels' cross-GPU
+# barrier counters are monotonic, so consecutive collectives need no
+# reinitialization.
+_signal_cache: dict[tuple[str, tuple[MaxDevice, ...]], _Signals] = {}
 _signal_lock = threading.Lock()
 
 
-def _signals_for(devices: tuple[MaxDevice, ...], payload_bytes: int) -> _Signals:
+def _signals_for(
+    devices: tuple[MaxDevice, ...], payload_bytes: int, channel: str = "sync"
+) -> _Signals:
     with _signal_lock:
-        signals = _signal_cache.get(devices)
+        key = (channel, devices)
+        signals = _signal_cache.get(key)
         if signals is None or signals.payload_bytes < payload_bytes:
             capacity = max(_MIN_PAYLOAD_BYTES, payload_bytes)
             if signals is not None:
                 capacity = max(capacity, 2 * signals.payload_bytes)
+                if channel == "async":
+                    # Replacing async-channel buffers frees them on the
+                    # DEFAULT streams, but comm-STREAM kernels may still
+                    # read them; wait out every in-flight async collective
+                    # first. (Growth is rare: capacity doubles.)
+                    _watcher.drain()
             signals = _Signals(devices, capacity)
-            _signal_cache[devices] = signals
+            _signal_cache[key] = signals
         return signals
 
 
@@ -139,6 +174,102 @@ def _all_reduce_into(
             srcs[0]._dtype.value,
             len(srcs),
             average,
+        )
+
+
+class _CommWatcher:
+    """Completes async collectives off the rank threads.
+
+    FIFO: for each submitted (mojo work, on_done), a daemon thread blocks
+    until the collective's done events complete on every device (GIL
+    released inside the Mojo wait), then runs ``on_done`` — which performs
+    the in-place copy-backs and resolves the ranks' futures — and drops the
+    submission's references (the host-side lifetime stash).
+    """
+
+    def __init__(self):
+        self._queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._started = False
+        self._lock = threading.Lock()
+        self._pending = 0
+        self._idle = threading.Condition()
+
+    def _ensure_started(self) -> None:
+        with self._lock:
+            if not self._started:
+                thread = threading.Thread(
+                    target=self._run, name="mojo-comm-watcher", daemon=True
+                )
+                thread.start()
+                self._started = True
+
+    def submit(self, mojo_work: object, on_done: Callable[[], None]) -> None:
+        self._ensure_started()
+        with self._idle:
+            self._pending += 1
+        self._queue.put((mojo_work, on_done))
+
+    def drain(self) -> None:
+        """Block until every submitted collective has been completed."""
+        with self._idle:
+            self._idle.wait_for(lambda: self._pending == 0)
+
+    def _run(self) -> None:
+        from torch_mojo_backend import eager_kernels
+
+        while True:
+            mojo_work, on_done = self._queue.get()
+            try:
+                eager_kernels.comm_ops.work_host_wait(mojo_work)
+            finally:
+                on_done()
+                del mojo_work, on_done
+                with self._idle:
+                    self._pending -= 1
+                    self._idle.notify_all()
+
+
+_watcher = _CommWatcher()
+
+# One persistent comm stream per GPU (a secondary MAX device context whose
+# default stream carries the collectives), created lazily.
+_comm_streams: dict[int, object] = {}
+
+
+def _comm_streams_for(devices: tuple[MaxDevice, ...]) -> tuple[object, ...]:
+    from torch_mojo_backend import eager_kernels
+
+    streams = []
+    for device in devices:
+        stream = _comm_streams.get(device.id)
+        if stream is None:
+            stream = eager_kernels.comm_ops.comm_stream_create(device.id)
+            _comm_streams[device.id] = stream
+        streams.append(stream)
+    return tuple(streams)
+
+
+def _all_reduce_async_launch(
+    outs: list[TorchMojoTensor], srcs: list[TorchMojoTensor], average: bool
+) -> object:
+    """Enqueue the collective on the comm streams; returns the mojo work."""
+    from torch_mojo_backend import eager_kernels
+
+    devices = tuple(t._device for t in srcs)
+    numel = srcs[0]._numel
+    nbytes = numel * srcs[0]._itemsize
+    with _launch_lock:
+        signals = _signals_for(devices, nbytes, channel="async")
+        streams = _comm_streams_for(devices)
+        return eager_kernels.comm_ops.all_reduce_async(
+            streams,
+            tuple(t._ptr for t in srcs),
+            tuple(t._ptr for t in outs),
+            tuple(s._ptr for s in signals.buffers),
+            tuple(eager_kernels._ctx_ptr(device) for device in devices),
+            numel,
+            srcs[0]._dtype.value,
+            (average, _ASYNC_COMM_MAX_BLOCKS),
         )
 
 
@@ -396,12 +527,133 @@ class MojoProcessGroup(torch.distributed.ProcessGroup):
                 f"MojoProcessGroup.allreduce only supports SUM and AVG, got {reduce_op}"
             )
 
+        if _ASYNC_COMM_ENABLED and len(tensors) == 1:
+            return self._allreduce_async(tensors, average)
+
         def run(slots: list[object]) -> None:
             for position in range(len(tensors)):
                 _reduce_tensors([s[position] for s in slots], average)
 
         self._run(tensors, run)
         return _make_work(tensors)
+
+    def _allreduce_async(
+        self, tensors: list[torch.Tensor], average: bool
+    ) -> torch.distributed.Work:
+        """Comm-stream allreduce returning a Work without device sync (M3).
+
+        DDP calls this from the autograd hook mid-backward. The last
+        arriving rank ENQUEUES the collective on the per-device comm
+        streams; backward keeps dispatching compute on the default streams.
+        Each rank then defers its completion — a GPU-side default-stream
+        wait on its done event, the in-place copy-back, and resolving the
+        future — to an autograd engine callback, which runs after ALL of
+        backward's compute has been enqueued and, because the Reducer only
+        queues finalize_backward at the last bucket, strictly before DDP
+        consumes the future. The host never blocks. Outside a backward
+        pass the completion runs inline.
+
+        A watcher thread holds the src/out references until the done
+        events complete on every device (stream-ordered frees plus P2P
+        peer reads make earlier dropping unsafe). Failures poison the
+        futures instead of raising — an exception inside a backward node
+        would abort the process.
+        """
+        from torch._C._distributed_c10d import _create_work_from_future
+
+        future = torch.futures.Future()
+        holder: dict[str, object] = {}
+
+        def run(slots: list[object]) -> None:
+            all_tensors = [s[0] for s in slots]
+            futures = [s[1] for s in slots]
+            holders = [s[2] for s in slots]
+            gathered = [rank_tensors[0] for rank_tensors in all_tensors]
+
+            def poison(exc: BaseException) -> None:
+                for fut in futures:
+                    try:
+                        fut.set_exception(exc)
+                    except BaseException:
+                        pass  # future already resolved; nothing better to do
+
+            try:
+                first = gathered[0]
+                same_shape = all(tuple(t.shape) == tuple(first.shape) for t in gathered)
+                if not same_shape:
+                    raise ValueError(
+                        f"allreduce shape mismatch across ranks: "
+                        f"{[tuple(t.shape) for t in gathered]}"
+                    )
+                fast = (
+                    first.dtype in _COMM_TORCH_DTYPES
+                    and first.numel() > 0
+                    and all(isinstance(t, TorchMojoTensor) for t in gathered)
+                    and all(t._device.label == "gpu" for t in gathered)
+                    and all(t._device.id == i for i, t in enumerate(gathered))
+                    and peer_access_enabled()
+                )
+                if not fast:
+                    _reduce_tensors(gathered, average)
+                    for rank_tensors, fut in zip(all_tensors, futures):
+                        fut.set_result(rank_tensors)
+                    return
+
+                srcs = [_aligned_contig(t) for t in gathered]
+                outs = [
+                    TorchMojoTensor._alloc(src._shape, src._dtype, src._device)
+                    for src in srcs
+                ]
+                mojo_work = _all_reduce_async_launch(outs, srcs, average)
+                for rank_holder in holders:
+                    rank_holder["work"] = mojo_work
+                    rank_holder["outs"] = outs
+                # Lifetime stash: the collective reads srcs and writes outs
+                # on the comm streams; the watcher holds them until the done
+                # events complete on every device (stream-ordered frees plus
+                # P2P peer reads make earlier dropping unsafe).
+                stash = (srcs, outs)
+
+                def release_stash() -> None:
+                    _ = stash
+
+                _watcher.submit(mojo_work, release_stash)
+            except BaseException as exc:
+                poison(exc)
+
+        self._run((tensors, future, holder), run)
+
+        mojo_work = holder.get("work")
+        if mojo_work is None:
+            # Fallback or failure path: the future is already resolved.
+            return _create_work_from_future(future)
+
+        from torch_mojo_backend import eager_kernels
+
+        rank = self._rank_index
+        outs = holder["outs"]
+        ctx_ptr = eager_kernels._ctx_ptr(tensors[0]._device)
+
+        def finish() -> None:
+            try:
+                eager_kernels.comm_ops.work_enqueue_main_stream_wait(
+                    mojo_work, rank, ctx_ptr
+                )
+                torch.ops.aten.copy_(tensors[0], outs[rank])
+                future.set_result(tensors)
+            except BaseException as exc:
+                try:
+                    future.set_exception(exc)
+                except BaseException:
+                    pass
+
+        if torch._C._current_graph_task_id() != -1:
+            # Mid-backward: defer until every backward op has been enqueued
+            # so only later work orders behind the collective.
+            torch.autograd.Variable._execution_engine.queue_callback(finish)
+        else:
+            finish()
+        return _create_work_from_future(future)
 
     def allreduce_coalesced(
         self, tensors: list[torch.Tensor], opts: object = None

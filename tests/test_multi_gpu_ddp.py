@@ -110,6 +110,32 @@ def test_ddp_ranks_stay_synchronized():
         torch.testing.assert_close(states[0][name], states[1][name])
 
 
+def test_ddp_ranks_stay_synchronized_async(monkeypatch):
+    """The comm-stream (async) allreduce path keeps DDP ranks synchronized."""
+    require_two_gpus()
+    monkeypatch.setattr(mojo_dist, "_ASYNC_COMM_ENABLED", True)
+    states = {}
+
+    def worker(rank: int, world_size: int, pg: mojo_dist.MojoProcessGroup):
+        device = f"mojo:{rank}"
+        model = make_model().to(device)
+        ddp = DDP(model, process_group=pg, device_ids=None)
+        optimizer = torch.optim.SGD(ddp.parameters(), lr=0.05)
+        torch.manual_seed(700 + rank)
+        for _ in range(3):
+            x = torch.randn(8, 16).to(device)
+            y = torch.randn(8, 4).to(device)
+            optimizer.zero_grad()
+            ((ddp(x) - y) ** 2).mean().backward()
+            optimizer.step()
+        states[rank] = {n: p.detach().cpu() for n, p in model.state_dict().items()}
+
+    mojo_dist.spawn(worker, world_size=2)
+
+    for name in states[0]:
+        torch.testing.assert_close(states[0][name], states[1][name])
+
+
 def test_ddp_matches_single_process_large_batch():
     """DDP over shards must match one model trained on the full batch."""
     require_two_gpus()
@@ -180,6 +206,83 @@ def test_ddp_on_all_gpus():
     for name in states[0]:
         for rank in range(1, world):
             torch.testing.assert_close(states[rank][name], states[0][name])
+
+
+def test_async_allreduce_is_host_nonblocking(monkeypatch):
+    """The comm-stream allreduce must return a pending Work immediately,
+    without draining previously queued default-stream work (M3 overlap)."""
+    require_two_gpus()
+    monkeypatch.setattr(mojo_dist, "_ASYNC_COMM_ENABLED", True)
+    import time
+
+    measured = {}
+    filler_repeats = 400
+
+    def worker(rank: int, world_size: int, pg: mojo_dist.MojoProcessGroup):
+        device = f"mojo:{rank}"
+        # Allocation-free GPU filler: in-place adds on a big tensor. A
+        # fresh-allocating filler (matmul chains) can block the HOST in the
+        # stream-ordered allocator and skew the timing.
+        filler = torch.zeros(1 << 24, device=device)
+        t = torch.full((1 << 20,), float(rank + 1), device=device)
+        # Warm every kernel (filler, allreduce path, copy-back).
+        filler.add_(1.0)
+        pg.allreduce([t]).wait()
+        t.fill_(float(rank + 1))
+        torch.mojo.synchronize(rank)
+        pg.barrier().wait()
+
+        # Calibrate the filler, synchronized.
+        start = time.perf_counter()
+        for _ in range(filler_repeats):
+            filler.add_(1.0)
+        torch.mojo.synchronize(rank)
+        chain_seconds = time.perf_counter() - start
+        pg.barrier().wait()
+
+        # Queue the same filler WITHOUT syncing, then allreduce: the host
+        # call must return long before the queued work could have drained.
+        for _ in range(filler_repeats):
+            filler.add_(1.0)
+        start = time.perf_counter()
+        work = pg.allreduce([t])
+        call_seconds = time.perf_counter() - start
+        work.wait()
+        measured[rank] = (chain_seconds, call_seconds, t.cpu())
+
+    mojo_dist.spawn(worker, world_size=2)
+
+    expected = torch.full((1 << 20,), 3.0)
+    for rank in range(2):
+        chain_seconds, call_seconds, reduced = measured[rank]
+        assert call_seconds < chain_seconds * 0.5, (
+            f"rank {rank}: allreduce call took {call_seconds:.4f}s vs "
+            f"queued-filler {chain_seconds:.4f}s — it drained the default stream"
+        )
+        torch.testing.assert_close(reduced, expected)
+
+
+def test_async_allreduce_failure_poisons_future_not_process(monkeypatch):
+    """A bad collective must surface from the future, not abort mid-backward."""
+    require_two_gpus()
+    monkeypatch.setattr(mojo_dist, "_ASYNC_COMM_ENABLED", True)
+
+    def worker(rank: int, world_size: int, pg: mojo_dist.MojoProcessGroup):
+        # Shape mismatch across ranks: rank 0 has 8 elements, rank 1 has 4.
+        t = torch.ones(8 if rank == 0 else 4, device=f"mojo:{rank}")
+        work = pg.allreduce([t])
+        # The poisoned future completes with the exception. Upstream
+        # semantics limit how it surfaces: Work.wait() never rethrows, and
+        # a future re-wrapped through Work.get_future() loses the Python
+        # wrapper's unwrap hook, so its wait() RETURNS the exception object
+        # (DDP's C++ finalize path turns that into a loud parse error on
+        # the rank thread). The essential contract: no hang, no abort.
+        work.wait()
+        outcome = work.get_future().wait()
+        assert isinstance(outcome, ValueError)
+        assert "shape mismatch" in str(outcome)
+
+    mojo_dist.spawn(worker, world_size=2)
 
 
 def test_spawn_propagates_worker_exception():
