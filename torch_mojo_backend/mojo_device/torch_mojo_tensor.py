@@ -129,6 +129,25 @@ def _record_h2d_source(device, source: object, non_blocking: bool) -> None:
         # event keeps its exact source alive until DMA completion.
 
 
+def _alloc_device_bytes(device: max.driver.Device, nbytes: int) -> tuple[object, int]:
+    """Allocate device memory, draining pending frees once on failure.
+
+    Fast kernels let the host enqueue several micro-steps ahead of the GPU;
+    every large transient in that window stays live until its stream-ordered
+    free retires, so a multi-GB request can fail on fragmentation (or driver
+    exhaustion) despite ample total free memory. Synchronizing the stream
+    retires the pending frees and lets the allocator coalesce, after which
+    the retry succeeds. Catching here also keeps the failure from unwinding
+    through a native autograd node, which would std::terminate the process.
+    """
+    try:
+        return _holder_mod().alloc(_ctx_ptr(device), nbytes)
+    except Exception:
+        device.default_stream.synchronize()
+        _release_synchronized_h2d_sources(device)
+        return _holder_mod().alloc(_ctx_ptr(device), nbytes)
+
+
 def _release_synchronized_h2d_sources(device) -> None:
     """Drop ready sources after the caller synchronized ``device``'s stream.
 
@@ -324,7 +343,7 @@ class TorchMojoTensor(torch.Tensor):
         """A new contiguous uninitialized tensor (one device allocation)."""
         shape = tuple(shape)
         numel = math.prod(shape)
-        holder, ptr = _holder_mod().alloc(_ctx_ptr(device), numel * dtype.size_in_bytes)
+        holder, ptr = _alloc_device_bytes(device, numel * dtype.size_in_bytes)
         return cls._make(
             holder,
             ptr,
