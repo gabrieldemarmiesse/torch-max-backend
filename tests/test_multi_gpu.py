@@ -139,6 +139,23 @@ def test_wrapper_tensorimpl_device_index_matches_real_device():
         assert t.device == torch.device(f"mojo:{index}")
 
 
+def test_new_factory_honors_explicit_cross_device():
+    """new_zeros/new_empty with an explicit mojo index must allocate there."""
+    require_two_gpus()
+    x = torch.zeros(4, device="mojo:0")
+    for factory in (
+        lambda: x.new_zeros((2,), device="mojo:1"),
+        lambda: x.new_empty((2,), device="mojo:1"),
+        lambda: x.new_ones((2,), device="mojo:1"),
+        lambda: x.new_full((2,), 3.0, device="mojo:1"),
+    ):
+        result = factory()
+        assert result.device == torch.device("mojo:1")
+        assert result._device == find_equivalent_max_device(torch.device("mojo:1"))
+    # Defaulted device stays on self's device.
+    assert x.new_zeros((2,)).device == torch.device("mojo:0")
+
+
 def test_factory_follows_tensorimpl_device():
     """empty_like and friends on mojo:i must allocate on the real device i."""
     if torch.mojo.device_count() < 2:

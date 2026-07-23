@@ -138,6 +138,23 @@ def _keep_mojo_kernels_out_of_fake_tensor_construction():
     FakeTensor.__new__ = staticmethod(fake_new_without_mojo_kernels)
 
 
+def _apply_thread_local_autograd_settings(torch_mojo_device_module):
+    """Configure the CALLING thread's autograd engine for multi-device mojo.
+
+    Mojo wrapper TensorImpls carry their real device index (mojo:i), but
+    PyTorch's Python PrivateUse1 device guard advertises deviceCount() == 1,
+    and the autograd engine's per-device ready queues assert
+    index < deviceCount. Backward on any mojo:i with i >= 1 must therefore
+    run on the calling thread, which the engine only does when
+    multithreading is disabled. The setting is thread-local: a thread the
+    user spawns to run backward must call register_mojo_devices() itself
+    (idempotent; it re-applies this per-thread setting), or go through
+    torch_mojo_backend.distributed.spawn, which does.
+    """
+    if torch_mojo_device_module.device_count() > 1:
+        torch.autograd.set_multithreading_enabled(False)
+
+
 def register_mojo_devices():
     """Enable the mojo device globally and register all aten ops"""
     from torch.utils.backend_registration import _setup_privateuseone_for_python_backend
@@ -147,7 +164,9 @@ def register_mojo_devices():
     # since it's so recent we import it here.
     global _registered
     if _registered:
-        # Already registered
+        # Already registered; still apply the per-thread engine setting so
+        # user threads can prepare themselves for backward on mojo:i.
+        _apply_thread_local_autograd_settings(torch_mojo_device_module)
         return
 
     # Module._apply otherwise replaces a shared CPU Parameter independently in
@@ -161,16 +180,7 @@ def register_mojo_devices():
     )
     _install_torch_accelerator_synchronize(torch_mojo_device_module)
 
-    # Mojo wrapper TensorImpls carry their real device index (mojo:i), but
-    # PyTorch's Python PrivateUse1 device guard advertises deviceCount() == 1,
-    # and the autograd engine's per-device ready queues assert
-    # index < deviceCount. Backward on any mojo:i with i >= 1 must therefore
-    # run on the calling thread, which the engine only does when
-    # multithreading is disabled. The setting is thread-local: threads the
-    # user spawns to run backward on a non-zero mojo device need the same
-    # call (torch.autograd.set_multithreading_enabled(False)).
-    if torch_mojo_device_module.device_count() > 1:
-        torch.autograd.set_multithreading_enabled(False)
+    _apply_thread_local_autograd_settings(torch_mojo_device_module)
 
     # PyTorch deliberately uses exact-type checks before selecting foreach
     # optimizers. TorchMojoTensor is a transparent PrivateUse1 wrapper, so

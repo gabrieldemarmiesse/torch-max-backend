@@ -447,16 +447,19 @@ def mojo_device_empty_like(
 
 
 def _new_factory_device(self: TorchMojoTensor, device):
-    """Target MAX device for a `new_*` factory. torch passes `self`'s device
-    (whose torch-side index is the phantom 0) when the caller doesn't
-    override it, so default to `self`'s real MAX device; only an explicit
-    CPU request is honored differently."""
+    """Target MAX device for a `new_*` factory.
+
+    Wrapper TensorImpls carry the tensor's real device index, so the device
+    argument torch passes (defaulted to `self`'s device or caller-supplied)
+    is trustworthy and honored. An indexless "mojo" keeps `self`'s device,
+    matching `Tensor.new_*` semantics rather than the current-device
+    default."""
     if device is None:
         return self._device
     torch_dev = torch.device(device) if not isinstance(device, torch.device) else device
-    if torch_dev.type == "cpu":
-        return find_equivalent_max_device(torch_dev)
-    return self._device
+    if torch_dev.type == "mojo" and torch_dev.index is None:
+        return self._device
+    return find_equivalent_max_device(torch_dev)
 
 
 @register_aten_op("aten::new_empty")
@@ -731,6 +734,50 @@ def mojo_device_embedding(
     return result
 
 
+def _maybe_overlapping_memory(sizes, strides) -> bool:
+    """Whether the strided geometry can map two indices to one element.
+
+    Mirror of torch's ``_maybe_overlapping_memory`` (FunctionsManual.cpp):
+    walking dims by ascending stride, a dim whose stride does not clear the
+    largest reachable index so far can revisit memory.
+    """
+    max_index = 0
+    for stride, size in sorted(zip(strides, sizes)):
+        if size < 2:
+            continue
+        if stride <= max_index:
+            return True
+        max_index += stride * (size - 1)
+    return False
+
+
+@register_aten_op("aten::as_strided")
+def mojo_device_as_strided(
+    self: TorchMojoTensor, size, stride, storage_offset=None
+) -> TorchMojoTensor:
+    """as_strided with a forward-time autograd-mode preflight.
+
+    The backward for a maybe-overlapping geometry calls
+    ``storage.index_add_`` (unimplemented here), and an exception raised
+    inside a backward node aborts the process on this backend (see
+    mojo_device_embedding). Reject the recording at forward time instead.
+    """
+    if (
+        torch.is_grad_enabled()
+        and self.requires_grad
+        and _maybe_overlapping_memory(tuple(size), tuple(stride))
+    ):
+        raise NotImplementedError(
+            "Mojo eager autograd does not support as_strided views that may "
+            "overlap memory (their backward needs aten::index_add_)"
+        )
+    aten_fast = _fast()
+    result = aten_fast.fast_aten_as_strided(self, size, stride, storage_offset)
+    if result is aten_fast.NOT_HANDLED:
+        raise _unsupported("aten::as_strided", (self,))
+    return result
+
+
 @register_aten_op("aten::normal_")
 def mojo_device_normal_(
     self: TorchMojoTensor, mean: float = 0.0, std: float = 1.0, generator=None
@@ -966,7 +1013,6 @@ _register_fast("aten::any.dim", "fast_aten_any")
 _register_fast("aten::any.dims", "fast_aten_any")
 _register_fast("aten::argmax", "fast_aten_argmax")
 _register_fast("aten::argmin", "fast_aten_argmin")
-_register_fast("aten::as_strided", "fast_aten_as_strided")
 _register_fast("aten::asinh", "fast_aten_asinh")
 _register_fast("aten::atanh", "fast_aten_atanh")
 _register_fast("aten::avg_pool2d", "fast_aten_avg_pool2d")

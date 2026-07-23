@@ -67,9 +67,7 @@ def test_process_group_allgather():
 
     def worker(rank: int, world_size: int, pg: mojo_dist.MojoProcessGroup):
         inp = torch.full((2,), float(rank + 10), device=f"mojo:{rank}")
-        outputs = [
-            [torch.zeros(2, device=f"mojo:{rank}") for _ in range(world_size)]
-        ]
+        outputs = [[torch.zeros(2, device=f"mojo:{rank}") for _ in range(world_size)]]
         pg.allgather(outputs, [inp]).wait()
         gathered[rank] = [t.cpu() for t in outputs[0]]
 
@@ -147,9 +145,7 @@ def test_ddp_matches_single_process_large_batch():
             loss = ((ddp(x[lo:hi].to(device)) - y[lo:hi].to(device)) ** 2).mean()
             loss.backward()
             opt.step()
-        states[rank] = {
-            n: p.detach().cpu() for n, p in model.state_dict().items()
-        }
+        states[rank] = {n: p.detach().cpu() for n, p in model.state_dict().items()}
 
     mojo_dist.spawn(worker, world_size=world)
 
@@ -177,9 +173,7 @@ def test_ddp_on_all_gpus():
         opt.zero_grad()
         ((ddp(x) - y) ** 2).mean().backward()
         opt.step()
-        states[rank] = {
-            n: p.detach().cpu() for n, p in model.state_dict().items()
-        }
+        states[rank] = {n: p.detach().cpu() for n, p in model.state_dict().items()}
 
     mojo_dist.spawn(worker, world_size=world)
 
@@ -197,3 +191,38 @@ def test_spawn_propagates_worker_exception():
 
     with pytest.raises(RuntimeError, match="boom from rank 1"):
         mojo_dist.spawn(worker, world_size=2)
+
+
+def test_spawn_does_not_hang_when_peer_dies_mid_collective():
+    """A rank crashing while another waits in a collective must poison the
+    rendezvous and surface the original exception, not hang forever."""
+    require_two_gpus()
+
+    def worker(rank: int, world_size: int, pg: mojo_dist.MojoProcessGroup):
+        if rank == 1:
+            raise RuntimeError("rank 1 died before the collective")
+        # Rank 0 parks in a collective that rank 1 will never join.
+        pg.barrier().wait()
+
+    with pytest.raises(RuntimeError, match="rank 1 died before the collective"):
+        mojo_dist.spawn(worker, world_size=2)
+
+
+def test_spawn_fails_fast_after_peer_exit():
+    """Collectives issued after a peer already exited raise immediately."""
+    require_two_gpus()
+    observed = {}
+
+    def worker(rank: int, world_size: int, pg: mojo_dist.MojoProcessGroup):
+        if rank == 1:
+            raise RuntimeError("rank 1 exits early")
+        try:
+            pg.barrier().wait()
+        except RuntimeError as exc:
+            observed["first"] = str(exc)
+        with pytest.raises(mojo_dist.RankExitedError):
+            pg.barrier().wait()
+
+    with pytest.raises(RuntimeError, match="rank 1 exits early"):
+        mojo_dist.spawn(worker, world_size=2)
+    assert "exited" in observed["first"]

@@ -70,15 +70,19 @@ def _check_collective_inputs(tensors: list[torch.Tensor]) -> None:
     if len(tensors) < 2:
         raise ValueError(f"need one tensor per GPU (>= 2), got {len(tensors)}")
     first = tensors[0]
-    seen_devices = set()
     for i, tensor in enumerate(tensors):
         if not isinstance(tensor, TorchMojoTensor):
             raise ValueError(f"tensors[{i}] is not a mojo tensor: {type(tensor)}")
         if tensor._device.label != "gpu":
             raise ValueError(f"tensors[{i}] is not on a GPU: {tensor.device}")
-        if tensor._device in seen_devices:
-            raise ValueError(f"tensors[{i}] duplicates device {tensor.device}")
-        seen_devices.add(tensor._device)
+        # The comm kernels derive each instance's rank from the device id
+        # (ctx.id()) and index peer pointers with it, so tensors[i] must
+        # live on the GPU whose id is exactly i.
+        if tensor._device.id != i:
+            raise ValueError(
+                f"tensors[{i}] must be on mojo:{i} (device ids must be "
+                f"0..{len(tensors) - 1} in order), got {tensor.device}"
+            )
         if tuple(tensor._shape) != tuple(first._shape):
             raise ValueError(
                 f"tensors[{i}] shape {tuple(tensor._shape)} != "
@@ -93,6 +97,28 @@ def _check_collective_inputs(tensors: list[torch.Tensor]) -> None:
         )
 
 
+# Collective launches are serialized: concurrent launches could enqueue in
+# opposite per-device stream orders (each device's enqueue runs on its own
+# AsyncRT worker) and deadlock the cross-GPU barrier, and a signal-buffer
+# grow must not run while another launch is mid-enqueue. Holding the lock
+# until every instance is enqueued (the Mojo call returns after its
+# TaskGroup wait) makes per-stream order identical everywhere, and the
+# device synchronizes inside _Signals.__init__ then cover all in-flight
+# users of the buffers being replaced.
+_launch_lock = threading.Lock()
+
+# The comm kernels vector-load at align_of[SIMD[dtype, simd_width]] from the
+# base pointer; fresh allocations satisfy this, arbitrary view offsets don't.
+_COMM_PTR_ALIGN = 16
+
+
+def _aligned_contig(tensor: TorchMojoTensor) -> TorchMojoTensor:
+    src = tensor._contig()
+    if src._ptr % _COMM_PTR_ALIGN:
+        src = src._materialize_contiguous()
+    return src
+
+
 def _all_reduce_into(
     outs: list[TorchMojoTensor], srcs: list[TorchMojoTensor], average: bool
 ) -> None:
@@ -102,17 +128,18 @@ def _all_reduce_into(
     devices = tuple(t._device for t in srcs)
     numel = srcs[0]._numel
     nbytes = numel * srcs[0]._itemsize
-    signals = _signals_for(devices, nbytes)
-    eager_kernels.comm_ops.all_reduce(
-        tuple(t._ptr for t in srcs),
-        tuple(t._ptr for t in outs),
-        tuple(s._ptr for s in signals.buffers),
-        tuple(eager_kernels._ctx_ptr(device) for device in devices),
-        numel,
-        srcs[0]._dtype.value,
-        len(srcs),
-        average,
-    )
+    with _launch_lock:
+        signals = _signals_for(devices, nbytes)
+        eager_kernels.comm_ops.all_reduce(
+            tuple(t._ptr for t in srcs),
+            tuple(t._ptr for t in outs),
+            tuple(s._ptr for s in signals.buffers),
+            tuple(eager_kernels._ctx_ptr(device) for device in devices),
+            numel,
+            srcs[0]._dtype.value,
+            len(srcs),
+            average,
+        )
 
 
 def all_reduce(tensors: list[torch.Tensor], op: str = "sum") -> None:
@@ -129,7 +156,7 @@ def all_reduce(tensors: list[torch.Tensor], op: str = "sum") -> None:
     if tensors[0]._numel == 0:
         return
 
-    srcs = [t._contig() for t in tensors]
+    srcs = [_aligned_contig(t) for t in tensors]
     # The latency-bound kernel writes each output while peers still read
     # the inputs, so reduce out of place, then copy back on-device.
     outs = [TorchMojoTensor._alloc(src._shape, src._dtype, src._device) for src in srcs]
@@ -143,7 +170,7 @@ def all_reduce_out(tensors: list[torch.Tensor], op: str = "sum") -> list[torch.T
     if op not in ("sum", "mean", "avg"):
         raise ValueError(f"unsupported reduce op: {op!r}")
     _check_collective_inputs(tensors)
-    srcs = [t._contig() for t in tensors]
+    srcs = [_aligned_contig(t) for t in tensors]
     outs = [TorchMojoTensor._alloc(src._shape, src._dtype, src._device) for src in srcs]
     if srcs[0]._numel:
         _all_reduce_into(outs, srcs, average=op in ("mean", "avg"))
@@ -159,15 +186,25 @@ def all_reduce_out(tensors: list[torch.Tensor], op: str = "sum") -> list[torch.T
 # ---------------------------------------------------------------------------
 
 
+# Marks a rank slot that has not received its payload yet (payloads may
+# legitimately be None, e.g. barrier).
+_NOT_DEPOSITED = object()
+
+
+class RankExitedError(RuntimeError):
+    """A peer rank exited (crashed or returned) mid-collective."""
+
+
 class _Collective:
     """One in-flight collective: deposit per-rank payloads, run once."""
 
     def __init__(self, world_size: int):
         self.condition = threading.Condition()
         self.world_size = world_size
-        self.slots: list[object] = [None] * world_size
+        self.slots: list[object] = [_NOT_DEPOSITED] * world_size
         self.arrived = 0
         self.done = False
+        self.executed_by: int | None = None
         self.exception: BaseException | None = None
 
     def join(
@@ -177,7 +214,8 @@ class _Collective:
         with self.condition:
             self.slots[rank] = payload
             self.arrived += 1
-            if self.arrived == self.world_size:
+            if self.arrived == self.world_size and not self.done:
+                self.executed_by = rank
                 try:
                     fn(self.slots)
                 except BaseException as exc:
@@ -187,7 +225,24 @@ class _Collective:
             else:
                 self.condition.wait_for(lambda: self.done)
         if self.exception is not None:
-            raise self.exception
+            if self.executed_by == rank:
+                raise self.exception
+            # Re-raising one exception object on several threads races on
+            # its __traceback__; waiters raise their own wrapper instead.
+            if isinstance(self.exception, RankExitedError):
+                raise RankExitedError(str(self.exception)) from self.exception
+            raise RuntimeError(
+                f"collective failed on rank {self.executed_by}: {self.exception!r}"
+            ) from self.exception
+
+    def abort(self, exception: BaseException) -> None:
+        """Fail the collective and wake every waiting rank."""
+        with self.condition:
+            if self.done:
+                return
+            self.exception = exception
+            self.done = True
+            self.condition.notify_all()
 
 
 class _Comm:
@@ -195,18 +250,26 @@ class _Comm:
 
     Ranks issue the same collective sequence (SPMD), so a per-rank monotonic
     op counter matches concurrent collectives across threads even when one
-    rank races ahead into the next collective.
+    rank races ahead into the next collective. A rank that exits — crashed
+    or returned — while peers are (or later go) inside a collective poisons
+    the rendezvous instead of leaving them parked forever.
     """
 
     def __init__(self, world_size: int):
         self.world_size = world_size
         self._lock = threading.Lock()
         self._pending: dict[int, _Collective] = {}
+        self._exited_ranks: set[int] = set()
 
     def collective(
         self, op_id: int, rank: int, payload: object, fn: Callable[[list[object]], None]
     ) -> None:
         with self._lock:
+            if self._exited_ranks:
+                raise RankExitedError(
+                    f"rank(s) {sorted(self._exited_ranks)} already exited; "
+                    "this collective can never complete"
+                )
             coll = self._pending.get(op_id)
             if coll is None:
                 coll = self._pending[op_id] = _Collective(self.world_size)
@@ -218,6 +281,27 @@ class _Comm:
             with self._lock:
                 if coll.arrived == self.world_size:
                     self._pending.pop(op_id, None)
+
+    def rank_exited(self, rank: int) -> None:
+        """Record that ``rank``'s thread is gone and fail what waits on it.
+
+        Collectives the rank already contributed to are complete or
+        completing; only the ones still missing its deposit can never
+        finish, so those (and all future collectives) fail fast.
+        """
+        with self._lock:
+            self._exited_ranks.add(rank)
+            pending = [
+                coll
+                for coll in self._pending.values()
+                if coll.slots[rank] is _NOT_DEPOSITED
+            ]
+        for coll in pending:
+            coll.abort(
+                RankExitedError(
+                    f"rank {rank} exited while this collective was waiting for it"
+                )
+            )
 
 
 def _reduce_via_host(gathered: list[torch.Tensor], average: bool) -> None:
@@ -242,7 +326,9 @@ def _reduce_tensors(gathered: list[torch.Tensor], average: bool) -> None:
         first.dtype in _COMM_TORCH_DTYPES
         and all(isinstance(t, TorchMojoTensor) for t in gathered)
         and all(t._device.label == "gpu" for t in gathered)
-        and len({t._device for t in gathered}) == len(gathered)
+        # The comm kernels index peers by device id; anything else takes
+        # the host-staged path.
+        and all(t._device.id == i for i, t in enumerate(gathered))
     )
     if fast:
         all_reduce(gathered, op="mean" if average else "sum")
@@ -423,6 +509,10 @@ def spawn(
             fn(rank, world_size, process_group)
         except BaseException as exc:
             errors[rank] = exc
+        finally:
+            # Whether crashed or returned, this rank will never join another
+            # collective; fail the ones waiting on it instead of hanging.
+            comm.rank_exited(rank)
 
     threads = [
         threading.Thread(target=runner, args=(rank,), name=f"mojo-rank-{rank}")
@@ -432,6 +522,11 @@ def spawn(
         thread.start()
     for thread in threads:
         thread.join()
-    for error in errors:
+    # Prefer the root cause: a rank that failed on its own, not one that
+    # merely observed a peer's exit through a poisoned collective.
+    real_errors = [
+        e for e in errors if e is not None and not isinstance(e, RankExitedError)
+    ]
+    for error in real_errors or errors:
         if error is not None:
             raise error

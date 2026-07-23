@@ -114,7 +114,7 @@ def test_all_reduce_validation_errors():
     y = torch.randn(8).to("mojo:1")
     with pytest.raises(ValueError, match="need one tensor per GPU"):
         mojo_dist.all_reduce([x])
-    with pytest.raises(ValueError, match="duplicates device"):
+    with pytest.raises(ValueError, match="must be on mojo:1"):
         mojo_dist.all_reduce([x, torch.randn(8).to("mojo:0")])
     with pytest.raises(ValueError, match="shape"):
         mojo_dist.all_reduce([x, torch.randn(4).to("mojo:1")])
@@ -122,6 +122,36 @@ def test_all_reduce_validation_errors():
         mojo_dist.all_reduce([x, torch.randn(8).to("mojo:1").to(torch.float16)])
     with pytest.raises(ValueError, match="unsupported reduce op"):
         mojo_dist.all_reduce([x, y], op="max")
+
+
+def test_all_reduce_rejects_out_of_order_devices():
+    """The comm kernels index peers by device id (ctx.id() is the rank), so
+    tensors must arrive ordered mojo:0..mojo:n-1."""
+    require_two_gpus()
+    x = torch.randn(8).to("mojo:0")
+    y = torch.randn(8).to("mojo:1")
+    with pytest.raises(ValueError, match="must be on mojo:0"):
+        mojo_dist.all_reduce([y, x])
+    if gpu_count() >= 3:
+        z = torch.randn(8).to("mojo:2")
+        with pytest.raises(ValueError, match="must be on mojo:0"):
+            mojo_dist.all_reduce([y, z])
+
+
+def test_all_reduce_with_offset_view_inputs():
+    """Contiguous views at unaligned storage offsets must be handled (the
+    kernels vector-load from the base pointer)."""
+    require_two_gpus()
+    base_a = torch.randn(1025).to("mojo:0")
+    base_b = torch.randn(1025).to("mojo:1")
+    a, b = base_a[1:], base_b[1:]
+    expected = (base_a.cpu()[1:] + base_b.cpu()[1:]).clone()
+    head_before = base_a.cpu()[0].clone()
+    mojo_dist.all_reduce([a, b], op="sum")
+    torch.testing.assert_close(a.cpu(), expected, rtol=2e-5, atol=1e-5)
+    torch.testing.assert_close(b.cpu(), expected, rtol=2e-5, atol=1e-5)
+    # The element outside the view window must be untouched.
+    torch.testing.assert_close(base_a.cpu()[0], head_before)
 
 
 def test_all_reduce_int_dtype_rejected():
