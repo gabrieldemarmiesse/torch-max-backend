@@ -71,9 +71,10 @@ def _native_dropout_go(
 
 def _native_dropout_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 10:
             raise Error("NativeDropoutF32 expects exactly 10 arguments")
@@ -128,9 +129,10 @@ def _native_dropout_backward_go(
 
 def _native_dropout_backward_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 6:
             raise Error("NativeDropoutBackwardF32 expects exactly 6 arguments")

@@ -817,9 +817,10 @@ def _bin_dispatcher[
     op_code: Int
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _bin_go[op_code](args[0], args[1], args[2], args[3], args[4], args[5])
     except:
@@ -829,9 +830,10 @@ def _bin_dispatcher[
 
 def _arange_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _arange_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
@@ -927,9 +929,10 @@ def _unary_spec_dispatcher[
     op_code: Int
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _unary_spec_go[op_code](args[0])
     except e:
@@ -985,9 +988,10 @@ def _unary_bool_spec_dispatcher[
     op_code: Int
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _unary_bool_spec_go[op_code](args[0])
     except e:
@@ -1052,9 +1056,10 @@ def _scalar_spec_dispatcher[
     op_code: Int
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _scalar_spec_go[op_code](args[0], args[1])
     except e:
@@ -1119,9 +1124,10 @@ def _int_scalar_spec_dispatcher[
     op_code: Int
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _int_scalar_spec_go[op_code](args[0], args[1])
     except e:
@@ -1187,9 +1193,10 @@ def _fill_spec_go(
 
 def _fill_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _fill_spec_go(
             args[0], args[1], args[2], args[3], args[4], args[5]

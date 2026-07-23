@@ -61,9 +61,10 @@ def _tf32_gemm_go(
 
 def _tf32_gemm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 11:
             raise Error("Tf32GemmF32 expects exactly 11 arguments")
@@ -125,9 +126,10 @@ def _tf32_bmm_go(
 
 def _tf32_bmm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 13:
             raise Error("Tf32BmmF32 expects exactly 13 arguments")

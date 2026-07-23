@@ -550,9 +550,10 @@ def _nll_backward_go(
 
 def _nll_forward_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _nll_forward_go(
             args[0],
@@ -572,9 +573,10 @@ def _nll_forward_dispatcher(
 
 def _nll_backward_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _nll_backward_go(
             args[0],

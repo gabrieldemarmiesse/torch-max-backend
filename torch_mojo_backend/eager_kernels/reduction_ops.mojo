@@ -20,7 +20,6 @@
 # accumulate in their own dtype.
 # ===----------------------------------------------------------------------=== #
 
-from std.builtin.simd_size import SIMDSize
 from std.os import abort
 from std.gpu import (
     MAX_THREADS_PER_BLOCK_METADATA,
@@ -216,7 +215,7 @@ def _reduce_rows[
     @parameter
     @__copy_capture(out_ptr)
     def output_fn[
-        width: SIMDSize, rank: Int
+        width: SIMDLength, rank: Int
     ](coords: IndexList[rank], val: SIMD[acc_dtype, width]):
         out_ptr[coords[0]] = val[0].cast[dtype]()
 
@@ -344,7 +343,7 @@ def _sum_contiguous_middle_f32(
     @parameter
     @__copy_capture(output, inner_elements)
     def output_fn[
-        width: SIMDSize, rank: Int
+        width: SIMDLength, rank: Int
     ](coords: IndexList[rank], value: SIMD[DType.float32, width]):
         var flat = coords[0] * inner_elements + coords[2]
         output.store[width=width](flat, value)
@@ -1021,7 +1020,7 @@ def _anyall_rows[
     @parameter
     @__copy_capture(out_ptr)
     def output_fn[
-        width: SIMDSize, rank: Int
+        width: SIMDLength, rank: Int
     ](coords: IndexList[rank], val: SIMD[DType.bool, width]):
         out_ptr[coords[0]] = val[0]
 
@@ -1189,9 +1188,10 @@ def _rowred_spec_dispatcher[
     op_code: Int
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _rowred_spec_go[op_code](args[0], args[1], args[2])
     except e:
@@ -1257,9 +1257,10 @@ def _argmin_spec_go(
 
 def _argmin_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _argmin_spec_go(args[0], args[1], args[2])
     except e:
@@ -1350,9 +1351,10 @@ def _min_dim_spec_go(
 
 def _min_dim_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _min_dim_spec_go(args[0], args[1], args[2])
     except e:
@@ -1430,9 +1432,10 @@ def _var_spec_go(
 
 def _var_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _var_spec_go(args[0], args[1], args[2], args[3])
     except e:
@@ -1499,9 +1502,10 @@ def _anyall_spec_dispatcher[
     is_all: Bool
 ](
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _anyall_spec_go[is_all](args[0], args[1], args[2])
     except e:
@@ -1554,9 +1558,10 @@ def _log_softmax_spec_go(a_o: PyObjectPtr) raises -> PyObjectPtr:
 
 def _log_softmax_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _log_softmax_spec_go(args[0])
     except e:

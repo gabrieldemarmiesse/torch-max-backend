@@ -68,9 +68,10 @@ def _log_softmax_backward_go(
 
 def _log_softmax_backward_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 7:
             raise Error("LogSoftmaxBackwardData expects exactly 7 arguments")

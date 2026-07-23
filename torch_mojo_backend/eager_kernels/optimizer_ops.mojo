@@ -132,9 +132,10 @@ def _fused_adamw_go(
 
 def _fused_adamw_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 8:
             raise Error("FusedAdamW expects exactly eight arguments")
@@ -278,9 +279,10 @@ def _foreach_mul_tensor_go(
 
 def _foreach_l2_norm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 4:
             raise Error("ForeachL2Norm expects exactly four arguments")
@@ -292,9 +294,10 @@ def _foreach_l2_norm_dispatcher(
 
 def _foreach_mul_tensor_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 3:
             raise Error("ForeachMulTensor expects exactly three arguments")

@@ -145,9 +145,10 @@ def _im2col_go(
 
 def _im2col_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _im2col_go(args[0], args[1], args[2], args[3], args[4])
     except:
@@ -213,9 +214,10 @@ def _bias_add_chan_go(
 
 def _bias_add_chan_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _bias_add_chan_go(args[0], args[1], args[2], args[3], args[4])
     except:

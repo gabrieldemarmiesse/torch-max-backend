@@ -351,9 +351,10 @@ def _cat2_go(
 
 def _cat2_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _cat2_go(
             args[0],
@@ -1403,9 +1404,10 @@ def _scatter_dim_go(
 
 def _permute_copy_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _permute_copy_go(args[0], args[1], args[2], args[3], args[4], args[5])
     except:
@@ -1415,9 +1417,10 @@ def _permute_copy_dispatcher(
 
 def _narrow_copy_dst_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _narrow_copy_dst_go(
             args[0],
@@ -1436,9 +1439,10 @@ def _narrow_copy_dst_dispatcher(
 
 def _where_select_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _where_select_go(
             args[0], args[1], args[2], args[3], args[4], args[5], args[6]
@@ -1450,9 +1454,10 @@ def _where_select_dispatcher(
 
 def _tile_copy_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _tile_copy_go(
             args[0], args[1], args[2], args[3], args[4], args[5], args[6]
@@ -1464,9 +1469,10 @@ def _tile_copy_dispatcher(
 
 def _triangular_copy_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _triangular_copy_go(
             args[0],
@@ -1486,9 +1492,10 @@ def _triangular_copy_dispatcher(
 
 def _gather_rows_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _gather_rows_go(
             args[0],
@@ -1508,9 +1515,10 @@ def _gather_rows_dispatcher(
 
 def _scatter_dim_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         _scatter_dim_go(
             args[0],
@@ -1580,9 +1588,10 @@ def _cast_spec_go(
 
 def _cast_spec_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         return _cast_spec_go(args[0], args[1])
     except e:

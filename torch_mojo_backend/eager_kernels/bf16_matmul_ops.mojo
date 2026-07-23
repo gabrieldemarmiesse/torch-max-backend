@@ -65,9 +65,10 @@ def _bf16_gemm_go(
 
 def _bf16_gemm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 11:
             raise Error("Bf16GemmBF16 expects exactly 11 arguments")
@@ -133,9 +134,10 @@ def _bf16_bmm_go(
 
 def _bf16_bmm_dispatcher(
     py_self: PyObjectPtr,
-    args: UnsafePointer[PyObjectPtr, MutUntrackedOrigin],
+    args_safe: Pointer[PyObjectPtr, MutUntrackedOrigin],
     nargs: Py_ssize_t,
 ) abi("C") -> PyObjectPtr:
+    var args = UnsafePointer(args_safe)
     try:
         if nargs != 13:
             raise Error("Bf16BmmBF16 expects exactly 13 arguments")
