@@ -219,14 +219,21 @@ class _CommWatcher:
 
         while True:
             mojo_work, on_done = self._queue.get()
+            # The watcher must survive device errors: if it died, later
+            # submissions would never be consumed and drain() would park
+            # every rank thread forever.
             try:
                 eager_kernels.comm_ops.work_host_wait(mojo_work)
-            finally:
+            except BaseException:
+                pass
+            try:
                 on_done()
-                del mojo_work, on_done
-                with self._idle:
-                    self._pending -= 1
-                    self._idle.notify_all()
+            except BaseException:
+                pass
+            del mojo_work, on_done
+            with self._idle:
+                self._pending -= 1
+                self._idle.notify_all()
 
 
 _watcher = _CommWatcher()
@@ -250,9 +257,20 @@ def _comm_streams_for(devices: tuple[MaxDevice, ...]) -> tuple[object, ...]:
 
 
 def _all_reduce_async_launch(
-    outs: list[TorchMojoTensor], srcs: list[TorchMojoTensor], average: bool
-) -> object:
-    """Enqueue the collective on the comm streams; returns the mojo work."""
+    outs: list[TorchMojoTensor],
+    srcs: list[TorchMojoTensor],
+    average: bool,
+    on_done: Callable[[], None],
+    work_out: list[object],
+) -> None:
+    """Enqueue the collective on the comm streams.
+
+    The mojo work is appended to ``work_out`` BEFORE the watcher submission
+    (on_done may need it as soon as the watcher fires), and the submission
+    happens under the launch lock: the async signal-buffer grow path relies
+    on _watcher.drain() seeing every in-flight collective, so a launch must
+    never be invisible to it.
+    """
     from torch_mojo_backend import eager_kernels
 
     devices = tuple(t._device for t in srcs)
@@ -261,7 +279,7 @@ def _all_reduce_async_launch(
     with _launch_lock:
         signals = _signals_for(devices, nbytes, channel="async")
         streams = _comm_streams_for(devices)
-        return eager_kernels.comm_ops.all_reduce_async(
+        mojo_work = eager_kernels.comm_ops.all_reduce_async(
             streams,
             tuple(t._ptr for t in srcs),
             tuple(t._ptr for t in outs),
@@ -271,6 +289,8 @@ def _all_reduce_async_launch(
             srcs[0]._dtype.value,
             (average, _ASYNC_COMM_MAX_BLOCKS),
         )
+        work_out.append(mojo_work)
+        _watcher.submit(mojo_work, on_done)
 
 
 def all_reduce(tensors: list[torch.Tensor], op: str = "sum") -> None:
@@ -453,6 +473,10 @@ def _reduce_tensors(gathered: list[torch.Tensor], average: bool) -> None:
             f"allreduce shape mismatch across ranks: "
             f"{[tuple(t.shape) for t in gathered]}"
         )
+    if any(t.dtype != first.dtype for t in gathered):
+        raise ValueError(
+            f"allreduce dtype mismatch across ranks: {[t.dtype for t in gathered]}"
+        )
     fast = (
         first.dtype in _COMM_TORCH_DTYPES
         and all(isinstance(t, TorchMojoTensor) for t in gathered)
@@ -545,19 +569,26 @@ class MojoProcessGroup(torch.distributed.ProcessGroup):
         DDP calls this from the autograd hook mid-backward. The last
         arriving rank ENQUEUES the collective on the per-device comm
         streams; backward keeps dispatching compute on the default streams.
-        Each rank then defers its completion — a GPU-side default-stream
-        wait on its done event, the in-place copy-back, and resolving the
-        future — to an autograd engine callback, which runs after ALL of
-        backward's compute has been enqueued and, because the Reducer only
-        queues finalize_backward at the last bucket, strictly before DDP
-        consumes the future. The host never blocks. Outside a backward
-        pass the completion runs inline.
 
-        A watcher thread holds the src/out references until the done
-        events complete on every device (stream-ordered frees plus P2P
-        peer reads make earlier dropping unsafe). Failures poison the
-        futures instead of raising — an exception inside a backward node
-        would abort the process.
+        Completion of a rank — a GPU-side default-stream wait on its done
+        event, the in-place copy-back, and resolving the future — happens
+        exactly once, from whichever comes first:
+
+        - an autograd engine callback (queued mid-backward), which runs
+          after ALL of backward's compute has been enqueued and, because
+          the Reducer only queues finalize_backward at the last bucket,
+          strictly before DDP consumes the future; or
+        - the watcher thread, once the done events completed on every
+          device. This also unblocks code that host-waits the Work while
+          still INSIDE backward (a hook calling wait() would otherwise
+          prevent the engine callback from ever running).
+
+        Outside a backward pass the completion runs inline. The watcher
+        additionally holds the src/out references until the done events
+        complete on every device (stream-ordered frees plus P2P peer reads
+        make earlier dropping unsafe). Failures poison the futures instead
+        of raising — an exception inside a backward node would abort the
+        process.
         """
         from torch._C._distributed_c10d import _create_work_from_future
 
@@ -585,6 +616,11 @@ class MojoProcessGroup(torch.distributed.ProcessGroup):
                         f"allreduce shape mismatch across ranks: "
                         f"{[tuple(t.shape) for t in gathered]}"
                     )
+                if any(t.dtype != first.dtype for t in gathered):
+                    raise ValueError(
+                        f"allreduce dtype mismatch across ranks: "
+                        f"{[t.dtype for t in gathered]}"
+                    )
                 fast = (
                     first.dtype in _COMM_TORCH_DTYPES
                     and first.numel() > 0
@@ -599,60 +635,72 @@ class MojoProcessGroup(torch.distributed.ProcessGroup):
                         fut.set_result(rank_tensors)
                     return
 
+                from torch_mojo_backend import eager_kernels
+
                 srcs = [_aligned_contig(t) for t in gathered]
                 outs = [
                     TorchMojoTensor._alloc(src._shape, src._dtype, src._device)
                     for src in srcs
                 ]
-                mojo_work = _all_reduce_async_launch(outs, srcs, average)
-                for rank_holder in holders:
-                    rank_holder["work"] = mojo_work
-                    rank_holder["outs"] = outs
+                completion_lock = threading.Lock()
+                completed_ranks: set[int] = set()
+                work_ref: list[object] = []
+
+                def complete_rank(rank: int) -> None:
+                    """Once per rank: stream-wait, copy-back, resolve."""
+                    with completion_lock:
+                        if rank in completed_ranks:
+                            return
+                        completed_ranks.add(rank)
+                    fut = futures[rank]
+                    try:
+                        eager_kernels.comm_ops.work_enqueue_main_stream_wait(
+                            work_ref[0],
+                            rank,
+                            eager_kernels._ctx_ptr(gathered[rank]._device),
+                        )
+                        torch.ops.aten.copy_(gathered[rank], outs[rank])
+                        fut.set_result(all_tensors[rank])
+                    except BaseException as exc:
+                        try:
+                            fut.set_exception(exc)
+                        except BaseException:
+                            pass
+
                 # Lifetime stash: the collective reads srcs and writes outs
                 # on the comm streams; the watcher holds them until the done
-                # events complete on every device (stream-ordered frees plus
-                # P2P peer reads make earlier dropping unsafe).
+                # events complete on every device, then completes any rank
+                # whose engine callback has not run (e.g. a hook host-waits
+                # the Work mid-backward).
                 stash = (srcs, outs)
 
-                def release_stash() -> None:
+                def on_done() -> None:
+                    for rank in range(len(gathered)):
+                        complete_rank(rank)
                     _ = stash
 
-                _watcher.submit(mojo_work, release_stash)
+                _all_reduce_async_launch(outs, srcs, average, on_done, work_ref)
+                for rank_holder in holders:
+                    rank_holder["complete"] = complete_rank
             except BaseException as exc:
                 poison(exc)
 
         self._run((tensors, future, holder), run)
 
-        mojo_work = holder.get("work")
-        if mojo_work is None:
+        complete_rank = holder.get("complete")
+        if complete_rank is None:
             # Fallback or failure path: the future is already resolved.
             return _create_work_from_future(future)
 
-        from torch_mojo_backend import eager_kernels
-
         rank = self._rank_index
-        outs = holder["outs"]
-        ctx_ptr = eager_kernels._ctx_ptr(tensors[0]._device)
-
-        def finish() -> None:
-            try:
-                eager_kernels.comm_ops.work_enqueue_main_stream_wait(
-                    mojo_work, rank, ctx_ptr
-                )
-                torch.ops.aten.copy_(tensors[0], outs[rank])
-                future.set_result(tensors)
-            except BaseException as exc:
-                try:
-                    future.set_exception(exc)
-                except BaseException:
-                    pass
-
         if torch._C._current_graph_task_id() != -1:
             # Mid-backward: defer until every backward op has been enqueued
             # so only later work orders behind the collective.
-            torch.autograd.Variable._execution_engine.queue_callback(finish)
+            torch.autograd.Variable._execution_engine.queue_callback(
+                lambda: complete_rank(rank)
+            )
         else:
-            finish()
+            complete_rank(rank)
         return _create_work_from_future(future)
 
     def allreduce_coalesced(

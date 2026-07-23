@@ -285,6 +285,43 @@ def test_async_allreduce_failure_poisons_future_not_process(monkeypatch):
     mojo_dist.spawn(worker, world_size=2)
 
 
+def test_async_allreduce_wait_inside_comm_hook_does_not_deadlock(monkeypatch):
+    """Host-waiting the async Work INSIDE backward (the standard comm-hook
+    idiom) must complete via the watcher, not deadlock: the engine callback
+    that normally resolves the future cannot run while backward is blocked."""
+    require_two_gpus()
+    monkeypatch.setattr(mojo_dist, "_ASYNC_COMM_ENABLED", True)
+    states = {}
+
+    def worker(rank: int, world_size: int, pg: mojo_dist.MojoProcessGroup):
+        device = f"mojo:{rank}"
+        model = make_model().to(device)
+        ddp = DDP(model, process_group=pg, device_ids=None)
+
+        def hook(state, bucket):
+            tensor = bucket.buffer()
+            pg.allreduce([tensor]).wait()  # host-wait mid-backward
+            fut = torch.futures.Future()
+            fut.set_result(tensor)
+            return fut
+
+        ddp.register_comm_hook(None, hook)
+        opt = torch.optim.SGD(ddp.parameters(), lr=0.05)
+        torch.manual_seed(900 + rank)
+        for _ in range(2):
+            x = torch.randn(8, 16).to(device)
+            y = torch.randn(8, 4).to(device)
+            opt.zero_grad()
+            ((ddp(x) - y) ** 2).mean().backward()
+            opt.step()
+        states[rank] = {n: p.detach().cpu() for n, p in model.state_dict().items()}
+
+    mojo_dist.spawn(worker, world_size=2)
+
+    for name in states[0]:
+        torch.testing.assert_close(states[0][name], states[1][name])
+
+
 def test_spawn_propagates_worker_exception():
     require_two_gpus()
 

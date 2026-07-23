@@ -57,14 +57,29 @@ def _all_reduce_impl[
     numel: Int,
     average: Bool,
 ) raises:
+    # Phase 1 — everything that can raise (Python indexing) goes through
+    # Lists; InlineArrays with uninitialized slots must not exist while a
+    # raise can unwind (destroying uninitialized slots is UB).
+    var in_addrs = List[Int]()
+    var out_addrs = List[Int]()
+    var sig_addrs = List[Int]()
+    var ctx_l = List[DeviceContext]()
+    for i in range(ngpus):
+        in_addrs.append(Int(py=in_ptrs[i]))
+        out_addrs.append(Int(py=out_ptrs_obj[i]))
+        sig_addrs.append(Int(py=sig_ptrs[i]))
+        ctx_l.append(
+            DeviceContext(
+                OpaquePointer[MutUntrackedOrigin](
+                    unsafe_from_address=Int(py=ctx_ptrs[i])
+                )
+            )
+        )
+
+    # Phase 2 — non-raising fills of the fixed-size arrays the kernels need.
     var rank_sigs = InlineArray[UnsafePointer[Signal, MutAnyOrigin], MAX_GPUS](
         uninitialized=True
     )
-    for i in range(ngpus):
-        rank_sigs[i] = UnsafePointer[Signal, MutAnyOrigin](
-            unsafe_from_address=Int(py=sig_ptrs[i])
-        )
-
     comptime InTile = TileTensor[dtype, type_of(row_major(0)), ImmutAnyOrigin]
     var in_tiles = InlineArray[InTile, ngpus](uninitialized=True)
     var out_ptrs = InlineArray[
@@ -72,21 +87,22 @@ def _all_reduce_impl[
     ](uninitialized=True)
     var ctx_array = InlineArray[DeviceContext, ngpus](uninitialized=True)
     for i in range(ngpus):
-        var in_ptr = UnsafePointer[Scalar[dtype], ImmutAnyOrigin](
-            unsafe_from_address=Int(py=in_ptrs[i])
+        rank_sigs[i] = UnsafePointer[Signal, MutAnyOrigin](
+            unsafe_from_address=sig_addrs[i]
         )
-        in_tiles[i] = TileTensor(in_ptr, row_major(numel))
+        in_tiles[i] = TileTensor(
+            UnsafePointer[Scalar[dtype], ImmutAnyOrigin](
+                unsafe_from_address=in_addrs[i]
+            ),
+            row_major(numel),
+        )
         out_ptrs[i] = UnsafePointer[Scalar[dtype], MutAnyOrigin](
-            unsafe_from_address=Int(py=out_ptrs_obj[i])
+            unsafe_from_address=out_addrs[i]
         )
         # init_pointee_move prevents DeviceContext.__del__ from dropping a
         # refcount that assigning into the uninitialized slot would trigger.
         (ctx_array.unsafe_ptr() + i).init_pointee_move(
-            DeviceContext(
-                OpaquePointer[MutUntrackedOrigin](
-                    unsafe_from_address=Int(py=ctx_ptrs[i])
-                )
-            )
+            DeviceContext(copy=ctx_l[i])
         )
     var dev_ctxs = DeviceContextList[ngpus](ctx_array^)
     var inv = 1.0 / Float64(ngpus)
@@ -285,14 +301,35 @@ def _all_reduce_async_impl[
     average: Bool,
     max_blocks: Int,
 ) raises -> PythonObject:
+    # Phase 1 — everything that can raise (Python indexing, downcasts,
+    # event creation) goes through Lists, which tolerate partial
+    # construction. InlineArrays with uninitialized slots must not exist
+    # while a raise can unwind: destroying uninitialized slots is UB.
+    var in_addrs = List[Int]()
+    var out_addrs = List[Int]()
+    var sig_addrs = List[Int]()
+    var comm_ctx_l = List[DeviceContext]()
+    var main_ctx_l = List[DeviceContext]()
+    var done_events = List[DeviceEvent]()
+    for i in range(ngpus):
+        in_addrs.append(Int(py=in_ptrs[i]))
+        out_addrs.append(Int(py=out_ptrs_obj[i]))
+        sig_addrs.append(Int(py=sig_ptrs[i]))
+        var stream_holder = stream_objs[i].downcast_value_ptr[CommStream]()
+        comm_ctx_l.append(DeviceContext(copy=stream_holder[].ctx))
+        main_ctx_l.append(
+            DeviceContext(
+                OpaquePointer[MutUntrackedOrigin](
+                    unsafe_from_address=Int(py=ctx_ptrs[i])
+                )
+            )
+        )
+        done_events.append(comm_ctx_l[i].create_event())
+
+    # Phase 2 — non-raising fills of the fixed-size arrays the kernels need.
     var rank_sigs = InlineArray[UnsafePointer[Signal, MutAnyOrigin], MAX_GPUS](
         uninitialized=True
     )
-    for i in range(ngpus):
-        rank_sigs[i] = UnsafePointer[Signal, MutAnyOrigin](
-            unsafe_from_address=Int(py=sig_ptrs[i])
-        )
-
     comptime InTile = TileTensor[dtype, type_of(row_major(0)), ImmutAnyOrigin]
     var in_tiles = InlineArray[InTile, ngpus](uninitialized=True)
     var out_ptrs = InlineArray[
@@ -300,27 +337,25 @@ def _all_reduce_async_impl[
     ](uninitialized=True)
     var comm_ctxs = InlineArray[DeviceContext, ngpus](uninitialized=True)
     var main_ctxs = InlineArray[DeviceContext, ngpus](uninitialized=True)
-    var done_events = List[DeviceEvent]()
     for i in range(ngpus):
-        var in_ptr = UnsafePointer[Scalar[dtype], ImmutAnyOrigin](
-            unsafe_from_address=Int(py=in_ptrs[i])
+        rank_sigs[i] = UnsafePointer[Signal, MutAnyOrigin](
+            unsafe_from_address=sig_addrs[i]
         )
-        in_tiles[i] = TileTensor(in_ptr, row_major(numel))
+        in_tiles[i] = TileTensor(
+            UnsafePointer[Scalar[dtype], ImmutAnyOrigin](
+                unsafe_from_address=in_addrs[i]
+            ),
+            row_major(numel),
+        )
         out_ptrs[i] = UnsafePointer[Scalar[dtype], MutAnyOrigin](
-            unsafe_from_address=Int(py=out_ptrs_obj[i])
+            unsafe_from_address=out_addrs[i]
         )
-        var stream_holder = stream_objs[i].downcast_value_ptr[CommStream]()
         (comm_ctxs.unsafe_ptr() + i).init_pointee_move(
-            DeviceContext(copy=stream_holder[].ctx)
+            DeviceContext(copy=comm_ctx_l[i])
         )
         (main_ctxs.unsafe_ptr() + i).init_pointee_move(
-            DeviceContext(
-                OpaquePointer[MutUntrackedOrigin](
-                    unsafe_from_address=Int(py=ctx_ptrs[i])
-                )
-            )
+            DeviceContext(copy=main_ctx_l[i])
         )
-        done_events.append(comm_ctxs[i].create_event())
     var comm_ctx_list = DeviceContextList[ngpus](comm_ctxs^)
 
     var inv = 1.0 / Float64(ngpus)
@@ -406,13 +441,12 @@ def all_reduce_async(
     """Allreduce on the per-device comm streams; returns a CommWork.
 
     Same contract as `all_reduce` (rank-indexed tuples, contiguous
-    same-shape tensors, outputs must not alias inputs), plus
-    ``stream_objs``: one CommStream per rank from `comm_stream_create`; the
-    world size is the tuple length. Requires P2P. The rank passed to the
-    kernels is the list position, so device ids need not be 0..n-1 here;
-    Python keeps that restriction for consistency with the sync path.
-    Signal buffers must be dedicated to the comm-stream channel: sync and
-    async collectives sharing counters would mispair the barrier.
+    same-shape tensors, outputs must not alias inputs, device ids must be
+    0..n-1 in order: the kernels derive each instance's rank from
+    ctx.id()), plus ``stream_objs``: one CommStream per rank from
+    `comm_stream_create`; the world size is the tuple length. Requires
+    P2P. Signal buffers must be dedicated to the comm-stream channel:
+    sync and async collectives sharing counters would mispair the barrier.
     """
     if not is_p2p_enabled():
         raise Error("all_reduce_async requires P2P access between GPUs")
